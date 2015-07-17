@@ -1212,6 +1212,7 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
 {
   uint8_t valid = UBX_GET_X1(msg, 11);
   uint8_t fix_type = UBX_GET_X1(msg, 20);
+  uint8_t flags = UBX_GET_X1(msg, 21);
 
   /* Initialize time data */
 
@@ -1245,7 +1246,7 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
 
   /* Get fix type */
 
-  if (fix_type < __GPS_FIX_MAX)
+  if (fix_type < __GPS_FIX_MAX && (flags & NAV_FLAG_FIX_OK))
     gps->location.fix_type = fix_type;
   else
     gps->location.fix_type = GPS_FIX_NOT_AVAILABLE;
@@ -1279,12 +1280,13 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
       gps->location.heading = UBX_GET_I4(msg, 64);
       gps->location.heading_accuracy = UBX_GET_U4(msg, 72);
 
-      dbg_int("fix:%d, sat:%u, lon:%d, lat:%d, acc:%um, height:%dm,\n"
+      dbg_int("fix:%d, flags:0x%02X, sat:%u, lat:%d, lon:%d, acc:%um, height:%dm,\n"
               "acc:%um, speed:%dm/s, acc:%um/s, heading:%ddeg, acc:%udeg\n",
                gps->location.fix_type,
+               flags,
                gps->location.num_of_used_satellites,
-               gps->location.longitude,
                gps->location.latitude,
+               gps->location.longitude,
                gps->location.horizontal_accuracy/1000,
                gps->location.height/1000,
                gps->location.vertical_accuracy/1000,
