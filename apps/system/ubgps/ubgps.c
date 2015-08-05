@@ -120,7 +120,6 @@ struct ubgps_s *ubgps_initialize(void)
 {
   struct ubgps_s * const gps = &g_gps;
   struct sm_event_s event;
-  int error;
   int ret;
 
   dbg_ubgps("\n");
@@ -132,10 +131,6 @@ struct ubgps_s *ubgps_initialize(void)
       return gps;
     }
 
-  /* Initialize aiding mutex */
-
-  pthread_mutex_init(&g_aid_mutex, NULL);
-
   /* Clear data */
 
   memset(gps, 0, sizeof(struct ubgps_s));
@@ -143,10 +138,9 @@ struct ubgps_s *ubgps_initialize(void)
   /* Open GPS serial device */
 
   gps->fd = board_gps_initialize();
-  error = get_errno();
   if (gps->fd < 0)
     {
-      dbg("Failed to open GPS device: %d\n", error);
+      dbg("Failed to open GPS device: %d\n", errno);
       return NULL;
     }
 
@@ -155,6 +149,10 @@ struct ubgps_s *ubgps_initialize(void)
   ret = ubgps_set_nonblocking(gps, false);
   if (ret < 0)
     return NULL;
+
+  /* Initialize aiding mutex */
+
+  pthread_mutex_init(&g_aid_mutex, NULL);
 
   /* Initialize GPS state */
 
@@ -184,7 +182,10 @@ struct ubgps_s *ubgps_initialize(void)
 
   gps->nmea.line = malloc(gps->nmea.line_size);
   if (!gps->nmea.line)
-    goto errout_ubx;
+    {
+      dbg("NMEA line alloc failed\n");
+      goto errout_ubx;
+    }
 
   /* Initialize GPS callback queue */
 

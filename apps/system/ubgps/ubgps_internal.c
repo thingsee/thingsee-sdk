@@ -186,13 +186,14 @@ static void ubgps_filter_location(struct ubgps_s * const gps,
  ****************************************************************************/
 int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const event)
 {
-  gps_state_t state = gps->state.current_state;
+  gps_state_t state;
   int status;
 
   DEBUGASSERT(gps && event);
 
   /* Inject event to state machine */
 
+  state = gps->state.current_state;
   status = gps_sm[state](gps, event);
 
   /* Check status */
@@ -422,20 +423,15 @@ int ubgps_receiver(const struct pollfd * const pfd, void * const priv)
   uint8_t input_buffer[32];
   ssize_t input_bytes;
   uint8_t * input;
-  int flags;
   int ret;
-
-  /* Get file flags */
-
-  flags = fcntl(pfd->fd, F_GETFL, 0);
-  if (flags == ERROR)
-    return ERROR;
 
   while (1)
     {
       /* Set file non-blocking */
 
       ret = ubgps_set_nonblocking(gps, true);
+      if (ret < 0)
+        return ERROR;
 
       /* Read bytes from GPS module */
 
@@ -455,7 +451,9 @@ int ubgps_receiver(const struct pollfd * const pfd, void * const priv)
       while (input_bytes--)
         {
           uint8_t data = *input++;
+
           /* Pass data to UBX receiver */
+
           if (ubx_msg_receive(gps, data) == ERROR)
             {
               /* Pass data to NMEA receiver */
@@ -472,7 +470,6 @@ int ubgps_receiver(const struct pollfd * const pfd, void * const priv)
   /* Set file blocking */
 
   ret = ubgps_set_nonblocking(gps, false);
-
   if (ret < 0)
     return ERROR;
 
@@ -497,7 +494,7 @@ void ubgps_publish_event(struct ubgps_s * const gps, struct gps_event_s const * 
 {
   struct gps_callback_entry_s const * cb;
 
-  DEBUGASSERT(gps != NULL || event != NULL);
+  DEBUGASSERT(gps && event);
 
   /* Check if any callback is interested of this event */
 
@@ -1635,10 +1632,10 @@ int ubgps_set_nonblocking(struct ubgps_s * const gps, bool const set)
   if (flags == ERROR)
     return ERROR;
 
-  if (!set)
-    flags &= ~O_NONBLOCK;
-  else
+  if (set)
     flags |= O_NONBLOCK;
+  else
+    flags &= ~O_NONBLOCK;
 
   ret = fcntl(gps->fd, F_SETFL, flags);
   if (ret == ERROR)
