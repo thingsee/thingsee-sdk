@@ -280,6 +280,61 @@ static void ntpc_settime(FAR uint8_t *timestamp)
 }
 
 /****************************************************************************
+ * Name: ntpc_create_dgram_socket
+ ****************************************************************************/
+static int ntpc_create_dgram_socket(void)
+{
+  struct timeval tv;
+  int ret;
+  int sd;
+  int err;
+
+  /* Create a datagram socket  */
+
+  sd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sd < 0)
+    {
+      err = errno;
+      ndbg("ERROR: socket failed: %d\n", err);
+      errno = err;
+      return sd;
+    }
+
+  /* Setup a send timeout on the socket */
+
+  tv.tv_sec  = 5;
+  tv.tv_usec = 0;
+
+  ret = setsockopt(sd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(struct timeval));
+  if (ret < 0)
+    {
+      err = errno;
+      ndbg("ERROR: setsockopt(SO_SNDTIMEO) failed: %d\n", errno);
+      goto err_close;
+    }
+
+  /* Setup a receive timeout on the socket */
+
+  tv.tv_sec  = 5;
+  tv.tv_usec = 0;
+
+  ret = setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(struct timeval));
+  if (ret < 0)
+    {
+      err = errno;
+      ndbg("ERROR: setsockopt(SO_RCVTIMEO) failed: %d\n", errno);
+      goto err_close;
+    }
+
+  return sd;
+
+err_close:
+  close(sd);
+  errno = err;
+  return ret;
+}
+
+/****************************************************************************
  * Name: ntpc_daemon
  *
  * Description:
@@ -293,51 +348,17 @@ static int ntpc_daemon(int argc, char **argv)
   struct sockaddr_in server;
   struct ntp_datagram_s xmit;
   struct ntp_datagram_s recv;
-  struct timeval tv;
   socklen_t socklen;
   ssize_t nbytes;
   int exitcode = EXIT_SUCCESS;
   int ret;
-  int sd;
+  int sd = -1;
   int retries = 0;
 
   /* Indicate that we have started */
 
   g_ntpc_daemon.state = NTP_RUNNING;
   sem_post(&g_ntpc_daemon.interlock);
-
-  /* Create a datagram socket  */
-  do 
-  {
-      sd = socket(AF_INET, SOCK_DGRAM, 0);
-      if (sd < 0)
-      {
-          ndbg("ERROR: socket failed: %d\n", errno);
-          sleep (1);
-      }
-  } while ( (sd < 0) && (retries++ < CONFIG_NETUTILS_NTPCLIENT_RETRIES) );
-
-  if ( sd < 0 ){
-      g_ntpc_daemon.state = NTP_STOPPED;
-      sem_post(&g_ntpc_daemon.interlock);
-      return EXIT_FAILURE;
-  }
-
-  /* Setup a receive timeout on the socket */
-
-  tv.tv_sec  = 5;
-  tv.tv_usec = 0;
-
-  ret = setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(struct timeval));
-
-  if (ret < 0)
-    {
-      ndbg("ERROR: setsockopt failed: %d\n", errno);
-
-      g_ntpc_daemon.state = NTP_STOPPED;
-      sem_post(&g_ntpc_daemon.interlock);
-      return EXIT_FAILURE;
-    }
 
   /* Setup or sockaddr_in struct with information about the server we are
    * going to ask the the time from.
@@ -377,31 +398,32 @@ static int ntpc_daemon(int argc, char **argv)
   sched_lock();
   while (g_ntpc_daemon.state != NTP_STOP_REQUESTED)
     {
+      int errval = 0;
+
 #ifdef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
       ret = dns_gethostip(CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME,
                           &server.sin_addr.s_addr);
       if (ret < 0)
         {
-          /* Check if we received a signal.  That is not an error but
-           * other error events will terminate the client.
-           */
+          errval = errno;
 
-          int errval = errno;
-          if (errval != EINTR)
-            {
-              ndbg("ERROR: sendto() failed: %d\n", errval);
-              exitcode = EXIT_FAILURE;
-              break;
-            }
+          ndbg("ERROR: sendto() failed: %d\n", errval);
 
-          /* Go back to the top of the loop if we were interrupted
-           * by a signal.  The signal might mean that we were
-           * requested to stop(?)
-           */
-
-          continue;
+          goto sock_error;
         }
 #endif
+
+      /* Open socket. */
+
+      sd = ntpc_create_dgram_socket();
+      if (sd < 0)
+        {
+          errval = errno;
+
+          ndbg("ERROR: ntpc_create_dgram_socket() failed: %d\n", errval);
+
+          goto sock_error;
+        }
 
       /* Format the transmit datagram */
 
@@ -413,27 +435,13 @@ static int ntpc_daemon(int argc, char **argv)
       ret = sendto(sd, &xmit, sizeof(struct ntp_datagram_s),
                    0, (FAR struct sockaddr *)&server,
                    sizeof(struct sockaddr_in));
-
       if (ret < 0)
         {
-          /* Check if we received a signal.  That is not an error but
-           * other error events will terminate the client.
-           */
+          errval = errno;
 
-          int errval = errno;
-          if (errval != EINTR)
-            {
-              ndbg("ERROR: sendto() failed: %d\n", errval);
-              exitcode = EXIT_FAILURE;
-              break;
-            }
+          ndbg("ERROR: sendto() failed: %d\n", errval);
 
-          /* Go back to the top of the loop if we were interrupted
-           * by a signal.  The signal might mean that we were
-           * requested to stop(?)
-           */
-
-          continue;
+          goto sock_error;
         }
 
       /* Attempt to receive a packet (with a timeout that was set up via
@@ -450,30 +458,37 @@ static int ntpc_daemon(int argc, char **argv)
 
       if (nbytes >= (ssize_t)NTP_DATAGRAM_MINSIZE)
         {
+          close(sd);
+          sd = -1;
+
           svdbg("Setting time\n");
           ntpc_settime(recv.recvtimestamp);
-          exitcode = EXIT_SUCCESS;
-          break;
         }
-
-      /* Check for errors.  Note that properly received, short datagrams
-       * are simply ignored.
-       */
-
-      else if (nbytes < 0)
+      else
         {
-          /* Check if we received a signal.  That is not an error but
-           * other error events will terminate the client.
-           */
+          /* Check for errors.  Short datagrams are handled as error. */
 
-          int errval = errno;
-          if (errval != EINTR)
+          errval = errno;
+
+          if (nbytes >= 0)
+            {
+              errval = EMSGSIZE;
+            }
+          else
             {
               ndbg("ERROR: recvfrom() failed: %d\n", errval);
-              exitcode = EXIT_FAILURE;
-              break;
             }
+
+          goto sock_error;
         }
+
+#ifndef CONFIG_NETUTILS_NTPCLIENT_STAY_ON
+      /* Configured to exit at success. */
+
+      exitcode = EXIT_SUCCESS;
+      break;
+
+#else
 
       /* A full implementation of an NTP client would require much more.  I
        * think we can skip most of that here.
@@ -485,7 +500,39 @@ static int ntpc_daemon(int argc, char **argv)
                 CONFIG_NETUTILS_NTPCLIENT_POLLDELAYSEC);
 
           (void)sleep(CONFIG_NETUTILS_NTPCLIENT_POLLDELAYSEC);
+          retries = 0;
         }
+
+      continue;
+#endif
+
+sock_error:
+
+      if (sd >= 0)
+        {
+          /* Close sockfd. */
+
+          close(sd);
+          sd = -1;
+        }
+
+      /* Exceeded maximum retries? */
+
+      if (retries++ >= CONFIG_NETUTILS_NTPCLIENT_RETRIES)
+        {
+          ndbg("ERROR: too many retries: %d\n", retries - 1);
+          exitcode = EXIT_FAILURE;
+          break;
+        }
+
+      /* Is this error a signal? If not, sleep before retry. */
+
+      if (errval != EINTR)
+        {
+          sleep(1);
+        }
+
+      /* Keep retrying. */
     }
 
   /* The NTP client is terminating */
