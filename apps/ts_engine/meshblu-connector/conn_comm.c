@@ -1,5 +1,5 @@
 /****************************************************************************
- * apps/ts_engine/meshblu-connector/conn_comm.c
+ *  apps/ts_engine/meshblu-connector/conn_comm.c
  *
  * Copyright (C) 2015 Haltian Ltd. All rights reserved.
  * Author: Timo Voutilainen <timo.voutilainen@haltian.com>
