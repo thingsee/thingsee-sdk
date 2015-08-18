@@ -39,6 +39,9 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include <sys/socket.h>
 #include <sys/time.h>
 
@@ -111,6 +114,106 @@ static struct ntpc_daemon_s g_ntpc_daemon;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+static time_t ntpc_get_compile_timestamp(void)
+{
+  struct tm tm = {};
+  int year, day, month;
+  bool unknown = true;
+  time_t tim;
+#ifdef __DATE__
+  const char *pmonth;
+  const char *pyear;
+  const char *pday;
+
+  /*
+   * Compile date. Format: "MMM DD YYYY", where MMM is month in three letter
+   * format, DD is day of month (left padded with space if less than ten) and
+   * YYYY is year. "??? ?? ????" if unknown.
+   */
+
+  pmonth = __DATE__;
+  pday = pmonth + 4;
+  pyear = pmonth + 7;
+
+  year = (pyear[0] - '0') * 1000
+         + (pyear[1] - '0') * 100
+         + (pyear[2] - '0') * 10
+         + (pyear[3] - '0') * 1;
+
+  day = (pday[1] - '0');
+  if (pday[0] != ' ')
+    day += (pday[0] - '0') * 10;
+
+  unknown = false;
+  switch (pmonth[0])
+    {
+    default:
+      unknown = true;
+      break;
+    case 'J':
+      if (pmonth[1] == 'a') /* Jan */
+        month = 1;
+      else if (pmonth[2] == 'n') /* Jun */
+        month = 6;
+      else /* Jul */
+        month = 7;
+      break;
+    case 'F': /* Feb */
+      month = 2;
+      break;
+    case 'M':
+      if (pmonth[2] == 'r') /* Mar */
+        month = 3;
+      else /* May */
+        month = 5;
+      break;
+    case 'A':
+      if (pmonth[1] == 'p') /* Apr */
+        month = 4;
+      else /* Aug */
+        month = 8;
+      break;
+    case 'S': /* Sep */
+      month = 9;
+      break;
+    case 'O': /* Oct */
+      month = 10;
+      break;
+    case 'N': /* Nov */
+      month = 11;
+      break;
+    case 'D': /* Dec */
+      month = 12;
+      break;
+    }
+#endif
+
+  if (unknown)
+    {
+      month = 8;
+      day = 18;
+      year = 2015;
+    }
+
+  /* Convert date to timestamp. */
+
+  tm.tm_hour = 0;
+  tm.tm_min = 0;
+  tm.tm_sec = 0;
+  tm.tm_mday = day;
+  tm.tm_mon = month - 1;
+  tm.tm_year = year - 1900;
+
+  tim = mktime(&tm);
+
+  /* Reduce by one day to discount timezones. */
+
+  tim -= 24 * 60 * 60;
+
+  return tim;
+}
+
 /****************************************************************************
  * Name: ntpc_getuint32
  *
@@ -119,7 +222,7 @@ static struct ntpc_daemon_s g_ntpc_daemon;
  *
  ****************************************************************************/
 
-static inline uint32_t ntpc_getuint32(FAR uint8_t *ptr)
+static inline uint32_t ntpc_getuint32(FAR const uint8_t *ptr)
 {
   /* Network order is big-endian; host order is irrelevant */
 
@@ -168,6 +271,7 @@ static void ntpc_settime(FAR uint8_t *timestamp)
    */
 
   seconds = ntpc_getuint32(timestamp);
+
   /* Translate seconds to account for the difference in the origin time */
 
   if (seconds > NTP2UNIX_TRANLSLATION)
@@ -185,7 +289,12 @@ static void ntpc_settime(FAR uint8_t *timestamp)
 
   frac = ntpc_getuint32(timestamp + 4);
 #ifdef CONFIG_HAVE_LONG_LONG
-  /* if we have 64-bit long long values, then the computation is easy */
+  /* if we have 64-bit long long values, then the computation is easy:
+   *  frac * 10^9 / 2^32 =
+   *  frac * 5^9 * 2^9 / 2^9 / 2^23 =
+   *  frac * 5^9 / 2^23 =
+   *  frac * 1953125 >> 23
+   */
 
   tmp  = ((uint64_t)frac * 1953125) >> 23;
   nsec = (uint32_t)tmp;
@@ -280,6 +389,105 @@ static void ntpc_settime(FAR uint8_t *timestamp)
 }
 
 /****************************************************************************
+ * Name: ntpc_verify_recvd_ntp_datagram
+ ****************************************************************************/
+static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *recv,
+                                           size_t nbytes,
+                                           const struct sockaddr_in *xmitaddr,
+                                           const struct sockaddr_in *recvaddr,
+                                           size_t recvaddrlen)
+{
+  time_t buildtime;
+  time_t seconds;
+
+  if (recvaddrlen != sizeof(struct sockaddr_in) ||
+      xmitaddr->sin_addr.s_addr != recvaddr->sin_addr.s_addr ||
+      xmitaddr->sin_port != recvaddr->sin_port ||
+      xmitaddr->sin_family != recvaddr->sin_family)
+    {
+      svdbg("response from wrong peer\n");
+
+      return false;
+    }
+
+  if (nbytes < NTP_DATAGRAM_MINSIZE)
+    {
+      /* Too short. */
+
+      svdbg("too short response\n");
+
+      return false;
+    }
+
+  if (GETVN(recv->lvm) != NTP_VERSION)
+    {
+      /* Wrong version. */
+
+      svdbg("wrong version: %d\n", GETVN(recv->lvm));
+
+      return false;
+    }
+
+  if (GETMODE(recv->lvm) != 4)
+    {
+      /* Response not in server mode. */
+
+      svdbg("wrong mode: %d\n", GETMODE(recv->lvm));
+
+      return false;
+    }
+
+  if (ntpc_getuint32(recv->reftimestamp) == 0)
+    {
+      /* Invalid timestamp. */
+
+      svdbg("invalid reftimestamp, 0x%08x.\n",
+            ntpc_getuint32(recv->reftimestamp));
+
+      return false;
+    }
+
+  if (ntpc_getuint32(recv->recvtimestamp) == 0)
+    {
+      /* Invalid timestamp. */
+
+      svdbg("invalid recvtimestamp, 0x%08x.\n",
+            ntpc_getuint32(recv->recvtimestamp));
+
+      return false;
+    }
+
+  if (ntpc_getuint32(recv->xmittimestamp) == 0)
+    {
+      /* Invalid timestamp. */
+
+      svdbg("invalid xmittimestamp, 0x%08x.\n",
+            ntpc_getuint32(recv->xmittimestamp));
+
+      return false;
+    }
+
+  buildtime = ntpc_get_compile_timestamp();
+  seconds = ntpc_getuint32(recv->recvtimestamp);
+  if (seconds > NTP2UNIX_TRANLSLATION)
+    {
+      seconds -= NTP2UNIX_TRANLSLATION;
+    }
+
+  if (seconds < buildtime)
+    {
+      /* Invalid timestamp. */
+
+      svdbg("invalid recvtimestamp, 0x%08x.\n",
+            ntpc_getuint32(recv->recvtimestamp));
+
+      return false;
+    }
+
+  return true;
+}
+
+/****************************************************************************
  * Name: ntpc_create_dgram_socket
  ****************************************************************************/
 static int ntpc_create_dgram_socket(void)
@@ -346,6 +554,7 @@ err_close:
 static int ntpc_daemon(int argc, char **argv)
 {
   struct sockaddr_in server;
+  struct sockaddr_in recvaddr;
   struct ntp_datagram_s xmit;
   struct ntp_datagram_s recv;
   socklen_t socklen;
@@ -450,13 +659,14 @@ static int ntpc_daemon(int argc, char **argv)
 
       socklen = sizeof(struct sockaddr_in);
       nbytes = recvfrom(sd, (void *)&recv, sizeof(struct ntp_datagram_s),
-                        0, (FAR struct sockaddr *)&server, &socklen);
+                        0, (FAR struct sockaddr *)&recvaddr, &socklen);
 
       /* Check if the received message was long enough to be a valid NTP
        * datagram.
        */
 
-      if (nbytes >= (ssize_t)NTP_DATAGRAM_MINSIZE)
+      if (nbytes > 0 && ntpc_verify_recvd_ntp_datagram(
+                          &recv, nbytes, &server, &recvaddr, socklen))
         {
           close(sd);
           sd = -1;
