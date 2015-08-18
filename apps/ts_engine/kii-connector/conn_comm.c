@@ -251,18 +251,24 @@ static int execute_task_conn_request(struct conn_network_task_s *task)
 
   if (ret == OK)
     {
-      int status_code;
+      int status_code = INT_MIN;
       char *content = NULL;
 
       ret = execute_http_request(&con->srv_ip4addr, con->port,
           hdr, hdrlen, data, datalen, &status_code, &content,
           task->context);
-      if (ret == OK)
+      if (ret < 0)
+        {
+          status_code = ret;
+        }
+
+      if (status_code != INT_MIN)
         {
           next_task = task->process(task->context, status_code, content);
           if (next_task != NULL)
             ret = conn_network_give_new_conn_task(next_task);
         }
+
       conn_free_pointer((void**)&content);
       conn_free_pointer((void**)&hdr);
     }
@@ -322,6 +328,9 @@ static void *conn_network_thread(void *param)
             if (ret < 0)
               {
                 con_dbg("request_connection on failed, skipping task\n");
+
+                task.conn->process(task.conn->context, NETWORK_ERROR, NULL);
+                conn_complete_task_workflow(task.conn->context, ret);
                 conn_destroy_task(task.conn);
                 break;
               }
