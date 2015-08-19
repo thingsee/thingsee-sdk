@@ -136,6 +136,24 @@ int dns_query_sock(int sockfd, FAR const char *hostname, FAR in_addr_t *ipaddr);
 int dns_query(FAR const char *hostname, FAR in_addr_t *ipaddr);
 
 /****************************************************************************
+ * Name: dns_setservers
+ *
+ * Description:
+ *   Configure which DNS servers to use for queries
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
+int dns_setservers(FAR const struct in6_addr *dnsserver1,
+                   FAR const struct in6_addr *dnsserver2,
+                   FAR const struct in6_addr *dnsserver3);
+#else
+int dns_setservers(FAR const struct in_addr *dnsserver1,
+                   FAR const struct in_addr *dnsserver2,
+                   FAR const struct in_addr *dnsserver3);
+#endif
+
+/****************************************************************************
  * Name: dns_setserver
  *
  * Description:
@@ -150,6 +168,20 @@ void dns_setserver(FAR const struct in_addr *dnsserver);
 #endif
 
 /****************************************************************************
+ * Name: dns_getserver_sockaddr
+ *
+ * Description:
+ *   Obtain the currently configured DNS server.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
+int dns_getserver_sockaddr(FAR struct sockaddr_in6 *dnsserver);
+#else
+int dns_getserver_sockaddr(FAR struct sockaddr_in *dnsserver);
+#endif
+
+/****************************************************************************
  * Name: dns_getserver
  *
  * Description:
@@ -158,9 +190,9 @@ void dns_setserver(FAR const struct in_addr *dnsserver);
  ****************************************************************************/
 
 #ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-void dns_getserver(FAR struct in6_addr *dnsserver);
+int dns_getserver(FAR struct in6_addr *dnsserver);
 #else
-void dns_getserver(FAR struct in_addr *dnsserver);
+int dns_getserver(FAR struct in_addr *dnsserver);
 #endif
 
 /****************************************************************************
@@ -205,6 +237,24 @@ int dns_whois(FAR const char *name, FAR struct sockaddr_in *addr);
  ****************************************************************************/
 
 int dns_gethostip(FAR const char *hostname, FAR in_addr_t *ipaddr);
+
+/****************************************************************************
+ * Name: dns_clear_lookup_failed_count
+ ****************************************************************************/
+
+void dns_clear_lookup_failed_count(void);
+
+/****************************************************************************
+ * Name: dns_increase_lookup_failed_count
+ ****************************************************************************/
+
+void dns_increase_lookup_failed_count(void);
+
+/****************************************************************************
+ * Name: dns_get_lookup_failed_count
+ ****************************************************************************/
+
+unsigned int dns_get_lookup_failed_count(void);
 
 #undef EXTERN
 #if defined(__cplusplus)

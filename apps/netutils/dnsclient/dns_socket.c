@@ -118,6 +118,10 @@
 #  define ADDRLEN sizeof(struct sockaddr_in)
 #endif
 
+#ifndef ARRAY_SIZE
+#  define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -192,16 +196,45 @@ struct dns_queue_info_s
  * Private Data
  ****************************************************************************/
 
-static uint16_t g_seqno;
+static sem_t g_dns_sem = SEM_INITIALIZER(1);
+
+static struct
+{
+  uint16_t seqno;
+  uint8_t servers_num;
+  uint8_t server_next;
 #ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-static struct sockaddr_in6 g_dnsserver;
+  struct sockaddr_in6 servers[3];
 #else
-static struct sockaddr_in g_dnsserver;
+  struct sockaddr_in servers[3];
 #endif
+  unsigned int failed_count;
+} g_dns;
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: dns_lock
+ ****************************************************************************/
+
+static void dns_lock(void)
+{
+  while (sem_wait(&g_dns_sem) != 0)
+    {
+      ASSERT(errno == EINTR);
+    }
+}
+
+/****************************************************************************
+ * Name: dns_unlock
+ ****************************************************************************/
+
+static void dns_unlock(void)
+{
+  sem_post(&g_dns_sem);
+}
 
 /****************************************************************************
  * Name: crc8_in16
@@ -349,7 +382,10 @@ static int dns_send_query(int sockfd, FAR const char *name,
 
   qinfo->qname = NULL;
 
-  seqno = transform_16bit(g_seqno++);
+  dns_lock();
+  seqno = g_dns.seqno++;
+  dns_unlock();
+  seqno = transform_16bit(seqno);
 
   hdr               = (FAR struct dns_hdr*)buffer;
   memset(hdr, 0, sizeof(*hdr));
@@ -874,6 +910,138 @@ int dns_query_sock(int sockfd, FAR const char *hostname, FAR in_addr_t *ipaddr)
 }
 
 /****************************************************************************
+ * Name: dns_clear_lookup_failed_count
+ ****************************************************************************/
+
+void dns_clear_lookup_failed_count(void)
+{
+  dns_lock();
+  g_dns.failed_count = 0;
+  dns_unlock();
+}
+
+/****************************************************************************
+ * Name: dns_increase_lookup_failed_count
+ ****************************************************************************/
+
+void dns_increase_lookup_failed_count(void)
+{
+  dns_lock();
+  ++g_dns.failed_count;
+  dns_unlock();
+}
+
+/****************************************************************************
+ * Name: dns_get_lookup_failed_count
+ ****************************************************************************/
+
+unsigned int dns_get_lookup_failed_count(void)
+{
+  unsigned int ret;
+
+  dns_lock();
+  ret = g_dns.failed_count;
+  dns_unlock();
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: dns_setservers
+ *
+ * Description:
+ *   Configure which DNS servers to use for queries
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
+int dns_setservers(FAR const struct in6_addr *dnsserver1,
+                   FAR const struct in6_addr *dnsserver2,
+                   FAR const struct in6_addr *dnsserver3)
+#else
+int dns_setservers(FAR const struct in_addr *dnsserver1,
+                   FAR const struct in_addr *dnsserver2,
+                   FAR const struct in_addr *dnsserver3)
+#endif
+{
+  FAR const struct in_addr *servers[3] =
+    {
+      dnsserver1,
+      dnsserver2,
+      dnsserver3
+    };
+  int nservers = 0;
+  int i, j;
+
+  /* Reorder to fill invalid addresses and get address count. */
+
+  for (i = 0, j = 1; i < ARRAY_SIZE(servers); i++)
+    {
+      if (servers[i] != NULL)
+        {
+#ifndef CONFIG_NETUTILS_DNSCLIENT_IPv6
+          if (servers[i]->s_addr != 0x00000000U)
+#endif
+            {
+              nservers++;
+              continue;
+            }
+        }
+
+      if (j <= i)
+        {
+          j = i + 1;
+          if (j == ARRAY_SIZE(servers))
+            {
+              break;
+            }
+        }
+
+      while (servers[j] == NULL)
+        {
+          if (++j == ARRAY_SIZE(servers))
+            {
+              break;
+            }
+        }
+      if (j == ARRAY_SIZE(servers))
+        {
+          break;
+        }
+
+      servers[i] = servers[j];
+      servers[j] = NULL;
+      nservers++;
+    }
+
+  dns_clear_lookup_failed_count();
+
+  dns_lock();
+
+  g_dns.server_next = 0;
+  g_dns.servers_num = nservers;
+
+  for (i = 0; i < nservers; i++)
+    {
+#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
+      g_dns.servers[i].sin6_family = AF_INET6;
+      g_dns.servers[i].sin6_port   = HTONS(53);
+
+      memcpy(&g_dns.servers[i].sin6_addr, servers[i], ADDRLEN);
+#else
+      g_dns.servers[i].sin_family  = AF_INET;
+      g_dns.servers[i].sin_port    = HTONS(53);
+
+      g_dns.servers[i].sin_addr.s_addr = servers[i]->s_addr;
+#endif
+    }
+
+  dns_unlock();
+
+  return OK;
+}
+
+/****************************************************************************
  * Name: dns_setserver
  *
  * Description:
@@ -887,17 +1055,45 @@ void dns_setserver(FAR const struct in6_addr *dnsserver)
 void dns_setserver(FAR const struct in_addr *dnsserver)
 #endif
 {
+  dns_setservers(dnsserver, NULL, NULL);
+}
+
+/****************************************************************************
+ * Name: dns_getserver_sockaddr
+ *
+ * Description:
+ *   Obtain the currently configured DNS server.
+ *
+ ****************************************************************************/
+
 #ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-  g_dnsserver.sin6_family = AF_INET6;
-  g_dnsserver.sin6_port   = HTONS(53);
-
-  memcpy(&g_dnsserver.sin6_addr, dnsserver, ADDRLEN);
+int dns_getserver_sockaddr(FAR struct sockaddr_in6 *dnsserver)
 #else
-  g_dnsserver.sin_family  = AF_INET;
-  g_dnsserver.sin_port    = HTONS(53);
-
-  g_dnsserver.sin_addr.s_addr = dnsserver->s_addr;
+int dns_getserver_sockaddr(FAR struct sockaddr_in *dnsserver)
 #endif
+{
+  unsigned int idx;
+  int ret = ERROR;
+
+  dns_lock();
+
+  if (g_dns.servers_num > 0)
+    {
+      idx = g_dns.server_next++;
+      if (g_dns.server_next >= g_dns.servers_num)
+        {
+          g_dns.server_next = 0;
+        }
+      DEBUGASSERT(idx < g_dns.servers_num);
+
+      *dnsserver = g_dns.servers[idx];
+
+      ret = OK;
+    }
+
+  dns_unlock();
+
+  return ret;
 }
 
 /****************************************************************************
@@ -909,16 +1105,29 @@ void dns_setserver(FAR const struct in_addr *dnsserver)
  ****************************************************************************/
 
 #ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-void dns_getserver(FAR struct in6_addr *dnsserver)
+int dns_getserver(FAR struct in6_addr *dnsserver)
 #else
-void dns_getserver(FAR struct in_addr *dnsserver)
+int dns_getserver(FAR struct in_addr *dnsserver)
 #endif
 {
 #ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-  memcpy(dnsserver, &g_dnsserver.sin6_addr, ADDRLEN);
+  struct sockaddr_in6 sa;
 #else
-  dnsserver->s_addr = g_dnsserver.sin_addr.s_addr;
+  struct sockaddr_in sa;
 #endif
+
+  if (dns_getserver_sockaddr(&sa) < 0)
+    {
+#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
+      *dnsserver = sa.sin6_addr;
+#else
+      *dnsserver = sa.sin_addr;
+#endif
+
+      return OK;
+    }
+
+  return ERROR;
 }
 
 /****************************************************************************
@@ -957,46 +1166,65 @@ int dns_whois_socket(int sockfd, FAR const char *name,
   for (retries = 0; retries < CONFIG_NETUTILS_DNSCLIENT_RETRIES; retries++)
     {
       struct dns_queue_info_s qinfo = {};
+#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
+      struct sockaddr_in6 dnsserver = {};
+#else
+      struct sockaddr_in dnsserver = {};
+#endif
 
-      ret = dns_send_query(sockfd, name, &g_dnsserver, buffer, buflen,
-                           &qinfo);
-      if (ret < 0)
+      if (dns_getserver_sockaddr(&dnsserver) < 0)
         {
-          err = errno;
-          free(qinfo.qname);
-          qinfo.qname = NULL;
-          free(buffer);
-          errno = err;
-          return ERROR;
+          err = ENETDOWN;
+          goto err_out;
         }
 
-      ret = dns_recv_response(sockfd, addr, buffer, buflen, &qinfo);
+      ret = dns_send_query(sockfd, name, &dnsserver, buffer, buflen,
+                           &qinfo);
       if (ret >= 0)
         {
-          /* Response received successfully */
+          ret = dns_recv_response(sockfd, addr, buffer, buflen, &qinfo);
+          if (ret >= 0)
+            {
+              /* Response received successfully */
 
-          free(qinfo.qname);
-          qinfo.qname = NULL;
-          free(buffer);
-          return OK;
+              free(qinfo.qname);
+              qinfo.qname = NULL;
+              free(buffer);
+              dns_clear_lookup_failed_count();
+              return OK;
+            }
+          else if (errno != EAGAIN && errno != ETIMEDOUT)
+            {
+              /* Some failure other than receive timeout occurred */
+
+              err = errno;
+              free(qinfo.qname);
+              qinfo.qname = NULL;
+              goto err_out;
+            }
         }
-      else if (errno != EAGAIN)
+      else if (errno != EAGAIN && errno != ETIMEDOUT)
         {
           /* Some failure other than receive timeout occurred */
 
           err = errno;
           free(qinfo.qname);
           qinfo.qname = NULL;
-          free(buffer);
-          errno = err;
-          return ERROR;
+          goto err_out;
         }
 
       free(qinfo.qname);
       qinfo.qname = NULL;
+      if (retries + 1 < CONFIG_NETUTILS_DNSCLIENT_RETRIES)
+        {
+          dns_increase_lookup_failed_count();
+        }
     }
 
+  err = EHOSTUNREACH;
+err_out:
   free(buffer);
-  errno = EHOSTUNREACH;
+  dns_increase_lookup_failed_count();
+  errno = err;
   return ERROR;
 }
