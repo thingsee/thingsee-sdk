@@ -140,11 +140,14 @@ static const struct at_cmd_def_s cmd_ATpUUPSDD_urc =
  .resp_num     = 1,
 };
 
-static int8_t apn_conf_type[4] = { 1, 2, 3, 7 };
+static int8_t apn_conf_type[5] = { 1, 6, 2, 3, 7 };
 
-static const char *apn_conf_type_name[4] =
+static int8_t apn_conf_format[5] = { 's', 'i', 's', 's', 's' };
+
+static const char *apn_conf_type_name[5] =
 {
   "modem.apn_name",
+  "modem.apn_authentication",
   "modem.apn_user",
   "modem.apn_password",
   "modem.apn_ipaddr"
@@ -433,8 +436,24 @@ static void send_next_apn_configuration(struct ubmodem_s *modem)
       if (buf[0] == '\0')
         continue;
 
-      snprintf(sub->apn_conf.value, sizeof(sub->apn_conf.value), "=0,%d,\"%s\"",
-               apn_conf_type[sub->apn_conf.pos], buf);
+      if (apn_conf_format[sub->apn_conf.pos] == 's')
+        {
+          /* Text string in buffer. */
+
+          snprintf(sub->apn_conf.value, sizeof(sub->apn_conf.value), "=0,%d,\"%s\"",
+                   apn_conf_type[sub->apn_conf.pos], buf);
+        }
+      else if (apn_conf_format[sub->apn_conf.pos] == 'i')
+        {
+          /* Integer string in buffer. */
+
+          snprintf(sub->apn_conf.value, sizeof(sub->apn_conf.value), "=0,%d,%s",
+                   apn_conf_type[sub->apn_conf.pos], buf);
+        }
+      else
+        {
+          MODEM_DEBUGASSERT(modem, false);
+        }
 
       err = __ubmodem_send_cmd(modem, &cmd_ATpUPSD, ATpUPSD_handler, sub, "%s",
                            sub->apn_conf.value);

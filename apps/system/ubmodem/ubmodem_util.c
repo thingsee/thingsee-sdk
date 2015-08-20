@@ -62,6 +62,51 @@
  ****************************************************************************/
 
 /****************************************************************************
+ * Private Function
+ ****************************************************************************/
+
+static bool check_apn_authentication(struct ubmodem_s *modem,
+                                     char *buf, size_t buflen)
+{
+  bool use_auth = false;
+  char tmp[16];
+
+  /* APN authentication is needed if APN username/password are given. */
+
+  tmp[0] = '\0';
+  if (__ubmodem_config_get_value(modem, "modem.apn_user", tmp, sizeof(tmp)))
+    {
+      if (tmp[0] != '\0')
+        {
+          /* APN username configured. */
+
+          use_auth = true;
+        }
+    }
+
+  tmp[0] = '\0';
+  if (__ubmodem_config_get_value(modem, "modem.apn_password", tmp, sizeof(tmp)))
+    {
+      if (tmp[0] != '\0')
+        {
+          /* APN password configured. */
+
+          use_auth = true;
+        }
+    }
+
+  if (buf && buflen > 0)
+    {
+      /* Give authentication setting. Use 'PAP' if username/password have been
+       * set. Otherwise disable APN authentication.*/
+
+      snprintf(buf, buflen, "%o", use_auth);
+    }
+
+  return true;
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -107,19 +152,31 @@ void __ubmodem_common_failed_command(struct ubmodem_s *modem,
  ****************************************************************************/
 
 bool __ubmodem_config_get_value(struct ubmodem_s *modem,
-                            const char *variable, char *buf, size_t buflen)
+                                const char *variable, char *buf,
+                                size_t buflen)
 {
+  bool ret = false;
+
   DEBUGASSERT(modem);
 
   if (modem->config.func)
     {
       /* Get configuration outside module. */
 
-      return modem->config.func(modem, variable, buf, buflen,
-                                modem->config.priv);
+      ret = modem->config.func(modem, variable, buf, buflen,
+                               modem->config.priv);
     }
 
-  return false;
+  if (!(ret && buflen > 0 && buf[0] != '\0') &&
+      strcmp(variable, "modem.apn_authentication") == 0)
+    {
+      /* Manually check need for APN authentication by checking
+       * APN username/password. */
+
+      return check_apn_authentication(modem, buf, buflen);
+    }
+
+  return ret;
 }
 
 /****************************************************************************
