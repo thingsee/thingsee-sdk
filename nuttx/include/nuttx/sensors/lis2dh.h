@@ -137,7 +137,17 @@ extern "C" {
 #define ST_LIS2DH_OUT_Z_H_REG           0x2D
 
 #define ST_LIS2DH_FIFO_CTRL_REG         0x2E
+#define ST_LIS2DH_FIFOCR_THRESHOLD_MASK   0x1F
+#define ST_LIS2DH_FIFOCR_THRESHOLD(x)     ((x) & ST_LIS2DH_FIFOCR_THRESHOLD_MASK)
+#define ST_LIS2DH_FIFOCR_INT1             0x00
+#define ST_LIS2DH_FIFOCR_INT2             0x20
+#define ST_LIS2DH_FIFOCR_MODE_MASK        0xC0
+
 #define ST_LIS2DH_FIFO_SRC_REG          0x2F
+#define ST_LIS2DH_FIFOSR_NUM_SAMP_MASK    0x1F
+#define ST_LIS2DH_FIFOSR_EMPTY            0x20
+#define ST_LIS2DH_FIFOSR_OVRN_FIFO        0x40
+#define ST_LIS2DH_FIFOSR_WTM              0x80
 
 #define ST_LIS2DH_INT1_CFG_REG          0x30
 #define ST_LIS2DH_INT_CFG_AOI            0x80

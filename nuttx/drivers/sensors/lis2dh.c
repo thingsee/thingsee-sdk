@@ -101,6 +101,7 @@ struct lis2dh_dev_s
   struct lis2dh_vector_s      vector_data;/* Latest read data read from lis2dh */
   sem_t                       devsem;     /* Manages exclusive access to this structure */
   bool                        fifo_used;  /* LIS2DH configured to use FIFO */
+  bool                        fifo_stopped;/* FIFO got full and has stopped. */
 #ifdef LIS2DH_COUNT_INTS
   volatile int16_t            int_pending;/* Interrupt received but data not read, yet */
 #else
@@ -238,6 +239,46 @@ static int lis2dh_close(FAR struct file *filep)
 }
 
 /****************************************************************************
+ * Name: lis2dh_fifo_start
+ *
+ * Description:
+ *   This function restarts FIFO reading.
+ *
+ ****************************************************************************/
+
+static int lis2dh_fifo_start(FAR struct lis2dh_dev_s *priv)
+{
+  uint8_t buf;
+  int err = OK;
+
+  buf =  0x00 | priv->setup->trigger_selection |
+      priv->setup->fifo_trigger_threshold;
+  if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
+    {
+      lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
+      err = -EIO;
+    }
+  else
+    {
+      buf =  priv->setup->fifo_mode | priv->setup->trigger_selection |
+          priv->setup->fifo_trigger_threshold;
+      if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
+        {
+          lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
+          err = -EIO;
+        }
+      else
+        {
+          priv->fifo_stopped = false;
+
+          lis2dh_dbg("lis2dh: FIFO restarted\n");
+        }
+    }
+
+  return err;
+}
+
+/****************************************************************************
  * Name: lis2dh_read
  * Description:
  *   This routine is called when the LIS2DH device is read.
@@ -254,6 +295,8 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
   uint8_t buf;
   uint8_t int1_src = 0, int2_src = 0;
   irqstate_t flags;
+  uint8_t fifo_mode;
+  bool fifo_empty = false;
   int err;
 
   if (buflen <  sizeof(struct lis2dh_result ) ||
@@ -281,11 +324,53 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 
   err = sem_wait(&priv->devsem);
   if (err < 0)
-  {
-    return -EINTR;
-  }
+    {
+      return -EINTR;
+    }
 
-  /* If FIFO is used - read until FIFO is empty - or receive buffer (readcount) is reached */
+  fifo_mode = priv->setup->fifo_mode & ST_LIS2DH_FIFOCR_MODE_MASK;
+
+  if (priv->fifo_used)
+    {
+      /* Check if FIFO needs to be restarted after being read empty.
+       * We need to read SRC_REG before reading measurement, as reading
+       * sample from FIFO clears OVRN_FIFO flag.
+       */
+
+      if (lis2dh_access(priv, ST_LIS2DH_FIFO_SRC_REG, &buf, 1) != 1)
+        {
+          lis2dh_dbg("lis2dh: Failed to read FIFO source register\n");
+          return -EIO;
+        }
+
+      if (fifo_mode != LIS2DH_STREAM_MODE)
+        {
+          /* FIFO is full and has stopped. */
+
+          priv->fifo_stopped |= !!(buf & ST_LIS2DH_FIFOSR_OVRN_FIFO);
+        }
+
+      if (buf & ST_LIS2DH_FIFOSR_OVRN_FIFO)
+        lis2dh_dbg("lis2dh: FIFO overrun\n");
+      if (buf & ST_LIS2DH_FIFOSR_EMPTY)
+        {
+          lis2dh_dbg("lis2dh: FIFO empty\n");
+
+          fifo_empty = true;
+
+          if (fifo_mode != LIS2DH_STREAM_MODE)
+            {
+              priv->fifo_stopped = true;
+            }
+
+          /* FIFO is empty, skip reading. */
+
+          readcount = 0;
+        }
+    }
+
+  /* If FIFO is used - read until FIFO is empty - or receive buffer (readcount)
+   * is reached */
 
   for (i = 0; i < readcount; i++)
     {
@@ -317,40 +402,70 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
               err = -EIO;
               break;
             }
-          if (buf & 0x20)
+
+          if (fifo_mode != LIS2DH_STREAM_MODE)
             {
-              /* FIFO is empty - stop reading but reset FIFO first */
+              /* FIFO is full and has stopped. */
 
-              buf =  0x00 | priv->setup->trigger_selection |
-                  priv->setup->fifo_trigger_threshold;
-              if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
-                {
-                  lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
-                  err = -EIO;
-                  break;
-                }
-
-              buf =  priv->setup->fifo_mode | priv->setup->trigger_selection |
-                  priv->setup->fifo_trigger_threshold;
-              if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
-                {
-                  lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
-                  err = -EIO;
-                  break;
-                }
-              readcount = 1;
+              priv->fifo_stopped |= !!(buf & ST_LIS2DH_FIFOSR_OVRN_FIFO);
             }
 
+          if (buf & ST_LIS2DH_FIFOSR_OVRN_FIFO)
+            lis2dh_dbg("lis2dh: FIFO overrun\n");
+          if (buf & ST_LIS2DH_FIFOSR_EMPTY)
+            {
+              lis2dh_dbg("lis2dh: FIFO empty\n");
+
+              fifo_empty = true;
+
+              /* FIFO is empty, skip reading. */
+
+              readcount = 1;
+            }
         }
       else
         {
-          /* FIFO not used stop reading after first read*/
+          /* FIFO not used stop reading after first read */
+
           readcount = 1;
         }
     }
   ptr->header.meas_count = i;
 
-  /* Make sure interrupt will get cleared (by reading this register) in case of latched configuration */
+  /* Check if we need to restart FIFO or insert 'interrupt'. */
+
+  if (priv->fifo_used)
+    {
+      if (!fifo_empty)
+        {
+          /* FIFO was not read empty, more data available. */
+
+          flags = irqsave();
+
+#ifdef LIS2DH_COUNT_INTS
+          lis2dh_data->int_pending++;
+#else
+          lis2dh_data->int_pending = true;
+#endif
+
+#ifndef CONFIG_DISABLE_POLL
+          lis2dh_notify(lis2dh_data);
+#endif
+
+          irqrestore(flags);
+        }
+      else if (fifo_mode != LIS2DH_STREAM_MODE && priv->fifo_stopped)
+        {
+          /* FIFO is empty and has stopped by overrun event. Reset FIFO for
+           * further reading. */
+
+          err = lis2dh_fifo_start(priv);
+        }
+    }
+
+  /* Make sure interrupt will get cleared (by reading this register) in case of
+   * latched configuration */
+
   buf = 0;
   if (lis2dh_access(priv, ST_LIS2DH_INT1_SRC_REG, &buf, 1) != 1)
     {
@@ -369,7 +484,9 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
       ptr->header.int1_occurred = false;
     }
 
-  /* Make sure interrupt will get cleared (by reading this register) in case of latched configuration */
+  /* Make sure interrupt will get cleared (by reading this register) in case of
+   * latched configuration */
+
   buf = 0;
   if (lis2dh_access(priv, ST_LIS2DH_INT2_SRC_REG, &buf, 1) != 1)
     {
@@ -1359,6 +1476,11 @@ static int lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_
   if (dev->setup->fifo_enable)
     {
       dev->fifo_used = true;
+
+      if (lis2dh_fifo_start(dev) < 0)
+        {
+          goto error;
+        }
     }
   else
     {
