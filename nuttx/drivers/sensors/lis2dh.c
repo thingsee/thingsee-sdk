@@ -128,6 +128,7 @@ static int               lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned 
 static int               lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr, FAR uint8_t *buf, int length);
 static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err);
 static int               lis2dh_powerdown(FAR struct lis2dh_dev_s * dev);
+static int               lis2dh_reboot(FAR struct lis2dh_dev_s * dev);
 static int               lis2dh_poll(FAR struct file *filep, FAR struct pollfd *fds, bool setup);
 static void              lis2dh_notify(FAR struct lis2dh_dev_s *priv);
 static int               lis2dh_int_handler(int irq, FAR void *context);
@@ -235,6 +236,7 @@ static int lis2dh_close(FAR struct file *filep)
   FAR struct lis2dh_dev_s *priv  = inode->i_private;
 
   priv->config->irq_enable(priv->config, false);
+  lis2dh_reboot(priv);
   return lis2dh_powerdown(priv);
 }
 
@@ -1280,6 +1282,56 @@ static int lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr,
   return retval;
 }
 
+static int lis2dh_reboot(FAR struct lis2dh_dev_s * dev)
+{
+  struct timespec start, curr;
+  int32_t diff_msec;
+  uint8_t value;
+
+  (void)clock_gettime(CLOCK_MONOTONIC, &start);
+
+  /* Reboot to reset chip. */
+
+  value = ST_LIS2DH_CR5_BOOT;
+  if (lis2dh_access(dev, ST_LIS2DH_CTRL_REG5, &value, -1) != 1)
+    {
+      return -EIO;
+    }
+
+  /* Reboot is completed when reboot bit is cleared. */
+
+  do
+    {
+      value = 0;
+      if (lis2dh_access(dev, ST_LIS2DH_CTRL_REG5, &value, 1) != 1)
+        {
+          return -EIO;
+        }
+
+      if (!(value & ST_LIS2DH_CR5_BOOT))
+        {
+          break;
+        }
+
+      (void)clock_gettime(CLOCK_MONOTONIC, &curr);
+
+      diff_msec = (curr.tv_sec - start.tv_sec) * 1000;
+      diff_msec += (curr.tv_nsec - start.tv_nsec) / (1000 * 1000);
+
+      if (diff_msec > 100)
+        {
+          return -ETIMEDOUT;
+        }
+
+       usleep(1);
+    }
+  while (true);
+
+  /* Reboot completed, chip is now in power-down state. */
+
+  return OK;
+}
+
 static int lis2dh_powerdown(FAR struct lis2dh_dev_s * dev)
 {
   uint8_t buf = 0;
@@ -1313,6 +1365,9 @@ static int lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_
   uint8_t value;
 
   dev->setup = new_setup;
+
+  /* Clear old configuration. */
+  (void)lis2dh_reboot(dev);
 
   /* TEMP_CFG_REG */
   value = dev->setup->temp_enable ? (0x3 << 6): 0;
@@ -1493,6 +1548,7 @@ error:
 
   /* Setup failed - power down */
 
+  lis2dh_reboot(dev);
   lis2dh_powerdown(dev);
   return -EIO;
 }
