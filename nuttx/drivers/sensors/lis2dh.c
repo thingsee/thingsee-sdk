@@ -127,7 +127,7 @@ static ssize_t           lis2dh_read(FAR struct file *, FAR char *, size_t);
 static ssize_t           lis2dh_write(FAR struct file *filep, FAR const char *buffer, size_t buflen);
 static int               lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
 static int               lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr, FAR uint8_t *buf, int length);
-static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err);
+static int               lis2dh_get_reading(FAR struct lis2dh_dev_s * dev, struct lis2dh_vector_s *res, bool force_read);
 static int               lis2dh_powerdown(FAR struct lis2dh_dev_s * dev);
 static int               lis2dh_reboot(FAR struct lis2dh_dev_s * dev);
 static int               lis2dh_poll(FAR struct file *filep, FAR struct pollfd *fds, bool setup);
@@ -295,7 +295,6 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 {
   FAR struct inode              *inode = filep->f_inode;
   FAR struct lis2dh_dev_s       *priv  = inode->i_private;
-  const struct lis2dh_vector_s  *results;
   FAR struct lis2dh_result      *ptr;
   int readcount = (buflen - sizeof(struct lis2dh_res_header)) / sizeof(struct lis2dh_vector_s);
   uint8_t buf;
@@ -340,25 +339,13 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 
       if (readcount > 0)
         {
-          results = lis2dh_get_readings(priv, true, &err);
-          if (results == NULL)
+          err = lis2dh_get_reading(priv, &ptr->measurements[0], true);
+          if (err < 0)
             {
               lis2dh_dbg("lis2dh: Failed to read xyz\n");
             }
           else
             {
-              if (priv->setup->xy_axis_fixup)
-                {
-                  ptr->measurements[0].x = results->y;
-                  ptr->measurements[0].y = -results->x;
-                }
-              else
-                {
-                  ptr->measurements[0].x = results->x;
-                  ptr->measurements[0].y = results->y;
-                }
-              ptr->measurements[0].z = results->z;
-
               ptr->header.meas_count = 1;
             }
         }
@@ -1044,26 +1031,27 @@ static int lis2dh_clear_interrupts(FAR struct lis2dh_dev_s *priv, uint8_t interr
 }
 
 /****************************************************************************
- * Name: lis2dh_get_readings
+ * Name: lis2dh_get_reading
  *
  * Description:
- *   Read X, Y, Z - acceleration values from chip
+ *   Read X, Y, Z - acceleration value from chip
  *
  * Input Parameters:
  *   dev        - pointer to LIS2DH Private Structure
  *   force_read - Read even if new data is not available (old data)
  *
  * Returned Value:
- *   Returns acceleration vectors on success, NULL otherwise.
+ *   Returns OK if success, negative error code otherwise
  ****************************************************************************/
-static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err)
+static int lis2dh_get_reading(FAR struct lis2dh_dev_s * dev,
+                              struct lis2dh_vector_s *res,
+                              bool force_read)
 {
   int scale = dev->scale;
   uint8_t retval[7];
+  int16_t x, y, z;
 
   DEBUGASSERT(dev != NULL);
-
-  *err = 0;
 
   if (lis2dh_access(dev, ST_LIS2DH_STATUS_REG, retval, 7) == 7)
     {
@@ -1072,23 +1060,39 @@ static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_
       if (!force_read && !(retval[0] & ST_LIS2DH_SR_ZYXDA))
         {
           lis2dh_dbg("lis2dh: Results were not ready\n");
-          *err = -EAGAIN;
-          return NULL;
+          return -EAGAIN;
         }
-
-      dev->vector_data.x = lis2dh_raw_to_mg(retval[2], retval[1], scale);
-      dev->vector_data.y = lis2dh_raw_to_mg(retval[4], retval[3], scale);
-      dev->vector_data.z = lis2dh_raw_to_mg(retval[6], retval[5], scale);
 
       /* Add something to entropy pool. */
 
-      add_sensor_randomness(((uint32_t)dev->vector_data.z << 16)
-                            | (dev->vector_data.x ^ dev->vector_data.y));
+      add_sensor_randomness((((uint32_t)retval[6] << 25) |
+			     ((uint32_t)retval[6] >> 7)) ^
+			    ((uint32_t)retval[5] << 20) ^
+			    ((uint32_t)retval[4] << 15) ^
+			    ((uint32_t)retval[3] << 10) ^
+			    ((uint32_t)retval[2] << 5) ^
+			    ((uint32_t)retval[1] << 0));
 
-      return &dev->vector_data;
+      x = lis2dh_raw_to_mg(retval[2], retval[1], scale);
+      y = lis2dh_raw_to_mg(retval[4], retval[3], scale);
+      z = lis2dh_raw_to_mg(retval[6], retval[5], scale);
+
+      if (dev->setup->xy_axis_fixup)
+        {
+          res->x = y;
+          res->y = -x;
+        }
+      else
+        {
+          res->x = x;
+          res->y = y;
+        }
+      res->z = z;
+
+      return OK;
     }
 
-  return NULL;
+  return -EIO;
 }
 
 /****************************************************************************
