@@ -137,6 +137,10 @@ static int               lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2
 static inline int16_t    lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte, int scale);
 static int               lis2dh_read_temp(FAR struct lis2dh_dev_s *dev, int16_t *temper);
 static int               lis2dh_clear_interrupts(FAR struct lis2dh_dev_s *priv, uint8_t interrupts);
+static unsigned int      lis2dh_get_fifo_readings(FAR struct lis2dh_dev_s *priv,
+                                             FAR struct lis2dh_result *res,
+                                             unsigned int readcount,
+                                             int *perr);
 #ifdef LIS2DH_SELFTEST
 static int               lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv);
 static int16_t           lis2dh_raw_convert_to_12bit(uint8_t raw_hibyte, uint8_t raw_lobyte);
@@ -294,15 +298,12 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
   const struct lis2dh_vector_s  *results;
   FAR struct lis2dh_result      *ptr;
   int readcount = (buflen - sizeof(struct lis2dh_res_header)) / sizeof(struct lis2dh_vector_s);
-  int i;
   uint8_t buf;
   uint8_t int1_src = 0, int2_src = 0;
   irqstate_t flags;
-  uint8_t fifo_mode;
-  bool fifo_empty = false;
   int err;
 
-  if (buflen <  sizeof(struct lis2dh_result ) ||
+  if (buflen <  sizeof(struct lis2dh_result) ||
       (buflen - sizeof(struct lis2dh_res_header)) % sizeof(struct lis2dh_vector_s) != 0)
     {
       lis2dh_dbg("lis2dh: Illegal amount of bytes to read: %d\n", buflen);
@@ -331,79 +332,56 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
       return -EINTR;
     }
 
-  fifo_mode = priv->setup->fifo_mode & ST_LIS2DH_FIFOCR_MODE_MASK;
+  ptr->header.meas_count = 0;
 
-  if (priv->fifo_used)
+  if (!priv->fifo_used)
     {
-      /* Check if FIFO needs to be restarted after being read empty.
-       * We need to read SRC_REG before reading measurement, as reading
-       * sample from FIFO clears OVRN_FIFO flag.
-       */
+      /* FIFO not used, read only one sample. */
 
-      if (lis2dh_access(priv, ST_LIS2DH_FIFO_SRC_REG, &buf, 1) != 1)
+      if (readcount > 0)
         {
-          lis2dh_dbg("lis2dh: Failed to read FIFO source register\n");
-          return -EIO;
-        }
-
-      if (fifo_mode != LIS2DH_STREAM_MODE)
-        {
-          /* FIFO is full and has stopped. */
-
-          priv->fifo_stopped |= !!(buf & ST_LIS2DH_FIFOSR_OVRN_FIFO);
-        }
-
-      if (buf & ST_LIS2DH_FIFOSR_OVRN_FIFO)
-        lis2dh_dbg("lis2dh: FIFO overrun\n");
-      if (buf & ST_LIS2DH_FIFOSR_EMPTY)
-        {
-          lis2dh_dbg("lis2dh: FIFO empty\n");
-
-          fifo_empty = true;
-
-          if (fifo_mode != LIS2DH_STREAM_MODE)
+          results = lis2dh_get_readings(priv, true, &err);
+          if (results == NULL)
             {
-              priv->fifo_stopped = true;
+              lis2dh_dbg("lis2dh: Failed to read xyz\n");
             }
+          else
+            {
+              if (priv->setup->xy_axis_fixup)
+                {
+                  ptr->measurements[0].x = results->y;
+                  ptr->measurements[0].y = -results->x;
+                }
+              else
+                {
+                  ptr->measurements[0].x = results->x;
+                  ptr->measurements[0].y = results->y;
+                }
+              ptr->measurements[0].z = results->z;
 
-          /* FIFO is empty, skip reading. */
-
-          readcount = 0;
+              ptr->header.meas_count = 1;
+            }
         }
     }
-
-  /* If FIFO is used - read until FIFO is empty - or receive buffer (readcount)
-   * is reached */
-
-  for (i = 0; i < readcount; i++)
+  else /* FIFO modes */
     {
-      results = lis2dh_get_readings(priv, true, &err);
-      if (results == NULL)
-        {
-          lis2dh_dbg("lis2dh: Failed to read xyz\n");
-          break;
-        }
-      if (priv->setup->xy_axis_fixup)
-        {
-          ptr->measurements[i].x = results->y;
-          ptr->measurements[i].y = -results->x;
-        }
-      else
-        {
-          ptr->measurements[i].x = results->x;
-          ptr->measurements[i].y = results->y;
-        }
-      ptr->measurements[i].z = results->z;
+      uint8_t fifo_mode = priv->setup->fifo_mode & ST_LIS2DH_FIFOCR_MODE_MASK;
+      bool fifo_empty = false;
+      uint8_t fifo_num_samples;
 
-      if (priv->fifo_used)
+      ptr->header.meas_count = 0;
+
+      do
         {
-          /* Check if there is data left in FIFO */
+          /* Check if FIFO needs to be restarted after being read empty.
+           * We need to read SRC_REG before reading measurement, as reading
+           * sample from FIFO clears OVRN_FIFO flag.
+           */
 
           if (lis2dh_access(priv, ST_LIS2DH_FIFO_SRC_REG, &buf, 1) != 1)
             {
               lis2dh_dbg("lis2dh: Failed to read FIFO source register\n");
-              err = -EIO;
-              break;
+              return -EIO;
             }
 
           if (fifo_mode != LIS2DH_STREAM_MODE)
@@ -421,24 +399,30 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 
               fifo_empty = true;
 
+              if (fifo_mode != LIS2DH_STREAM_MODE)
+                {
+                  priv->fifo_stopped = true;
+                }
+
               /* FIFO is empty, skip reading. */
 
-              readcount = 1;
+              break;
             }
+
+          /* How many samples available in FIFO? */
+
+          fifo_num_samples = (buf & ST_LIS2DH_FIFOSR_NUM_SAMP_MASK) + 1;
+
+          if (fifo_num_samples > readcount)
+            {
+              fifo_num_samples = readcount;
+            }
+
+          ptr->header.meas_count +=
+              lis2dh_get_fifo_readings(priv, ptr, fifo_num_samples, &err);
         }
-      else
-        {
-          /* FIFO not used stop reading after first read */
+      while (!fifo_empty && ptr->header.meas_count < readcount);
 
-          readcount = 1;
-        }
-    }
-  ptr->header.meas_count = i;
-
-  /* Check if we need to restart FIFO or insert 'interrupt'. */
-
-  if (priv->fifo_used)
-    {
       if (!fifo_empty)
         {
           /* FIFO was not read empty, more data available. */
@@ -514,7 +498,8 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 
   /* 'err' was just for debugging, we do return partial reads here. */
 
-  return sizeof(ptr->header) + i * sizeof(struct lis2dh_vector_s);
+  return sizeof(ptr->header) +
+      ptr->header.meas_count * sizeof(struct lis2dh_vector_s);
 }
 
 /****************************************************************************
@@ -1107,6 +1092,68 @@ static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_
 }
 
 /****************************************************************************
+ * Name: lis2dh_get_fifo_readings
+ *
+ * Description:
+ *   Bulk read from FIFO
+ ****************************************************************************/
+
+static unsigned int lis2dh_get_fifo_readings(FAR struct lis2dh_dev_s *priv,
+                                             FAR struct lis2dh_result *res,
+                                             unsigned int readcount,
+                                             int *perr)
+{
+  int scale = priv->scale;
+  union
+    {
+      uint8_t                raw[6];
+      struct lis2dh_vector_s sample;
+    } *buf = (void *)&res->measurements[res->header.meas_count];
+  bool xy_axis_fixup = priv->setup->xy_axis_fixup;
+  size_t buflen = readcount * 6;
+  int16_t x, y, z;
+  unsigned int i;
+
+  if (readcount == 0)
+    return 0;
+
+  if (lis2dh_access(priv, ST_LIS2DH_OUT_X_L_REG, (void *)buf, buflen) != buflen)
+    {
+      lis2dh_dbg("lis2dh: Failed to read FIFO (%d bytes, %d samples)\n",
+                 buflen, readcount);
+      *perr = -EIO;
+      return 0;
+    }
+
+  /* Add something to entropy pool. */
+
+  up_rngaddentropy((void *)buf, buflen / 4);
+
+  /* Convert raw values to mG */
+
+  for (i = 0; i < readcount; i++)
+    {
+      x = lis2dh_raw_to_mg(buf[i].raw[1], buf[i].raw[0], scale);
+      y = lis2dh_raw_to_mg(buf[i].raw[3], buf[i].raw[2], scale);
+      z = lis2dh_raw_to_mg(buf[i].raw[5], buf[i].raw[4], scale);
+
+      if (xy_axis_fixup)
+        {
+          buf[i].sample.x = y;
+          buf[i].sample.y = -x;
+        }
+      else
+        {
+          buf[i].sample.x = x;
+          buf[i].sample.y = y;
+        }
+      buf[i].sample.z = z;
+    }
+
+  return readcount;
+}
+
+/****************************************************************************
  * Name: lis2dh_raw_to_mg
  *
  * Description:
@@ -1207,9 +1254,20 @@ static int lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr,
 
   else if (subaddr >= ST_LIS2DH_TEMP_CFG_REG && subaddr <= ST_LIS2DH_ACT_DUR_REG)
     {
-      if (length > (ST_LIS2DH_ACT_DUR_REG + 1 - subaddr))
+      if (subaddr == ST_LIS2DH_OUT_X_L_REG)
         {
-          length = ST_LIS2DH_ACT_DUR_REG + 1 - subaddr;
+          /* FIFO bulk read, length maximum 6*32 = 192 bytes. */
+          if (length > 6 * 32)
+            {
+              length = 6 * 32;
+            }
+        }
+      else
+        {
+          if (length > (ST_LIS2DH_ACT_DUR_REG + 1 - subaddr))
+            {
+              length = ST_LIS2DH_ACT_DUR_REG + 1 - subaddr;
+            }
         }
     }
   else
