@@ -99,6 +99,7 @@ struct lis2dh_dev_s
   FAR struct lis2dh_config_s  *config;    /* Platform specific configuration */
   struct lis2dh_setup         *setup;     /* User defined device operation mode setup */
   struct lis2dh_vector_s      vector_data;/* Latest read data read from lis2dh */
+  int                         scale;      /* Full scale in milliG */
   sem_t                       devsem;     /* Manages exclusive access to this structure */
   bool                        fifo_used;  /* LIS2DH configured to use FIFO */
   bool                        fifo_stopped;/* FIFO got full and has stopped. */
@@ -133,7 +134,7 @@ static int               lis2dh_poll(FAR struct file *filep, FAR struct pollfd *
 static void              lis2dh_notify(FAR struct lis2dh_dev_s *priv);
 static int               lis2dh_int_handler(int irq, FAR void *context);
 static int               lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_setup);
-static int16_t           lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte);
+static inline int16_t    lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte, int scale);
 static int               lis2dh_read_temp(FAR struct lis2dh_dev_s *dev, int16_t *temper);
 static int               lis2dh_clear_interrupts(FAR struct lis2dh_dev_s *priv, uint8_t interrupts);
 #ifdef LIS2DH_SELFTEST
@@ -1072,6 +1073,7 @@ static int lis2dh_clear_interrupts(FAR struct lis2dh_dev_s *priv, uint8_t interr
  ****************************************************************************/
 static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err)
 {
+  int scale = dev->scale;
   uint8_t retval[7];
 
   DEBUGASSERT(dev != NULL);
@@ -1089,9 +1091,9 @@ static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_
           return NULL;
         }
 
-      dev->vector_data.x = lis2dh_raw_to_mg(retval[2], retval[1]);
-      dev->vector_data.y = lis2dh_raw_to_mg(retval[4], retval[3]);
-      dev->vector_data.z = lis2dh_raw_to_mg(retval[6], retval[5]);
+      dev->vector_data.x = lis2dh_raw_to_mg(retval[2], retval[1], scale);
+      dev->vector_data.y = lis2dh_raw_to_mg(retval[4], retval[3], scale);
+      dev->vector_data.z = lis2dh_raw_to_mg(retval[6], retval[5], scale);
 
       /* Add something to entropy pool. */
 
@@ -1113,42 +1115,23 @@ static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_
  * Input Parameters:
  *   raw_hibyte   - Hi byte of raw data
  *   raw_lobyte   - Lo byte of raw data
+ *   scale        - full scale in milliG
  *
  * Returned Value:
  *   Returns acceleration value in mg
  ****************************************************************************/
-static int16_t lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte)
+static inline int16_t lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte,
+                                       int scale)
 {
   int16_t value;
 
-  value = (raw_hibyte << 8) |  raw_lobyte;
-  //value = value >> 4;
-  switch(lis2dh_data->setup->fullscale)
-  {
-  case ST_LIS2DH_CR4_FULL_SCALE_2G:
-  default:
-    value = value >> 4;
-    break;
-  case ST_LIS2DH_CR4_FULL_SCALE_4G:
-    value = value >> 3;
-    break;
-  case ST_LIS2DH_CR4_FULL_SCALE_8G:
-    value = value / 62; // FIXME
-    break;
-  case ST_LIS2DH_CR4_FULL_SCALE_16G:
-    value = value / 186; // FIXME
-    break;
-  }
-  value &= 0xfff;
-  if (value & 0x800)
-    {
-      value = ~value;
-      value &= 0xfff;
-      value +=1;
-      value = -value;
-    }
+  /* Value is signed integer, range INT16_MIN..INT16_MAX. */
 
-  return value;
+  value = (raw_hibyte << 8) |  raw_lobyte;
+
+  /* Scale to mg, INT16_MIN..INT16_MAX => -scale..scale */
+
+  return (int32_t)value * scale / INT16_MAX;
 }
 
 static int lis2dh_read_temp(FAR struct lis2dh_dev_s *dev, int16_t *temper)
@@ -1526,6 +1509,23 @@ static int lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_
   if (lis2dh_access(dev, ST_LIS2DH_CTRL_REG1, &value, -1) != 1)
     {
       goto error;
+    }
+
+  switch (dev->setup->fullscale & 0x30)
+    {
+    default:
+    case ST_LIS2DH_CR4_FULL_SCALE_2G:
+      dev->scale = 2000;
+      break;
+    case ST_LIS2DH_CR4_FULL_SCALE_4G:
+      dev->scale = 4000;
+      break;
+    case ST_LIS2DH_CR4_FULL_SCALE_8G:
+      dev->scale = 8000;
+      break;
+    case ST_LIS2DH_CR4_FULL_SCALE_16G:
+      dev->scale = 16000;
+      break;
     }
 
   if (dev->setup->fifo_enable)
