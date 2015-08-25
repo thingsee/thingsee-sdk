@@ -160,6 +160,13 @@ extern "C" {
 #define ST_LIS2DH_INT_CFG_XLIE           0x01
 
 #define ST_LIS2DH_INT1_SRC_REG          0x31
+#define ST_LIS2DH_INT_SR_XLOW           0x01
+#define ST_LIS2DH_INT_SR_XHIGH          0x02
+#define ST_LIS2DH_INT_SR_YLOW           0x04
+#define ST_LIS2DH_INT_SR_YHIGH          0x08
+#define ST_LIS2DH_INT_SR_ZLOW           0x10
+#define ST_LIS2DH_INT_SR_ZHIGH          0x20
+#define ST_LIS2DH_INT_SR_ACTIVE         0x40
 
 #define ST_LIS2DH_INT1_THS_REG          0x32    /* 7-bit value for threshold */
 

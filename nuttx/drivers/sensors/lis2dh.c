@@ -3,8 +3,9 @@
  *
  * LIS2DH accelerometer driver
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
  *   Authors: Timo Voutilainen <timo.voutilainen@haltian.com>
+ *            Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -241,7 +242,6 @@ static int lis2dh_close(FAR struct file *filep)
   FAR struct lis2dh_dev_s *priv  = inode->i_private;
 
   priv->config->irq_enable(priv->config, false);
-  lis2dh_reboot(priv);
   return lis2dh_powerdown(priv);
 }
 
@@ -446,7 +446,7 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
       lis2dh_dbg("lis2dh: Failed to read INT1_SRC_REG\n");
       err = -EIO;
     }
-  if (buf & 0x40)
+  if (buf & ST_LIS2DH_INT_SR_ACTIVE)
     {
       /* Interrupt has happened */
 
@@ -467,7 +467,7 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
       lis2dh_dbg("lis2dh: Failed to read INT2_SRC_REG\n");
       err = -EIO;
     }
-  if (buf & 0x40)
+  if (buf & ST_LIS2DH_INT_SR_ACTIVE)
     {
       /* Interrupt has happened */
 
@@ -1051,8 +1051,6 @@ static int lis2dh_get_reading(FAR struct lis2dh_dev_s * dev,
   uint8_t retval[7];
   int16_t x, y, z;
 
-  DEBUGASSERT(dev != NULL);
-
   if (lis2dh_access(dev, ST_LIS2DH_STATUS_REG, retval, 7) == 7)
     {
       /* If result is not yet ready, return NULL */
@@ -1066,12 +1064,12 @@ static int lis2dh_get_reading(FAR struct lis2dh_dev_s * dev,
       /* Add something to entropy pool. */
 
       add_sensor_randomness((((uint32_t)retval[6] << 25) |
-			     ((uint32_t)retval[6] >> 7)) ^
-			    ((uint32_t)retval[5] << 20) ^
-			    ((uint32_t)retval[4] << 15) ^
-			    ((uint32_t)retval[3] << 10) ^
-			    ((uint32_t)retval[2] << 5) ^
-			    ((uint32_t)retval[1] << 0));
+                             ((uint32_t)retval[6] >> 7)) ^
+                            ((uint32_t)retval[5] << 20) ^
+                            ((uint32_t)retval[4] << 15) ^
+                            ((uint32_t)retval[3] << 10) ^
+                            ((uint32_t)retval[2] << 5) ^
+                            ((uint32_t)retval[1] << 0));
 
       x = lis2dh_raw_to_mg(retval[2], retval[1], scale);
       y = lis2dh_raw_to_mg(retval[4], retval[3], scale);
@@ -1411,7 +1409,9 @@ static int lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_
 
   dev->setup = new_setup;
 
-  /* Clear old configuration. */
+  /* Clear old configuration. On first boot after power-loss, reboot bit does
+   * not get cleared, and lis2dh_reboot() times out. Anyway, chip accepts
+   * new configuration and functions correctly. */
   (void)lis2dh_reboot(dev);
 
   /* TEMP_CFG_REG */
@@ -1610,7 +1610,6 @@ error:
 
   /* Setup failed - power down */
 
-  lis2dh_reboot(dev);
   lis2dh_powerdown(dev);
   return -EIO;
 }
