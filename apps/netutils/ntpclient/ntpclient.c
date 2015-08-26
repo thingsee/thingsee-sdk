@@ -45,6 +45,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,13 +62,18 @@
 #include <apps/netutils/dnsclient.h>
 #endif
 
-#include <unistd.h>
+#include <nuttx/clock.h>
 
 #include "ntpv3.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+#ifndef CONFIG_HAVE_LONG_LONG
+# error "64-bit integer support required for NTP client"
+#endif
+
 /* NTP Time is seconds since 1900. Convert to Unix time which is seconds
  * since 1970
  */
@@ -113,6 +119,19 @@ static struct ntpc_daemon_s g_ntpc_daemon;
 
 /****************************************************************************
  * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: int64abs
+ ****************************************************************************/
+
+static int64_t int64abs(int64_t value)
+{
+  return value >= 0 ? value : -value;
+}
+
+/****************************************************************************
+ * Name: ntpc_get_compile_timestamp
  ****************************************************************************/
 
 static time_t ntpc_get_compile_timestamp(void)
@@ -233,29 +252,24 @@ static inline uint32_t ntpc_getuint32(FAR const uint8_t *ptr)
 }
 
 /****************************************************************************
- * Name: ntpc_settime
+ * Name: ntpc_getuint64
  *
  * Description:
- *   Given the NTP time in seconds, set the system time
+ *   Return the big-endian, 8-byte value in network (big-endian) order.
  *
  ****************************************************************************/
 
-static void ntpc_settime(FAR uint8_t *timestamp)
+static inline uint64_t ntpc_getuint64(FAR const uint8_t *ptr)
 {
-  struct timespec tp;
-  time_t seconds;
-  uint32_t frac;
-  uint32_t nsec;
-#ifdef CONFIG_HAVE_LONG_LONG
-  uint64_t tmp;
-#else
-  uint32_t a16;
-  uint32_t b0;
-  uint32_t t32;
-  uint32_t t16;
-  uint32_t t0;
-#endif
+  return ((uint64_t)ntpc_getuint32(ptr) << 32) | ntpc_getuint32(&ptr[4]);
+}
 
+/****************************************************************************
+ * Name: ntp_secpart
+ ****************************************************************************/
+
+static uint32_t ntp_secpart(uint64_t time)
+{
   /* NTP timestamps are represented as a 64-bit fixed-point number, in
    * seconds relative to 0000 UT on 1 January 1900.  The integer part is
    * in the first 32 bits and the fraction part in the last 32 bits, as
@@ -270,127 +284,149 @@ static void ntpc_settime(FAR uint8_t *timestamp)
    *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
    */
 
-  seconds = ntpc_getuint32(timestamp);
+  /* Get seconds part. */
 
-  /* Translate seconds to account for the difference in the origin time */
+  return time >> 32;
+}
 
-  if (seconds > NTP2UNIX_TRANLSLATION)
+/****************************************************************************
+ * Name: ntp_nsecpart
+ ****************************************************************************/
+
+static uint32_t ntp_nsecpart(uint64_t time)
+{
+  /* Get fraction part converted to nanoseconds. */
+
+  return ((time & 0xFFFFFFFFU) * NSEC_PER_SEC) >> 32;
+}
+
+/****************************************************************************
+ * Name: timespec2ntp
+ *
+ * Convert UNIX timespec timestamp to NTP 64-bit fixed point timestamp.
+ *
+ ****************************************************************************/
+
+static uint64_t timespec2ntp(const struct timespec *ts)
+{
+  uint64_t ntp_time;
+
+  /* Set fraction part. */
+
+  ntp_time = ((uint64_t)(ts->tv_nsec) << 32) / NSEC_PER_SEC;
+
+  DEBUGASSERT((ntp_time >> 32) == 0);
+
+  /* Set seconds part. */
+
+  ntp_time += (uint64_t)(ts->tv_sec) << 32;
+
+  return ntp_time;
+}
+
+/****************************************************************************
+ * Name: ntp_gettime
+ *
+ * Get time in NTP epoch, stored in fixed point uint64_t format (upper 32-bit
+ * seconds, lower 32-bit fraction)
+ ****************************************************************************/
+
+static uint64_t ntp_localtime(void)
+{
+  int err = errno;
+  struct timespec currts = {};
+
+  /* Get current clock in NTP epoch. */
+
+  (void)clock_gettime(CLOCK_REALTIME, &currts);
+  currts.tv_sec += NTP2UNIX_TRANLSLATION;
+
+  /* Restore errno. */
+
+  errno = err;
+
+  return timespec2ntp(&currts);
+}
+
+/****************************************************************************
+ * Name: ntpc_settime
+ *
+ * Description:
+ *   Given the NTP time in seconds, set the system time
+ *
+ ****************************************************************************/
+
+static void ntpc_settime(uint64_t local_xmittime, uint64_t local_recvtime,
+                         FAR uint8_t *remote_recv, FAR uint8_t *remote_xmit)
+{
+  struct timespec tp;
+  uint64_t remote_recvtime;
+  uint64_t remote_xmittime;
+  int64_t offset;
+  int64_t delay;
+
+  /* Two timestamps from server, when request was received, and response
+   * send. */
+
+  remote_recvtime = ntpc_getuint64(remote_recv);
+  remote_xmittime = ntpc_getuint64(remote_xmit);
+
+  /* Calculate offset of local time compared to remote time.
+   * See: https://www.eecis.udel.edu/~mills/time.html
+   *      http://nicolas.aimon.fr/2014/12/05/timesync/ */
+
+  offset = (int64_t)((remote_recvtime - local_xmittime) +
+                     (remote_xmittime - local_recvtime)) / 2;
+
+  /* Calculate roundtrip delay. */
+
+  delay = (local_recvtime - local_xmittime) -
+          (remote_xmittime - remote_recvtime);
+
+  if (offset < 0)
     {
-      seconds -= NTP2UNIX_TRANLSLATION;
+      /* Do not set time if correction would be negative. */
+
+      svdbg("Skip setting time, NTP offset negative: -%u.%03d seconds\n",
+            ntp_secpart(int64abs(offset)),
+            ntp_nsecpart(int64abs(offset)) / NSEC_PER_MSEC);
+
+      return;
     }
 
-  /* Conversion of the fractional part to nanoseconds:
-   *
-   *  NSec = (f * 1,000,000,000) / 4,294,967,296
-   *       = (f * (5**9 * 2**9) / (2**32)
-   *       = (f * 5**9) / (2**23)
-   *       = (f * 1,953,125) / 8,388,608
-   */
+  (void)delay;
+  svdbg("NTP offset: %u.%03d seconds, roundtrip delay: %s%u.%03d seconds\n",
+        ntp_secpart(offset), ntp_nsecpart(offset) / NSEC_PER_MSEC,
+        delay < 0 ? "-" : "",
+        ntp_secpart(int64abs(delay)),
+        ntp_nsecpart(int64abs(delay)) / NSEC_PER_MSEC);
 
-  frac = ntpc_getuint32(timestamp + 4);
-#ifdef CONFIG_HAVE_LONG_LONG
-  /* if we have 64-bit long long values, then the computation is easy:
-   *  frac * 10^9 / 2^32 =
-   *  frac * 5^9 * 2^9 / 2^9 / 2^23 =
-   *  frac * 5^9 / 2^23 =
-   *  frac * 1953125 >> 23
-   */
+  /* Get the system time */
 
-  tmp  = ((uint64_t)frac * 1953125) >> 23;
-  nsec = (uint32_t)tmp;
+  (void)clock_gettime(CLOCK_REALTIME, &tp);
 
-#else
-  /* If we don't have 64 bit integer types, then the calculation is a little
-   * more complex:
-   *
-   * Let f         = a    << 16 + b
-   *     1,953,125 = 0x1d << 16 + 0xcd65
-   * NSec << 23 =  ((a << 16) + b) * ((0x1d << 16) + 0xcd65)
-   *            = (a << 16) * 0x1d << 16) +
-   *              (a << 16) * 0xcd65 +
-   *              b         * 0x1d << 16) +
-   *              b         * 0xcd65;
-   */
+  /* Apply offset */
 
-  /* Break the fractional part up into two values */
-
-  a16  = frac >> 16;
-  b0   = frac & 0xffff;
-
-  /* Get the b32 and b0 terms
-   *
-   * t32 = (a << 16) * 0x1d << 16)
-   * t0  = b * 0xcd65
-   */
-
-  t32  = 0x001d * a16;
-  t0   = 0xcd65 * b0;
-
-  /* Get the first b16 term
-   *
-   * (a << 16) * 0xcd65
-   */
-
-  t16  = 0xcd65 * a16;
-
-  /* Add the upper 16-bits to the b32 accumulator */
-
-  t32 += (t16 >> 16);
-
-  /* Add the lower 16-bits to the b0 accumulator, handling carry to the b32
-   * accumulator
-   */
-
-  t16  <<= 16;
-  if (t0 > (0xffffffff - t16))
+  tp.tv_sec  += ntp_secpart(offset);
+  tp.tv_nsec += ntp_nsecpart(offset);
+  while (tp.tv_nsec >= NSEC_PER_SEC)
     {
-      t32++;
+      tp.tv_nsec -= NSEC_PER_SEC;
+      tp.tv_sec++;
     }
-
-  t0 += t16;
-
-  /* Get the second b16 term
-   *
-   * b * (0x1d << 16)
-   */
-
-  t16  = 0x001d * b0;
-
-  /* Add the upper 16-bits to the b32 accumulator */
-
-  t32 += (t16 >> 16);
-
-  /* Add the lower 16-bits to the b0 accumulator, handling carry to the b32
-   * accumulator
-   */
-
-  t16  <<= 16;
-  if (t0 > (0xffffffff - t16))
-    {
-      t32++;
-    }
-
-  t0 += t16;
-
-  /* t32 and t0 represent the 64 bit product.  Now shift right by 23 bits to
-   * accomplish the divide by by 2**23.
-   */
-
-  nsec = (t32 << (32 - 23)) + (t0 >> 23);
-#endif
 
   /* Set the system time */
 
-  tp.tv_sec  = seconds;
-  tp.tv_nsec = nsec;
-  clock_settime(CLOCK_REALTIME, &tp);
+  (void)clock_settime(CLOCK_REALTIME, &tp);
 
-  svdbg("Set time to %lu seconds: %d\n", (unsigned long)tp.tv_sec, ret);
+  svdbg("Set time to %u.%03d seconds.\n",
+        tp.tv_sec, tp.tv_nsec / NSEC_PER_MSEC);
 }
 
 /****************************************************************************
  * Name: ntpc_verify_recvd_ntp_datagram
  ****************************************************************************/
+
 static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *recv,
                                            size_t nbytes,
                                            const struct sockaddr_in *xmitaddr,
@@ -467,6 +503,16 @@ static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *recv,
       return false;
     }
 
+  if ((int64_t)(ntpc_getuint64(recv->xmittimestamp) -
+                ntpc_getuint64(recv->recvtimestamp)) < 0)
+    {
+      /* Remote received our request after sending response? */
+
+      svdbg("invalid xmittimestamp & recvtimestamp pair.\n");
+
+      return false;
+    }
+
   buildtime = ntpc_get_compile_timestamp();
   seconds = ntpc_getuint32(recv->recvtimestamp);
   if (seconds > NTP2UNIX_TRANLSLATION)
@@ -490,6 +536,7 @@ static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *recv,
 /****************************************************************************
  * Name: ntpc_create_dgram_socket
  ****************************************************************************/
+
 static int ntpc_create_dgram_socket(void)
 {
   struct timeval tv;
@@ -551,8 +598,10 @@ err_close:
  *   response is received
  *
  ****************************************************************************/
+
 static int ntpc_daemon(int argc, char **argv)
 {
+  uint64_t xmit_time, recv_time;
   struct sockaddr_in server;
   struct sockaddr_in recvaddr;
   struct ntp_datagram_s xmit;
@@ -641,6 +690,7 @@ static int ntpc_daemon(int argc, char **argv)
 
       svdbg("Sending a NTP packet\n");
 
+      xmit_time = ntp_localtime();
       ret = sendto(sd, &xmit, sizeof(struct ntp_datagram_s),
                    0, (FAR struct sockaddr *)&server,
                    sizeof(struct sockaddr_in));
@@ -660,6 +710,7 @@ static int ntpc_daemon(int argc, char **argv)
       socklen = sizeof(struct sockaddr_in);
       nbytes = recvfrom(sd, (void *)&recv, sizeof(struct ntp_datagram_s),
                         0, (FAR struct sockaddr *)&recvaddr, &socklen);
+      recv_time = ntp_localtime();
 
       /* Check if the received message was long enough to be a valid NTP
        * datagram.
@@ -672,7 +723,8 @@ static int ntpc_daemon(int argc, char **argv)
           sd = -1;
 
           svdbg("Setting time\n");
-          ntpc_settime(recv.recvtimestamp);
+          ntpc_settime(xmit_time, recv_time, recv.recvtimestamp,
+                       recv.xmittimestamp);
         }
       else
         {
