@@ -53,6 +53,10 @@ config NETUTILS_NTPCLIENT_RETRIES
 	int "NTP client retry seconds to wait for network up"
 	default 60
 
+config NETUTILS_NTPCLIENT_NUM_SAMPLES
+	int "NTP client number of samples collected for filter"
+	default 5
+
 config NETUTILS_NTPCLIENT_SIGWAKEUP
 	int "NTP client wakeup signal number"
 	default 18

@@ -81,6 +81,10 @@
 #define NTP2UNIX_TRANLSLATION 2208988800u
 #define NTP_VERSION          3
 
+#ifndef CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES
+# define CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES 5
+#endif
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -106,6 +110,15 @@ struct ntpc_daemon_s
   pid_t pid;              /* Task ID of the NTP daemon */
 };
 
+/* NTP offset. */
+
+struct ntp_sample_s
+{
+  int64_t offset;
+  int64_t delay;
+  in_addr_t srv_addr;
+} packet_struct;
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -120,6 +133,24 @@ static struct ntpc_daemon_s g_ntpc_daemon;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: sample_cmp
+ ****************************************************************************/
+
+static int sample_cmp(const void *_a, const void *_b)
+{
+  const struct ntp_sample_s *a = _a;
+  const struct ntp_sample_s *b = _b;
+  int64_t diff = a->offset - b->offset;
+
+  if (diff < 0)
+    return -1;
+  else if (diff > 0)
+    return 1;
+  else
+    return 0;
+}
 
 /****************************************************************************
  * Name: int64abs
@@ -349,21 +380,21 @@ static uint64_t ntp_localtime(void)
 }
 
 /****************************************************************************
- * Name: ntpc_settime
+ * Name: ntpc_calculate_offset
  *
  * Description:
- *   Given the NTP time in seconds, set the system time
+ *   Calculate NTP time offset and round-trip delay
  *
  ****************************************************************************/
 
-static void ntpc_settime(uint64_t local_xmittime, uint64_t local_recvtime,
-                         FAR uint8_t *remote_recv, FAR uint8_t *remote_xmit)
+static void ntpc_calculate_offset(int64_t *offset, int64_t *delay,
+                                  uint64_t local_xmittime,
+                                  uint64_t local_recvtime,
+                                  FAR const uint8_t *remote_recv,
+                                  FAR const uint8_t *remote_xmit)
 {
-  struct timespec tp;
   uint64_t remote_recvtime;
   uint64_t remote_xmittime;
-  int64_t offset;
-  int64_t delay;
 
   /* Two timestamps from server, when request was received, and response
    * send. */
@@ -375,31 +406,26 @@ static void ntpc_settime(uint64_t local_xmittime, uint64_t local_recvtime,
    * See: https://www.eecis.udel.edu/~mills/time.html
    *      http://nicolas.aimon.fr/2014/12/05/timesync/ */
 
-  offset = (int64_t)((remote_recvtime - local_xmittime) +
+  *offset = (int64_t)((remote_recvtime - local_xmittime) +
                      (remote_xmittime - local_recvtime)) / 2;
 
   /* Calculate roundtrip delay. */
 
-  delay = (local_recvtime - local_xmittime) -
+  *delay = (local_recvtime - local_xmittime) -
           (remote_xmittime - remote_recvtime);
+}
 
-  if (offset < 0)
-    {
-      /* Do not set time if correction would be negative. */
+/****************************************************************************
+ * Name: ntpc_settime
+ *
+ * Description:
+ *   Given the NTP time offset, adjust the system time
+ *
+ ****************************************************************************/
 
-      svdbg("Skip setting time, NTP offset negative: -%u.%03d seconds\n",
-            ntp_secpart(int64abs(offset)),
-            ntp_nsecpart(int64abs(offset)) / NSEC_PER_MSEC);
-
-      return;
-    }
-
-  (void)delay;
-  svdbg("NTP offset: %u.%03d seconds, roundtrip delay: %s%u.%03d seconds\n",
-        ntp_secpart(offset), ntp_nsecpart(offset) / NSEC_PER_MSEC,
-        delay < 0 ? "-" : "",
-        ntp_secpart(int64abs(delay)),
-        ntp_nsecpart(int64abs(delay)) / NSEC_PER_MSEC);
+static void ntpc_settime(int64_t offset)
+{
+  struct timespec tp;
 
   /* Get the system time */
 
@@ -419,8 +445,11 @@ static void ntpc_settime(uint64_t local_xmittime, uint64_t local_recvtime,
 
   (void)clock_settime(CLOCK_REALTIME, &tp);
 
-  svdbg("Set time to %u.%03d seconds.\n",
-        tp.tv_sec, tp.tv_nsec / NSEC_PER_MSEC);
+  svdbg("Set time to %u.%03d seconds (offset: %s%u.%03u).\n",
+        tp.tv_sec, tp.tv_nsec / NSEC_PER_MSEC,
+        offset < 0 ? "-" : "",
+        ntp_secpart(int64abs(offset)),
+        ntp_nsecpart(int64abs(offset)) / NSEC_PER_MSEC);
 }
 
 /****************************************************************************
@@ -590,6 +619,167 @@ err_close:
 }
 
 /****************************************************************************
+ * Name: ntpc_get_ntp_sample
+ ****************************************************************************/
+
+static int ntpc_get_ntp_sample(struct ntp_sample_s *samples, int curr_idx)
+{
+  struct ntp_sample_s *sample = &samples[curr_idx];
+  uint64_t xmit_time, recv_time;
+  struct sockaddr_in server;
+  struct sockaddr_in recvaddr;
+  struct ntp_datagram_s xmit;
+  struct ntp_datagram_s recv;
+  socklen_t socklen;
+  ssize_t nbytes;
+  int errval;
+  bool retry = true;
+  int nsamples = curr_idx;
+  int ret;
+  int sd = -1;
+  int i;
+
+  /* Setup or sockaddr_in struct with information about the server we are
+   * going to ask the the time from.
+   */
+
+  memset(&server, 0, sizeof(struct sockaddr_in));
+  server.sin_family      = AF_INET;
+  server.sin_port        = htons(CONFIG_NETUTILS_NTPCLIENT_PORTNO);
+#ifndef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
+  server.sin_addr.s_addr = htonl(CONFIG_NETUTILS_NTPCLIENT_SERVERIP);
+#endif
+
+retry_dns:
+#ifdef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
+  ret = dns_gethostip(CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME,
+                      &server.sin_addr.s_addr);
+  if (ret < 0)
+    {
+      errval = errno;
+
+      ndbg("ERROR: sendto() failed: %d\n", errval);
+
+      goto sock_error;
+    }
+#endif
+
+  /* Make sure that this sample is from new server. */
+
+  for (i = 0; i < nsamples; i++)
+    {
+      if (server.sin_addr.s_addr == samples[i].srv_addr)
+        {
+          /* Already have sample from this server, retry DNS. */
+
+          svdbg("retry DNS.\n");
+
+          if (retry)
+            {
+              retry = false;
+              goto retry_dns;
+            }
+          else
+            {
+              errval = -EALREADY;
+              goto sock_error;
+            }
+        }
+    }
+
+  /* Open socket. */
+
+  sd = ntpc_create_dgram_socket();
+  if (sd < 0)
+    {
+      errval = errno;
+
+      ndbg("ERROR: ntpc_create_dgram_socket() failed: %d\n", errval);
+
+      goto sock_error;
+    }
+
+  /* Format the transmit datagram */
+
+  memset(&xmit, 0, sizeof(xmit));
+  xmit.lvm = MKLVM(0, 3, NTP_VERSION);
+
+  svdbg("Sending a NTP packet\n");
+
+  xmit_time = ntp_localtime();
+  ret = sendto(sd, &xmit, sizeof(struct ntp_datagram_s),
+               0, (FAR struct sockaddr *)&server,
+               sizeof(struct sockaddr_in));
+  if (ret < 0)
+    {
+      errval = errno;
+
+      ndbg("ERROR: sendto() failed: %d\n", errval);
+
+      goto sock_error;
+    }
+
+  /* Attempt to receive a packet (with a timeout that was set up via
+   * setsockopt() above)
+   */
+
+  socklen = sizeof(struct sockaddr_in);
+  nbytes = recvfrom(sd, (void *)&recv, sizeof(struct ntp_datagram_s),
+                    0, (FAR struct sockaddr *)&recvaddr, &socklen);
+  recv_time = ntp_localtime();
+
+  /* Check if the received message was long enough to be a valid NTP
+   * datagram.
+   */
+
+  if (nbytes > 0 && ntpc_verify_recvd_ntp_datagram(
+                      &recv, nbytes, &server, &recvaddr, socklen))
+    {
+      close(sd);
+      sd = -1;
+
+      svdbg("Calculate offset\n");
+
+      memset(sample, 0, sizeof(sample));
+
+      sample->srv_addr = server.sin_addr.s_addr;
+
+      ntpc_calculate_offset(&sample->offset, &sample->delay,
+                            xmit_time, recv_time, recv.recvtimestamp,
+                            recv.xmittimestamp);
+
+      return OK;
+    }
+  else
+    {
+      /* Check for errors.  Short datagrams are handled as error. */
+
+      errval = errno;
+
+      if (nbytes >= 0)
+        {
+          errval = EMSGSIZE;
+        }
+      else
+        {
+          ndbg("ERROR: recvfrom() failed: %d\n", errval);
+        }
+
+      goto sock_error;
+    }
+
+sock_error:
+  if (sd >= 0)
+    {
+      close(sd);
+      sd = -1;
+    }
+
+  errno = errval;
+  return ERROR;
+}
+
+/****************************************************************************
  * Name: ntpc_daemon
  *
  * Description:
@@ -601,37 +791,29 @@ err_close:
 
 static int ntpc_daemon(int argc, char **argv)
 {
-  uint64_t xmit_time, recv_time;
-  struct sockaddr_in server;
-  struct sockaddr_in recvaddr;
-  struct ntp_datagram_s xmit;
-  struct ntp_datagram_s recv;
-  socklen_t socklen;
-  ssize_t nbytes;
+  struct ntp_sample_s *samples;
   int exitcode = EXIT_SUCCESS;
-  int ret;
-  int sd = -1;
   int retries = 0;
+  int nsamples;
+  int ret;
 
   /* Indicate that we have started */
 
   g_ntpc_daemon.state = NTP_RUNNING;
   sem_post(&g_ntpc_daemon.interlock);
 
-  /* Setup or sockaddr_in struct with information about the server we are
-   * going to ask the the time from.
-   */
+  /* Allocate sample buffer. */
 
-  memset(&server, 0, sizeof(struct sockaddr_in));
-  server.sin_family      = AF_INET;
-  server.sin_port        = htons(CONFIG_NETUTILS_NTPCLIENT_PORTNO);
-#ifdef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-  server.sin_addr.s_addr = htonl(CONFIG_NETUTILS_NTPCLIENT_SERVERIP);
-#endif
+  samples = malloc(sizeof(*samples) * CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES);
+  if (!samples)
+    {
+      goto err_alloc;
+    }
 
-  /* Here we do the communication with the NTP server.  This is a very simple
-   * client architecture.  A request is sent and then a NTP packet is received
-   * and used to set the current time.
+  /* Here we do the communication with the NTP server. We collect set of
+   * NTP samples (hopefully from different servers when using DNS) and
+   * select median time-offset of samples. This is to filter out misconfigured
+   * server giving wrong timestamps.
    *
    * NOTE that the scheduler is locked whenever this loop runs.  That
    * assures both:  (1) that there are no asynchronous stop requests and
@@ -639,143 +821,110 @@ static int ntpc_daemon(int argc, char **argv)
    * to set the new time.  This sounds harsh, but this function is suspended
    * most of the time either: (1) sending a datagram, (2) receiving a datagram,
    * or (3) waiting for the next poll cycle.
-   *
-   * TODO: The first datagram that is sent is usually lost.  That is because
-   * the MAC address of the NTP server is not in the ARP table.  This is
-   * particularly bad here because the request will not be sent again until
-   * the long delay expires leaving the system with bad time for a long time
-   * initially.  Solutions:
-   *
-   * 1. Fix send logic so that it assures that the ARP request has been
-   *    sent and the entry is in the ARP table before sending the packet
-   *    (best).
-   * 2. Add some ad hoc logic here so that there is no delay until at least
-   *    one good time is received.
    */
 
   sched_lock();
   while (g_ntpc_daemon.state != NTP_STOP_REQUESTED)
     {
       int errval = 0;
+      int i;
 
-#ifdef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-      ret = dns_gethostip(CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME,
-                          &server.sin_addr.s_addr);
-      if (ret < 0)
+      /* Collect samples. */
+
+      for (nsamples = 0, i = 0; i < CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES; i++)
         {
-          errval = errno;
+          /* Get next sample. */
 
-          ndbg("ERROR: sendto() failed: %d\n", errval);
-
-          goto sock_error;
-        }
-#endif
-
-      /* Open socket. */
-
-      sd = ntpc_create_dgram_socket();
-      if (sd < 0)
-        {
-          errval = errno;
-
-          ndbg("ERROR: ntpc_create_dgram_socket() failed: %d\n", errval);
-
-          goto sock_error;
-        }
-
-      /* Format the transmit datagram */
-
-      memset(&xmit, 0, sizeof(xmit));
-      xmit.lvm = MKLVM(0, 3, NTP_VERSION);
-
-      svdbg("Sending a NTP packet\n");
-
-      xmit_time = ntp_localtime();
-      ret = sendto(sd, &xmit, sizeof(struct ntp_datagram_s),
-                   0, (FAR struct sockaddr *)&server,
-                   sizeof(struct sockaddr_in));
-      if (ret < 0)
-        {
-          errval = errno;
-
-          ndbg("ERROR: sendto() failed: %d\n", errval);
-
-          goto sock_error;
-        }
-
-      /* Attempt to receive a packet (with a timeout that was set up via
-       * setsockopt() above)
-       */
-
-      socklen = sizeof(struct sockaddr_in);
-      nbytes = recvfrom(sd, (void *)&recv, sizeof(struct ntp_datagram_s),
-                        0, (FAR struct sockaddr *)&recvaddr, &socklen);
-      recv_time = ntp_localtime();
-
-      /* Check if the received message was long enough to be a valid NTP
-       * datagram.
-       */
-
-      if (nbytes > 0 && ntpc_verify_recvd_ntp_datagram(
-                          &recv, nbytes, &server, &recvaddr, socklen))
-        {
-          close(sd);
-          sd = -1;
-
-          svdbg("Setting time\n");
-          ntpc_settime(xmit_time, recv_time, recv.recvtimestamp,
-                       recv.xmittimestamp);
-        }
-      else
-        {
-          /* Check for errors.  Short datagrams are handled as error. */
-
-          errval = errno;
-
-          if (nbytes >= 0)
+          ret = ntpc_get_ntp_sample(samples, nsamples);
+          if (ret < 0)
             {
-              errval = EMSGSIZE;
+              errval = errno;
             }
           else
             {
-              ndbg("ERROR: recvfrom() failed: %d\n", errval);
+              ++nsamples;
             }
-
-          goto sock_error;
         }
 
-#ifndef CONFIG_NETUTILS_NTPCLIENT_STAY_ON
-      /* Configured to exit at success. */
+      /* Analyse samples. */
 
-      exitcode = EXIT_SUCCESS;
-      break;
+      if (nsamples > 0)
+        {
+          int64_t offset;
+
+          /* Select median offset of samples. */
+
+          qsort(samples, nsamples, sizeof(*samples), sample_cmp);
+
+          for (i = 0; i < nsamples; i++)
+            {
+              svdbg("NTP sample[%d]: offset: %s%u.%03u sec, round-trip delay: %s%u.%03u sec\n",
+                    i,
+                    samples[i].offset < 0 ? "-" : "",
+                    ntp_secpart(int64abs(samples[i].offset)),
+                    ntp_nsecpart(int64abs(samples[i].offset)) / NSEC_PER_MSEC,
+                    samples[i].delay < 0 ? "-" : "",
+                    ntp_secpart(int64abs(samples[i].delay)),
+                    ntp_nsecpart(int64abs(samples[i].delay)) / NSEC_PER_MSEC);
+            }
+
+          if ((nsamples % 2) == 1)
+            {
+              offset = samples[nsamples / 2].offset;
+            }
+          else
+            {
+              int64_t offset1 = samples[nsamples / 2].offset;
+              int64_t offset2 = samples[nsamples / 2 - 1].offset;
+
+              /* Average of two middle offsets. */
+
+              if (offset1 > 0 && offset2 > 0)
+                {
+                  offset = ((uint64_t)offset1 + (uint64_t)offset2) / 2;
+                }
+              else if (offset1 < 0 && offset2 < 0)
+                {
+                  offset1 = -offset1;
+                  offset2 = -offset2;
+
+                  offset = ((uint64_t)offset1 + (uint64_t)offset2) / 2;
+
+                  offset = -offset;
+                }
+              else
+                {
+                  offset = (offset1 + offset2) / 2;
+                }
+            }
+
+          /* Adjust system time. */
+
+          ntpc_settime(offset);
+
+#ifndef CONFIG_NETUTILS_NTPCLIENT_STAY_ON
+          /* Configured to exit at success. */
+
+          exitcode = EXIT_SUCCESS;
+          break;
 
 #else
 
-      /* A full implementation of an NTP client would require much more.  I
-       * think we can skip most of that here.
-       */
+          /* A full implementation of an NTP client would require much more.  I
+           * think we can skip most of that here.
+           */
 
-      if (g_ntpc_daemon.state == NTP_RUNNING)
-        {
-          svdbg("Waiting for %d seconds\n",
-                CONFIG_NETUTILS_NTPCLIENT_POLLDELAYSEC);
+          if (g_ntpc_daemon.state == NTP_RUNNING)
+            {
+              svdbg("Waiting for %d seconds\n",
+                    CONFIG_NETUTILS_NTPCLIENT_POLLDELAYSEC);
 
-          (void)sleep(CONFIG_NETUTILS_NTPCLIENT_POLLDELAYSEC);
-          retries = 0;
-        }
+              (void)sleep(CONFIG_NETUTILS_NTPCLIENT_POLLDELAYSEC);
+              retries = 0;
+            }
 
-      continue;
+          continue;
 #endif
-
-sock_error:
-
-      if (sd >= 0)
-        {
-          /* Close sockfd. */
-
-          close(sd);
-          sd = -1;
         }
 
       /* Exceeded maximum retries? */
@@ -801,8 +950,10 @@ sock_error:
 
   sched_unlock();
 
+err_alloc:
   g_ntpc_daemon.state = NTP_STOPPED;
   sem_post(&g_ntpc_daemon.interlock);
+  free(samples);
   return exitcode;
 }
 
