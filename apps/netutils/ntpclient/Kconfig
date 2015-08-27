@@ -12,26 +12,9 @@ config NETUTILS_NTPCLIENT
 
 if NETUTILS_NTPCLIENT
 
-config NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-	bool "Use hostname for NTP server IP address"
-	depends on NETUTILS_DNSCLIENT
-	default n
-
-if NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-
 config NETUTILS_NTPCLIENT_SERVERHOSTNAME
-	string "NTP server hostname"
+	string "NTP server hostnames"
 	default "0.pool.ntp.org"
-
-endif #NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-
-if !NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-
-config NETUTILS_NTPCLIENT_SERVERIP
-	hex "NTP server IP address"
-	default 0x0a000001
-
-endif #NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
 
 config NETUTILS_NTPCLIENT_PORTNO
 	int "NTP server port number"

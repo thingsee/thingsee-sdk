@@ -58,9 +58,7 @@
 #include <netinet/in.h>
 
 #include <apps/netutils/ntpclient.h>
-#ifdef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
 #include <apps/netutils/dnsclient.h>
-#endif
 
 #include <nuttx/clock.h>
 
@@ -72,6 +70,9 @@
 
 #ifndef CONFIG_HAVE_LONG_LONG
 # error "64-bit integer support required for NTP client"
+#endif
+#ifndef CONFIG_NETUTILS_NTPCLIENT
+# error "DNS client required for NTP client"
 #endif
 
 /* NTP Time is seconds since 1900. Convert to Unix time which is seconds
@@ -87,6 +88,17 @@
 
 #ifndef ARRAY_SIZE
 #  define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
+#ifndef CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME
+# ifdef CONFIG_NETUTILS_NTPCLIENT_SERVERIP
+/* Old config support */
+#  warning "NTP server hostname not defined, using deprecated server IP address setting"
+#  define CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME \
+          inet_ntoa(CONFIG_NETUTILS_NTPCLIENT_SERVERIP)
+# else
+#  error "NTP server hostname not defined"
+# endif
 #endif
 
 /****************************************************************************
@@ -678,6 +690,7 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
   int errval;
   bool retry = true;
   int nsamples = curr_idx;
+  bool addr_ok;
   int ret;
   int sd = -1;
   int i;
@@ -689,45 +702,46 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
   memset(&server, 0, sizeof(struct sockaddr_in));
   server.sin_family      = AF_INET;
   server.sin_port        = htons(CONFIG_NETUTILS_NTPCLIENT_PORTNO);
-#ifndef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-  server.sin_addr.s_addr = htonl(CONFIG_NETUTILS_NTPCLIENT_SERVERIP);
-#endif
 
-retry_dns:
-#ifdef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-  ret = ntp_get_next_hostip(srvs, &server.sin_addr.s_addr);
-  if (ret < 0)
+  do
     {
-      errval = errno;
+      addr_ok = true;
 
-      ndbg("ERROR: sendto() failed: %d\n", errval);
-
-      goto sock_error;
-    }
-#endif
-
-  /* Make sure that this sample is from new server. */
-
-  for (i = 0; i < nsamples; i++)
-    {
-      if (server.sin_addr.s_addr == samples[i].srv_addr)
+      ret = ntp_get_next_hostip(srvs, &server.sin_addr.s_addr);
+      if (ret < 0)
         {
-          /* Already have sample from this server, retry DNS. */
+          errval = errno;
 
-          svdbg("retry DNS.\n");
+          ndbg("ERROR: sendto() failed: %d\n", errval);
 
-          if (retry)
+          goto sock_error;
+        }
+
+      /* Make sure that this sample is from new server. */
+
+      for (i = 0; i < nsamples; i++)
+        {
+          if (server.sin_addr.s_addr == samples[i].srv_addr)
             {
-              retry = false;
-              goto retry_dns;
-            }
-          else
-            {
-              errval = -EALREADY;
-              goto sock_error;
+              /* Already have sample from this server, retry DNS. */
+
+              svdbg("retry DNS.\n");
+
+              if (retry)
+                {
+                  retry = false;
+                  addr_ok = false;
+                  break;
+                }
+              else
+                {
+                  errval = -EALREADY;
+                  goto sock_error;
+                }
             }
         }
     }
+  while (!addr_ok);
 
   /* Open socket. */
 
