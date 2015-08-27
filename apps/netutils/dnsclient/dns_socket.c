@@ -502,7 +502,7 @@ static int dns_send_query(int sockfd, FAR const char *name,
 #ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
 #  error "Not implemented"
 #else
-static int dns_recv_response(int sockfd, FAR struct sockaddr_in *addr,
+static int dns_recv_response(int sockfd, FAR in_addr_t *inaddr, size_t naddr,
                              FAR unsigned char *buffer, size_t buflen,
                              struct dns_queue_info_s *qinfo)
 #endif
@@ -513,10 +513,12 @@ static int dns_recv_response(int sockfd, FAR struct sockaddr_in *addr,
   FAR unsigned char *nameend;
   FAR struct dns_answer *ans;
   FAR struct dns_hdr *hdr;
-  uint8_t nquestions;
-  uint8_t nanswers;
+  uint16_t nquestions;
+  uint16_t nanswers;
   ssize_t ret;
   socklen_t raddrlen;
+  int naddr_read;
+  int errval;
 
   /* Receive the response */
 
@@ -674,13 +676,16 @@ static int dns_recv_response(int sockfd, FAR struct sockaddr_in *addr,
 
   /* Go through answers. */
 
+  errval = EHOSTUNREACH;
+  naddr_read = 0;
+
   for (; nanswers > 0; nanswers--)
     {
       if (buf_left(nameptr, buffer, buflen) < 1)
         {
           ndbg("malformed/truncated DNS response.\n");
 
-          errno = EBADMSG;
+          errval = EBADMSG;
           break;
         }
 
@@ -706,7 +711,7 @@ static int dns_recv_response(int sockfd, FAR struct sockaddr_in *addr,
         {
           ndbg("malformed/truncated DNS response.\n");
 
-          errno = EBADMSG;
+          errval = EBADMSG;
           break;
         }
 
@@ -730,7 +735,7 @@ static int dns_recv_response(int sockfd, FAR struct sockaddr_in *addr,
             {
               ndbg("malformed/truncated DNS response.\n");
 
-              errno = EBADMSG;
+              errval = EBADMSG;
               break;
             }
 
@@ -742,12 +747,16 @@ static int dns_recv_response(int sockfd, FAR struct sockaddr_in *addr,
                (a_addr >> 16 ) & 0xff,
                (a_addr >> 24 ) & 0xff);
 
-          /* TODO: we should really check that this IP address is the one
-           * we want.
-           */
+          inaddr[naddr_read++] = a_addr;
 
-          addr->sin_addr.s_addr = a_addr;
-          return OK;
+          if (naddr_read >= naddr)
+            {
+              return naddr_read;
+            }
+
+          /* Continue parsing. */
+
+          nameptr += 4;
         }
 #ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
       else if (ans->type  == HTONS(1) &&
@@ -765,7 +774,12 @@ static int dns_recv_response(int sockfd, FAR struct sockaddr_in *addr,
         }
     }
 
-  errno = EHOSTUNREACH;
+  if (naddr_read > 0)
+    {
+      return naddr_read;
+    }
+
+  errno = errval;
   return ERROR;
 }
 
@@ -850,7 +864,7 @@ int dns_free_sock(FAR int *sockfd)
  *
  * Description:
  *   Using the DNS resolver socket (sockfd), look up the the 'hostname', and
- *   return its IP address in 'ipaddr'
+ *   return its IP address in 'ipaddr'.
  *
  * Returned Value:
  *   Returns zero (OK) if the query was successful.
@@ -879,34 +893,59 @@ int dns_query_sock(int sockfd, FAR const char *hostname, FAR in_addr_t *ipaddr)
 
 #else
 
-# ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-  struct sockaddr_in6 addr;
-# else
-  struct sockaddr_in addr;
-# endif
+  if (dns_query_sock_multi(sockfd, hostname, ipaddr, 1) <= 0)
+    return ERROR;
+
+  return OK;
+
+#endif
+}
+
+/****************************************************************************
+ * Name: dns_query_sock_multi
+ *
+ * Description:
+ *   Using the DNS resolver socket (sockfd), look up the the 'hostname', and
+ *   return its IP addresses in 'ipaddr' array.
+ *
+ * Returned Value:
+ *   Returns number of addresses read if the query was successful.
+ *
+ ****************************************************************************/
+
+int dns_query_sock_multi(int sockfd, FAR const char *hostname,
+                         FAR in_addr_t *ipaddr, size_t nipaddr)
+{
+  int ret;
+
+  if (!ipaddr || nipaddr == 0)
+    {
+      errno = EINVAL;
+      return ERROR;
+    }
 
   /* First check if the host is an IP address. */
 
-  if (!netlib_ipaddrconv(hostname, (uint8_t*)ipaddr))
+  if (!netlib_ipaddrconv(hostname, (FAR uint8_t *)ipaddr))
     {
       /* 'host' does not point to a valid address string.  Try to resolve
        *  the host name to an IP address.
        */
 
-      if (dns_whois_socket(sockfd, hostname, &addr) < 0)
+      ret = dns_whois_socket_multi(sockfd, hostname, ipaddr, nipaddr);
+      if (ret < 0)
         {
           /* Needs to set the errno here */
 
           return ERROR;
         }
+    }
+  else
+    {
+      ret = 1;
+    }
 
-      /* Save the host address -- Needs fixed for IPv6 */
-
-      *ipaddr = addr.sin_addr.s_addr;
-  }
-
-  return OK;
-#endif
+  return ret;
 }
 
 /****************************************************************************
@@ -1134,23 +1173,44 @@ int dns_getserver(FAR struct in_addr *dnsserver)
  * Name: dns_whois_socket
  *
  * Description:
+ *   Get the binding for 'name' using the DNS server accessed via 'sockfd'.
+ *
+ ****************************************************************************/
+
+int dns_whois_socket(int sockfd, FAR const char *name,
+                     FAR struct sockaddr_in *addr)
+{
+  int ret;
+
+  ret = dns_whois_socket_multi(sockfd, name, &addr->sin_addr.s_addr, 1);
+  if (ret <= 0)
+    return ERROR;
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: dns_whois_socket_multi
+ *
+ * Description:
  *   Get the binding for 'name' using the DNS server accessed via 'sockfd'
  *
  ****************************************************************************/
 
-#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-int dns_whois_socket(int sockfd, FAR const char *name,
-                     FAR struct sockaddr_in6 *addr)
-#else
-int dns_whois_socket(int sockfd, FAR const char *name,
-                     FAR struct sockaddr_in *addr)
-#endif
+int dns_whois_socket_multi(int sockfd, FAR const char *name,
+                           FAR in_addr_t *addr, size_t naddr)
 {
   FAR unsigned char *buffer;
   size_t buflen = RECV_BUFFER_SIZE;
   int retries;
   int ret;
   int err;
+
+  if (naddr == 0 || !addr)
+    {
+      errno = EINVAL;
+      return ERROR;
+    }
 
   if (buflen < SEND_BUFFER_SIZE)
     buflen = SEND_BUFFER_SIZE;
@@ -1182,7 +1242,7 @@ int dns_whois_socket(int sockfd, FAR const char *name,
                            &qinfo);
       if (ret >= 0)
         {
-          ret = dns_recv_response(sockfd, addr, buffer, buflen, &qinfo);
+          ret = dns_recv_response(sockfd, addr, naddr, buffer, buflen, &qinfo);
           if (ret >= 0)
             {
               /* Response received successfully */
@@ -1191,7 +1251,7 @@ int dns_whois_socket(int sockfd, FAR const char *name,
               qinfo.qname = NULL;
               free(buffer);
               dns_clear_lookup_failed_count();
-              return OK;
+              return ret;
             }
           else if (errno != EAGAIN && errno != ETIMEDOUT)
             {

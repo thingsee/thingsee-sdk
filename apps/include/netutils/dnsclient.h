@@ -125,6 +125,21 @@ int dns_query_sock(int sockfd, FAR const char *hostname, FAR in_addr_t *ipaddr);
  * Name: dns_query
  *
  * Description:
+ *   Using the DNS resolver socket (sockfd), look up the the 'hostname', and
+ *   return its IP addresses in 'ipaddr' array.
+ *
+ * Returned Value:
+ *   Returns number of addresses read if the query was successful.
+ *
+ ****************************************************************************/
+
+int dns_query_sock_multi(int sockfd, FAR const char *hostname,
+                         FAR in_addr_t *ipaddr, size_t nipaddr);
+
+/****************************************************************************
+ * Name: dns_query
+ *
+ * Description:
  *   Using the internal DNS resolver socket, look up the the 'hostname', and
  *   return its IP address in 'ipaddr'
  *
@@ -134,6 +149,21 @@ int dns_query_sock(int sockfd, FAR const char *hostname, FAR in_addr_t *ipaddr);
  ****************************************************************************/
 
 int dns_query(FAR const char *hostname, FAR in_addr_t *ipaddr);
+
+/****************************************************************************
+ * Name: dns_query
+ *
+ * Description:
+ *   Using the internal DNS resolver socket, look up the the 'hostname', and
+ *   return its IP addresses in 'ipaddr' array.
+ *
+ * Returned Value:
+ *   Returns number of addresses read if the query was successful.
+ *
+ ****************************************************************************/
+
+int dns_query_multi(FAR const char *hostname, FAR in_addr_t *ipaddr,
+                    size_t nipaddr);
 
 /****************************************************************************
  * Name: dns_setservers
@@ -203,13 +233,19 @@ int dns_getserver(FAR struct in_addr *dnsserver);
  *
  ****************************************************************************/
 
-#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-int  dns_whois_socket(int sockfd, FAR const char *name,
-                      FAR struct sockaddr_in6 *addr);
-#else
-int  dns_whois_socket(int sockfd, FAR const char *name,
-                      FAR struct sockaddr_in *addr);
-#endif
+int dns_whois_socket_multi(int sockfd, FAR const char *name,
+                           FAR in_addr_t *addr, size_t naddr);
+
+/****************************************************************************
+ * Name: dns_whois_socket
+ *
+ * Description:
+ *   Get the binding for 'name' using the DNS server accessed via 'sockfd'.
+ *
+ ****************************************************************************/
+
+int dns_whois_socket(int sockfd, FAR const char *name,
+                     FAR struct sockaddr_in *addr);
 
 /****************************************************************************
  * Name: dns_whois
@@ -220,11 +256,7 @@ int  dns_whois_socket(int sockfd, FAR const char *name,
  *
  ****************************************************************************/
 
-#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-int dns_whois(FAR const char *name, FAR struct sockaddr_in6 *addr);
-#else
 int dns_whois(FAR const char *name, FAR struct sockaddr_in *addr);
-#endif
 
 /****************************************************************************
  * Name: dns_gethostip
@@ -237,6 +269,20 @@ int dns_whois(FAR const char *name, FAR struct sockaddr_in *addr);
  ****************************************************************************/
 
 int dns_gethostip(FAR const char *hostname, FAR in_addr_t *ipaddr);
+
+/****************************************************************************
+ * Name: dns_gethostip_multi
+ *
+ * Descriptions:
+ *   Combines the operations of dns_bind_sock(), dns_query_sock_multi(), and
+ *   dns_free_sock() to obtain the the IP addresses ('ipaddr') associated with
+ *   the 'hostname' in one operation. Allows fetching multiple IP-addresses
+ *   from single DNS query response. Returns number of addresses read.
+ *
+ ****************************************************************************/
+
+int dns_gethostip_multi(FAR const char *hostname, FAR in_addr_t *ipaddr,
+                        size_t nipaddr);
 
 /****************************************************************************
  * Name: dns_clear_lookup_failed_count
