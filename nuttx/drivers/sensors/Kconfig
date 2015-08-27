@@ -1,0 +1,193 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config LIS331DL
+	bool "ST LIS331DL device support"
+	default n
+	select I2C
+
+config LIS2DH
+	bool "ST LIS2DH device support"
+	default n
+	select I2C
+	---help---
+		Enable device driver for STMicro LIS2DH accelerometer
+
+if LIS2DH
+
+config DEBUG_LIS2DH
+	bool "Enable trace support for the LIS2DH"
+	default n
+	---help---
+		Enables trace support for the LIS2DH
+
+config LIS2DH_NPOLLWAITERS
+	int "Number of waiters to poll"
+	default 2
+	---help---
+		Maximum number of threads that can be waiting on poll()
+
+endif
+
+config MPL115A
+	bool "Freescale MPL115A Barometer Sensor support"
+	default n
+	select SPI
+	---help---
+		Enable driver support for the Freescale MPL115A barometer sensor.
+
+config SENSORS_ADXL345
+	bool "AnalogDevices ADXL345 Driver"
+	default n
+	---help---
+		Enables support for the ADXL345 driver
+
+if SENSORS_ADXL345
+
+choice
+	prompt "ADXL345 Interface"
+	default ADXL345_SPI
+
+config ADXL345_SPI
+	bool "ADXL345 SPI Interface"
+	select SPI
+	---help---
+		Enables support for the SPI interface.
+
+config ADXL345_I2C
+	bool "ADXL345 I2C Interface"
+	select I2C
+	---help---
+		Enables support for the I2C interface
+
+endchoice
+
+config ADXL345_ACTIVELOW
+	bool "Active Low Interrupt"
+	default n
+	---help---
+		The ADXL345 interrupt will be inverted. Instead starting low and going
+		high, it will start high and will go low when an interrupt is fired.
+		Default:  Active high/rising edge.
+
+config ADXL345_REGDEBUG
+	bool "Enable Register-Level ADXL345 Debug"
+	default n
+	depends on DEBUG
+	---help---
+		Enable very low register-level debug output.
+
+endif # SENSORS_ADXL345
+
+config I2C_LM75
+	bool
+	default y if LM75
+
+config LM75
+	bool "STMicro LM-75 Temperature Sensor support"
+	default n
+	select I2C
+	select I2C_LM75
+	---help---
+		Enable driver support for the STMicro LM-75 temperature sensor.
+		This should also work with compatible temperature sensors such as
+		the TI TMP100/101.
+
+config QENCODER
+	bool "Qencoder"
+	default n
+
+config DEBUG_QENCODER
+	bool "Enable Qencoder Debug"
+	default n
+	depends on QENCODER
+
+config I2C_PRESSURE_DEV_LPS25H
+	bool "Enable ST LPS25H pressure sensor"
+	default n
+	---help---
+		Enable driver support for the ST LPS25H barometer sensor.
+
+config DEBUG_PRESSURE_DEV_LPS25H
+	bool "Enable LPS25H pressure sensor's debug"
+	default n
+	depends on I2C_PRESSURE_DEV_LPS25H
+
+config I2C_HUMIDITY_DEV_SHT25
+	bool "Enable SHT25 humidity sensor"
+	default n
+
+config DEBUG_HUMIDITY_DEV_SHT25
+	bool "Enable SHT25 humidity sensor's debug"
+	default n
+	depends on I2C_HUMIDITY_DEV_SHT25
+
+config HTS221_HUMIDITY
+	bool "Enable ST HTS221 humidity sensor"
+	default y
+	---help---
+		Enable driver support for the ST HTS221 humidity sensor.
+
+if HTS221_HUMIDITY
+
+config TRACES_HTS221_HUMIDITY
+	bool "Trace support for the HTS221"
+	default n
+	---help---
+		Enables trace support for the HTS221
+
+config HTS221_NPOLLWAITERS
+	int "Number of waiters to poll"
+	default 1
+	---help---
+		Number of waiters to poll
+
+endif
+
+config LSM9DS1_SENS
+	bool "Enable ST LSM9DS1 sensor"
+	default n
+	---help---
+		Enables ST's 9-axis LSM9DS1 sensor.
+		This iNEMO inertial module contains 3D accelerometer,
+		3D gyroscope, and 3D magnetometer sensors.
+
+if LSM9DS1_SENS
+
+config TRACES_LSM9DS1_SENS
+	bool "Enable trace support for the LSM9DS1"
+	default n
+	---help---
+		Enables trace support for the LSM9DS1
+
+config LSM9DS1_SENS_NPOLLWAITERS
+	int "Number of waiters to poll"
+	default 1
+	---help---
+		Number of waiters to poll
+
+endif
+
+config MAX44009_SENSOR
+	bool "Enable MAX44009 ALS sensor"
+	default n
+	---help---
+		Enables MAX44009 Ambient Light Sensor
+
+if MAX44009_SENSOR
+
+config TRACES_MAX44009_SENSOR
+	bool "Enable trace support for the MAX44009"
+	default n
+	---help---
+		Enables trace support for the MAX44009
+
+config MAX44009_SENSOR_NPOLLWAITERS
+	int "Number of waiters to poll"
+	default 1
+	---help---
+		Number of waiters to poll
+
+endif

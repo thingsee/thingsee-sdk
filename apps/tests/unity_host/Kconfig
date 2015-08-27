@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config TESTS_UNITY_HOST
+	bool "Host-side Unity framework test"
+	default n
+	---help---
+		Enable host-side Unity framework test
+

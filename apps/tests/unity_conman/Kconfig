@@ -1,0 +1,12 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig TESTS_UNITY_CONMAN
+    bool "Automated conman test"
+    default n
+    depends on SYSTEM_CONMAN
+    select TESTS_DEFAULT_CONMAN
+    ---help---
+        Enable automated conman test

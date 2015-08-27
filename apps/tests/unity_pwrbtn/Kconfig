@@ -1,0 +1,12 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config TESTS_UNITY_PWRBTN
+	bool "Power button driver test"
+	default n
+    depends on ARCH_CHIP_STM32
+	---help---
+		Enable power button driver test
+

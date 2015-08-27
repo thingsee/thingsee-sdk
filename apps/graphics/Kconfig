@@ -1,0 +1,34 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config TIFF
+	bool "TIFF file generation library"
+	default n
+	---help---
+		Enable support for the TIFF file generation program.
+
+if TIFF
+
+menu "TIFF Screenshot Utility"
+source "$APPSDIR/graphics/screenshot/Kconfig"
+endmenu
+
+endif # TIFF
+
+config GRAPHICS_TRAVELER
+	bool "Traveler game"
+	default n
+	select SYSTEM_INIFILE
+	---help---
+		Enable or disable the graphic Traveler game
+
+if GRAPHICS_TRAVELER
+
+menu "Traveler game"
+source "$APPSDIR/graphics/traveler/Kconfig"
+endmenu
+
+endif # GRAPHICS_TRAVELER
+

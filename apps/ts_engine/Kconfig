@@ -1,0 +1,66 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config THINGSEE_ENGINE
+    bool "Thingsee engine"
+    default n
+    ---help---
+        Enable the Thingsee engine
+
+if THINGSEE_ENGINE
+    config THINGSEE_CONNECTORS
+        bool "Thingsee connectors"
+        default y
+        ---help---
+            Enable the Thingsee connectors
+
+    config THINGSEE_CONNECTOR_DEBUG
+        bool "Thingsee connector debug"
+        default n
+        ---help---
+            Enable the thingsee connectors debug
+
+    config THINGSEE_CONNECTOR_PROTOCOL_DEBUG
+        bool "Thingsee connector protocol debug"
+        default n
+        ---help---
+            Enable verbose network protocol debugging traces (HTTP, etc)
+
+
+    choice
+        prompt "Active connector"
+        default THINGSEE_CONNECTOR_TS
+        depends on THINGSEE_CONNECTORS
+
+        config THINGSEE_CONNECTOR_TS
+            bool "Thingsee connector"
+            ---help---
+                Enable the Thingsee connector
+
+        config THINGSEE_CONNECTOR_KII
+            bool "Kii connector"
+            ---help---
+                Enable the Kii connector
+
+        config THINGSEE_CONNECTOR_MESHBLU
+            bool "Meshblu connector"
+            ---help---
+                Enable the Meshblu connector
+
+    endchoice
+
+    if THINGSEE_CONNECTOR_TS
+        source "$APPSDIR/ts_engine/ts-connector/Kconfig_extra"
+    endif
+
+    if THINGSEE_CONNECTOR_KII
+        source "$APPSDIR/ts_engine/kii-connector/Kconfig_extra"
+    endif
+
+    if THINGSEE_CONNECTOR_MESHBLU
+        source "$APPSDIR/ts_engine/meshblu-connector/Kconfig_extra"
+    endif
+
+endif

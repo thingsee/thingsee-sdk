@@ -1,0 +1,40 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig THINGSEE_LIB
+	bool "Thingsee library"
+	default n
+	---help---
+		Enable the Thingsee library
+
+if THINGSEE_LIB
+
+config THINGSEE_DEEPSLEEP_DEBUG
+	bool "Thingsee deep-sleep debugging"
+	default n
+	---help---
+		Enable debugging to trace deep-sleep handling in Thingsee core.
+
+config THINGSEE_DEEPSLEEP_WATCHDOG
+	bool "Thingsee deep-sleep watchdog"
+	default n
+	---help---
+		Enable Thingsee core deep-sleep watchdog which performs a system reset
+		in case device has not entered deep-sleep within given time
+
+config THINGSEE_DEEPSLEEP_WATCHDOG_TIMEOUT
+	int "Thingsee deep-sleep watchdog timeout"
+	default 1200
+	---help---
+		Deep-sleep watchdog timeout in seconds
+
+config THINGSEE_DISABLE_DEVICE_INFO_TABLE
+    bool "Disable MCU UID to device PSN mapping table"
+    default false
+    ---help---
+        This is needed for B1.0 and B1.2 prototype devices, as they do have
+        have production data stored on EEPROM.
+
+endif

@@ -1,0 +1,7 @@
+source "$APPSDIR/thingsee/bluetooth/Kconfig"
+source "$APPSDIR/thingsee/charger/Kconfig"
+source "$APPSDIR/thingsee/emmc/Kconfig"
+source "$APPSDIR/thingsee/gps/Kconfig"
+source "$APPSDIR/thingsee/lib/Kconfig"
+source "$APPSDIR/thingsee/nineaxls/Kconfig"
+source "$APPSDIR/thingsee/ui/Kconfig"

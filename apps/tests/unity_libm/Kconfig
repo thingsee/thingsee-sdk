@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config TESTS_UNITY_LIBM
+	bool "Automated math library test"
+	default n
+	---help---
+		Enable automated math library test
+

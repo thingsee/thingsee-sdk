@@ -1,0 +1,14 @@
+This folder can be used to host platform level testcases. Testcases are collected from the codebase
+post-build. They are packaged and exposed for further use as a build artifact. The process is assisted
+by GIT [repo](https://code.google.com/p/git-repo/) tool and a manifest.
+
+Every testcase is identified by its path and interpretation of the path is different depending on the
+test framework in use. But few concepts always hold true:
+
+* Every testcase belongs to a testsuite
+* A testsuite may belong to a testsuite or be a top level testsuite
+* Top level testsuite belongs to a collection of top level testsuites
+* Test identification is built like a file path, where components are separated with slashes (/)
+* Right-most component of the identification is the testcase name
+* Folder structure may contribute to the testcase identification
+    * Example for [py.test](http://pytest.org/latest/): `a/b/c/d/e/test_f` is translated to `a/b/c/d/e.py::test_f`

@@ -1,0 +1,5 @@
+# run conman
+conman &
+
+# run ts_engine
+ts_engine &

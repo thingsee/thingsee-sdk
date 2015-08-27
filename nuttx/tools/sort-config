@@ -1,0 +1,41 @@
+#!/usr/bin/env python
+
+import fileinput
+import sys
+
+state = 'START'
+configs = {}
+
+def iteration(line):
+    global state, configs
+    if state == 'START':
+        print line
+        if line == '#':
+            state = 'SECTION_HEADER'
+    elif state == 'SECTION_HEADER':
+        print line
+        if line == '#':
+            state = 'SECTION_CONFIGS'
+            configs = {}
+    elif state == 'SECTION_CONFIGS':
+        if not line:
+            state = 'START'
+            for config in sorted(configs.keys()):
+                if not configs[config]:
+                    print '# ' + config + ' is not set'
+                else:
+                    print config + '=' + configs[config]
+            print line
+        elif (line.startswith('# ')):
+            configs[line.split(' ')[1]] = None
+        else:
+            parts = line.split('=')
+            configs[parts[0]] = parts[1]
+
+lines = fileinput.input(files=sys.argv[1], inplace=1, backup='~')
+for line in lines:
+    line = line.rstrip()
+    iteration(line)
+
+sys.stdout = open(sys.argv[1], 'a')
+iteration('')

@@ -1,0 +1,22 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config LED_LP5521
+	bool "Enable LP5521 Programmable three-channel LED driver driver"
+	default n
+	---help---
+		Enable support for LP5521 Programmable three-channel LED
+		driver.
+
+if LED_LP5521
+
+config LED_LP5521_DEBUG
+	bool "Enable trace support for LP5521 driver"
+	default n
+	depends on DEBUG
+	---help---
+		Enable debugging traces for LP5521 driver
+
+endif

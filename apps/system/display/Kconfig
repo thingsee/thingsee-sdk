@@ -1,0 +1,54 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "Device display"
+menuconfig THINGSEE_DISPLAY_MODULE
+    bool "Thingsee display module support"
+    default n
+    ---help---
+        Enable the Thingsee application support display
+
+if THINGSEE_DISPLAY_MODULE
+
+config THINGSEE_DISPLAY_TRACES
+    bool "Enable trace support for display"
+    default n
+    ---help---
+        Enables trace support for display
+
+config THINGSEE_DISPLAY_BKGND_COLOR
+    int "Background color used in apps"
+    default 0
+    ---help---
+        Background color used in application
+
+config THINGSEE_DISPLAY_FOREGND_COLOR
+    int "Foreground color used in apps"
+    default 1
+    ---help---
+        Foreground color used in apps
+
+# This definition is not about image module. But in future it must be placed under IMAGE_MODULE macro definition
+config THINGSEE_DISPLAY_INC_IMG_EXAMPLE
+    bool "Image example to play with"
+    default n
+    ---help---
+        This option includes image example if needed
+
+config THINGSEE_DISPLAY_INVERT
+    bool "Enable support for screen zone inverting"
+    default n
+    ---help---
+        This option enables support for inverting user defined zone on the screen
+
+config THINGSEE_DISPLAY_ALIGNMENT
+    bool "Activate support for the text alignment"
+    default n
+    ---help---
+        This option activates text alignment support. It will reduce possible flickering, but at the same time will slow down
+        the rendering process due to the need of more calculations to be done before rendering process
+
+endif
+endmenu

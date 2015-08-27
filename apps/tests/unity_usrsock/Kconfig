@@ -1,0 +1,12 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config TESTS_UNITY_USRSOCK
+    bool "User socket test"
+    default n
+    depends on NET
+    ---help---
+        Enable user socket Unity test
+

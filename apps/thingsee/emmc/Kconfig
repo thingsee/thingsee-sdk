@@ -1,0 +1,27 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig THINGSEE_EMMC_MODULE
+	bool "Thingsee eMMC module support"
+	default n
+	depends on THINGSEE_LIB
+	---help---
+		Enable the Thingsee application support for eMMC module
+		
+if THINGSEE_EMMC_MODULE
+
+	config THINGSEE_EMMC_MODULE_DBG
+		bool "Thingsee eMMC module debug support"
+		default n
+		---help---
+			Enable the Thingsee application trace support for eMMC module
+
+	config LOG_FILE_NAME
+		string "Offline logs file name"
+		default "LOGS.txt"
+		---help---
+			Log file name used for sensors
+
+endif

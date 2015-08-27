@@ -1,0 +1,1 @@
+source "$APPSDIR/ts_engine/ts-connector/Kconfig_ts"

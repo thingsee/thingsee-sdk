@@ -1,0 +1,22 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig THINGSEE_CHARGER_MODULE
+	bool "Thingsee charger module support"
+	default n
+	depends on THINGSEE_LIB
+	select BQ24251_CHARGER
+	---help---
+		Enable the Thingsee application support for charger module
+		
+if THINGSEE_CHARGER_MODULE
+
+config THINGSEE_CHARGER_MODULE_DBG
+	bool "Thingsee charger module debug support"
+	default n
+	---help---
+		Enable the Thingsee application trace support for charger module
+
+endif

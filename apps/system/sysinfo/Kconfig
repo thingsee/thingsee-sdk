@@ -1,0 +1,19 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig SYSTEM_SYSINFO
+	bool "Sysinfo"
+	default n
+	---help---
+		Enable support for the NSH sysinfo command.
+
+if SYSTEM_SYSINFO
+
+config SYSTEM_SYSINFO_STACKSIZE
+	int "NSH sysinfo stack size"
+	default 1024
+
+endif
+

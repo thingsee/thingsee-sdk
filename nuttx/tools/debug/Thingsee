@@ -1,0 +1,86 @@
+#
+# Various ThingSee-specific macros
+#
+source tools/debug/NuttX
+source tools/debug/STM32L1
+source tools/debug/ARMv7M
+
+echo Loading ThingSee GDB macros.  Use 'help thingsee' for more information.\n
+
+define thingsee
+	echo Use 'help thingsee' for more information.\n
+end
+
+document thingsee
+. Various macros for working with the ThingSee IOT device firmware.
+.
+.    dcc
+.    dcc_on
+.    dcc_off
+.        Show semi-hosting debug console state or turn it on/off.
+.
+.    led_on
+.    led_off
+.        Turn led on/off
+.
+. Use 'help <macro>' for more specific help.
+end
+
+define dcc
+	if $argc == 0
+		if dcc_enable_debug == 1
+			echo dcc console is on\n
+		else
+			echo dcc console is off\n
+		end
+	else
+		help dcc
+		help dcc_on
+		help dcc_off
+	end
+end
+document dcc
+.    dcc
+.        Show current debug console state.
+end
+
+define dcc_on
+	if $argc == 0
+		set dcc_enable_debug = 1
+	else
+		help dcc_on
+	end
+end
+document dcc_on
+.    dcc_on
+.        Turn semi-hosting debug console on.
+end
+
+define dcc_off
+	if $argc == 0
+		set dcc_enable_debug = 0
+	else
+		help dcc_off
+	end
+end
+document dcc_off
+.    dcc_off
+.        Turn semi-hosting debug console off.
+end
+
+define led_on
+	set $_unused = board_led_on(0)
+end
+document led_on
+.    led_on
+.        Turn debug LED on.
+end
+
+define led_off
+	set $_unused = board_led_off(0)
+end
+document led_off
+.    led_off
+.        Turn debug LED off.
+end
+

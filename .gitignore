@@ -1,0 +1,16 @@
+.depend
+Make.dep
+*.o
+*.a
+*.a.lock
+*.d
+*.i
+*~
+.swp
+.*.swp
+core
+.gdbinit
+cscope.out
+.cproject
+.project
+.settings

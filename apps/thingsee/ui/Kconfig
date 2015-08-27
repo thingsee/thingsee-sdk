@@ -1,0 +1,17 @@
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config THINGSEE_UI
+    bool "Thingsee UI"
+    default n
+    ---help---
+        Enable Thingsee UI
+
+if THINGSEE_UI
+    config THINGSEE_UI_DFU_MODE
+        bool "Enable reboot to DFU-mode feature"
+        default n
+        ---help---
+            Enable menu-item for rebooting into DFU-mode
+endif

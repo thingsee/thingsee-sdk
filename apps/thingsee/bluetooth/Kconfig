@@ -1,0 +1,10 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config THINGSEE_BLUETOOTH_MODULE
+	bool "Thingsee bluetooth module support"
+	default n
+	---help---
+		Enable the Thingsee application support for bluetooth module

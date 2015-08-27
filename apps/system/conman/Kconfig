@@ -1,0 +1,34 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "Connection manager"
+config SYSTEM_CONMAN
+	bool "Connection manager"
+	default n
+	---help---
+		Enable the library for controlling device network connections
+
+if SYSTEM_CONMAN
+
+config SYSTEM_CONMAN_DEBUG
+	bool "Enable connection manager debug"
+	default n
+	---help---
+		Enable connection manager debug.
+
+config SYSTEM_CONMAN_VERBOSE
+	bool "Enable connection manager verbose debug"
+	default n
+	---help---
+		Enable connection manager verbose debug.
+
+config SYSTEM_CONMAN_WIFI
+	bool "Enable connection manager wifi"
+	default y
+	---help---
+		Enable connection manager wifi
+
+endif
+endmenu

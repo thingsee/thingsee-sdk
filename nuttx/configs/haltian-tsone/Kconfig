@@ -1,0 +1,141 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+if ARCH_BOARD_HALTIAN_TSONE_B15
+
+config BOARD_CRASHDUMP
+        bool "Enable Board level logging of crash dumps"
+        default y
+
+config BOARD_HSE_XTAL_FREQUENCY
+	int "HSE crystal frequency in Mhz"
+	default 8
+
+config BOARD_DISABLE_DEEPSLEEP
+	bool "Disable use of very low power Deep Sleep mode"
+	default n
+
+config BOARD_DEEPSLEEP_SKIP_PMSTOP
+	bool "For debugging Deep Sleep, skip actual STOP"
+	default n
+
+config BOARD_DEEPSLEEP_RECONFIGURE_GPIOS
+	bool "Reconfigure GPIO when entering to Deep Sleep to enable further powersaving"
+	default n
+
+config BOARD_RECONFIGURE_GPIOS_SKIP_JTAG
+	bool "For debugging Deep Sleep, do not reconfigure JTAG pins"
+	default n
+
+config DEV_PIPE_SIZE
+	int "Buffer size for FIFO pipes"
+	default 64
+
+config CC3000_RX_BUFFER_SIZE
+	int "RX buffer size to use for CC3000 WiFi module"
+	default 132
+
+config CC3000_TX_BUFFER_SIZE
+	int "TX buffer size to use for CC3000 WiFi module"
+	default 132
+	
+config DEVICE_DESIGNATE
+	string "Device designate code"
+	default "TSONE"
+	---help---
+		Device designate code
+
+config BOARD_ENABLE_FIX_FOR_INVALID_OPTION_BYTES
+	bool "Enable fix for invalid option bytes"
+	default n
+	---help---
+		Enable rewriting default option bytes if current option bytes
+		are reported to be 'invalid'.
+		Options bytes appear to be left in invalid state after
+		flash/eeprom/option-byte mass-erase, which in turn causes
+		system DFU mode to not work.
+
+config BOARD_ENABLE_FILL_FLASH
+	bool "Enable filling of unused space of FLASH area"
+	default n
+	---help---
+		Enable filling of unused space of FLASH area to fully erase
+		previous firmware from device.
+
+config BOARD_MMCSDMINOR
+	int "MMC/SD minor device number"
+	default 0
+	---help---
+		If the architecture supports an MMC/SD slot and if architecture
+		specific logic is present, this option will provide the MMC/SD minor
+		number, i.e., the MMC/SD block driver will be registered as /dev/mmcsdN
+		where N is the minor number. Default is zero.
+
+config BOARD_MMCSDSLOTNO
+	int "MMC/SD slot number"
+	default 0
+	depends on MMCSD
+	---help---
+		If board-specific NSH start-up supports more than one MMC/SD slot,
+		then this setting should be provided to indicate which slot should
+		be used.  Default: 0.
+
+config BOARD_MCO_SYSCLK
+	bool "Output SYSCLK to MCO pin"
+	default n
+
+config BOARD_I2C_BQ24251_CHARGER
+	int "I2C bus for BQ24251 charger"
+	default 1
+
+config BOARD_I2C_HTS221_HUMIDITY
+	int "I2C bus for HTS221 humidity sensor"
+	default 1
+
+config BOARD_I2C_SHT25_HUMIDITY
+	int "I2C bus for SHT25 humidity sensor"
+	default 1
+
+config BOARD_I2C_LIS2DH_ACCEL
+	int "I2C bus for LIS2DH accelerometer"
+	default 1
+
+config BOARD_I2C_MAX44009_SENSOR
+	int "I2C bus for MAX44009 ALS"
+	default 1
+
+config BOARD_I2C_LPS25H_PRESSURE
+	int "I2C bus for LPS25H pressure sensor"
+	default 1
+
+config BOARD_I2C_LSM9DS1_SENSOR
+	int "I2C bus for LSM9DS1 inertial sensor"
+	default 2
+
+config BOARD_I2C_CYPRESS_CAPSENSE
+	int "I2C bus for Cypress Capsense"
+	default 2
+
+config BOARD_I2C_LED_LP5521
+	int "I2C bus for LP5521 LED driver"
+	default 2
+
+config BOARD_INITIALIZE_USB_SERIAL
+	bool "Initialize USB serial"
+	default n
+
+if BOARD_INITIALIZE_USB_SERIAL
+
+config BOARD_RND_USE_USB_CONSOLE
+	bool "Redirect traces to USB serial"
+	default n
+
+endif
+
+config BOARD_HALTIAN_HWWDG
+	bool "Enable HWWDG support"
+	default y
+
+endif

@@ -1,0 +1,34 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig THINGSEE_NINEAXELS_MODULE
+	bool "Thingsee 9-axels sensor's module support"
+	default n
+	depends on THINGSEE_LIB
+	---help---
+		Enable the Thingsee application support for 9-axels sensor's module
+
+if THINGSEE_NINEAXELS_MODULE
+	choice
+	prompt "Thingsee Sensor Fusion Algorithm"
+	default THINGSEE_NINEAXELS_FUSION_MADGWICK
+
+	config THINGSEE_NINEAXELS_FUSION_MADGWICK
+		bool "Madgwick orientation filter"
+		---help---
+			Madgwick's sensor fusion algorithm for IMUs. Algorithm
+			combines acceleration, rotation rate, and magnetic moments
+			to produce a quaternion-based estimate of absolute device
+			orientation which can then be converted to yaw, pitch,
+			and roll.
+
+	config THINGSEE_NINEAXELS_FUSION_MAHONY
+		bool "Mahony orientation filter"
+		---help---
+			Mahony orientation filter for IMUs.
+
+	endchoice
+endif
+

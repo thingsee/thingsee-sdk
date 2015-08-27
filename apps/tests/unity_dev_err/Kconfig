@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config TESTS_UNITY_DEV_ERR
+	bool "/dev/err driver test"
+	default n
+	---help---
+		Enable /dev/err driver test
+

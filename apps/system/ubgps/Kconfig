@@ -1,0 +1,84 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "u-blox GPS module support"
+config SYSTEM_UBGPS
+	bool "u-blox 7 GPS module support"
+	default n
+	depends on SERIAL_TERMIOS
+	---help---
+		Enable the Thingsee application support for u-blox 7 GPS module
+
+if SYSTEM_UBGPS
+
+config SYSTEM_UBGPS_DEBUG
+	bool "Enable GPS debug"
+	default n
+	---help---
+		Enable GPS debug.
+
+config SYSTEM_UBGPS_VERBOSE_DEBUG
+	bool "Enable verbose GPS debug"
+	default n
+	---help---
+		Enable verbose GPS debug.
+
+config SYSTEM_UBGPS_LNA_CONTROL
+	bool "Enable LNA control"
+	default n
+	---help---
+		Enable external low noise amplifier (LNA) control.
+
+config SYSTEM_UBGPS_LNA_PIN
+	int "Pin used for LNA control"
+	default 16
+	---help---
+		Pin used for LNA control.
+
+config UBGPS_ASSIST_UPDATER
+	bool "Enable assist data updater"
+	default n
+	---help---
+		Enable automatic assist data updates from u-blox server.
+
+config UBGPS_PSM_MODE
+	bool "Enable power save mode"
+	default n
+	---help---
+		Enable power save mode for GPS. GPS chip can be powered down
+		between update rate periods in order to reduce power consumption.
+
+if UBGPS_PSM_MODE
+
+config UBGPS_PSM_MODE_THRESHOLD
+	int "Navigation rate threshold in seconds to enable power save mode"
+	default 20
+	---help---
+		Navigation rate threshold value that enables power save mode (PSM).
+
+config UBGPS_PSM_ACCURACY_FILTER_DURATION
+	int "Time duration in seconds for horizontal accuracy filter"
+	default 10
+	---help---
+		Duration of horizontal accuracy filter for location events that are
+		received in power save mode. Accuracy filter collects location events
+		and publish the most accurate location received within filtering period.
+		Note that accuracy filter causes delay for requested navigation rate
+		that is equal for filter duration. Set threshold to 0 in order to disable
+		accuracy filter.
+
+config UBGPS_PSM_ACCURACY_FILTER_THRESHOLD
+	int "Horizontal accuracy threshold in meters"
+	default 100
+	---help---
+		Horizontal accuracy value in meters that is intepreted as valid location
+		information. Horizontal accuracy value below threshold causes accuracy
+		filter to stop collecting location events. Set threshold to 0 in order
+		to disable threshold functionality.
+
+endif
+
+endif
+endmenu

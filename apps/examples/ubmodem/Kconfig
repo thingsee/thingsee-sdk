@@ -1,0 +1,59 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig EXAMPLES_UBMODEM
+	bool "u-blox Cellular modem library example"
+	default n
+	depends on NET
+	depends on NET_USRSOCK
+	depends on SYSTEM_UBMODEM
+	---help---
+		Enable the u-blox Cellular modem library example
+
+if EXAMPLES_UBMODEM
+
+config EXAMPLES_UBMODEM_DAEMONPRIO
+	int "ubmodemd daemon priority"
+	default 100
+	---help---
+		Priority of the ubmodemd daemon.  Default: 100
+
+config EXAMPLES_UBMODEM_DAEMONSTACKSIZE
+	int "ubmodemd daemon stack size"
+	default 2048
+	---help---
+		Stack size allocated for the ubmodemd daemon. Default: 2048
+
+config EXAMPLES_UBMODEM_SIMPIN
+	string "PIN code for used SIM card"
+	default "1234"
+	---help---
+		PIN for SIM card
+
+config EXAMPLES_UBMODEM_APN_NAME
+	string "APN name"
+	default "internet"
+	---help---
+		APN name to use for Internet connection
+
+config EXAMPLES_UBMODEM_APN_USER
+	string "APN username"
+	default ""
+	---help---
+		Username for APN
+
+config EXAMPLES_UBMODEM_APN_PASSWD
+	string "APN password"
+	default ""
+	---help---
+		Password for APN
+
+config EXAMPLES_UBMODEM_APN_IPADDR
+	string "APN ip-address"
+	default "0.0.0.0"
+	---help---
+		IP address for APN connection. Default: 0.0.0.0 (get dynamic IP)
+
+endif

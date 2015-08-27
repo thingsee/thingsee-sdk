@@ -1,0 +1,101 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "u-blox Cellular modem library"
+config SYSTEM_UBMODEM
+	bool "u-blox Cellular modem library"
+	default n
+	---help---
+		Enables the library for controlling u-blox Cellular Modem.
+
+if SYSTEM_UBMODEM
+
+config UBMODEM_USRSOCK
+	bool "Enable modem TCP/IP & UDP/IP usrsock daemon"
+	default y
+	depends on NET_USRSOCK
+	---help---
+		Enables usrsock daemon that activates automatically when modem
+		reaches GPRS functionality level. The daemon provides modem
+		TCP and UDP stack functionality to NuttX and applications.
+
+config UBMODEM_POWERSAVE
+	bool "Enable power-saving idle mode for modem"
+	default n
+	---help---
+		Enabled power-save mode for modem. UART interface will be cyclically
+		enabled and the modem module enters idle mode automatically whenever
+		possible.
+
+if UBMODEM_POWERSAVE
+
+config UBMODEM_POWERSAVE_GUARD_PERIOD
+	int "Idle mode re-entry guard period"
+	default 0
+	---help---
+		Guard period of no reception of character on the UART interface before
+		re-entering idle-mode from active-mode. Value is expressed in GSM
+		frames (4.615 msec). Valid value range goes from 40 to 65000 (~184 msec
+		to 300 sec). If value is set to zero, default internal value of modem
+		is used (typically 2000 GMS frames, ~ 9.2 sec). Default: 0.
+endif
+
+config UBMODEM_SMS_ENABLED
+	bool "Enable SMS sending"
+	default n
+	---help---
+		Enables ubmodem library API for sending multi-part USC2 encoded
+		SMS messages.
+
+config UBMODEM_VOICE
+	bool "Enable voice-call / audio interfaces"
+	default n
+	---help---
+		Enables voice-call and audio interfaces for modem library.
+
+if UBMODEM_VOICE
+
+config UBMODEM_AUDIO_OUT_CTRL_GPIO_1
+	int "AUDIO OUT control GPIO 1"
+	default -1
+	---help---
+		First GPIO number for pin that controls audio out (speaker). Set to -1,
+		if not needed.
+
+config UBMODEM_AUDIO_OUT_CTRL_GPIO_1_HIGH_OFF
+	bool "AUDIO OUT control GPIO 1, OFF when HIGH"
+	default n
+	---help---
+		First GPIO audio pin is active when LOW and disabled when HIGH.
+
+config UBMODEM_AUDIO_OUT_CTRL_GPIO_2
+	int "AUDIO OUT control GPIO 2"
+	default -1
+	---help---
+		Second GPIO number for pin that controls audio out (speaker). Set to -1,
+		if not needed.
+
+config UBMODEM_AUDIO_OUT_CTRL_GPIO_2_HIGH_OFF
+	bool "AUDIO OUT control GPIO 2, OFF when HIGH"
+	default n
+	---help---
+		Second GPIO audio pin is active when LOW and disabled when HIGH.
+
+endif
+
+config UBMODEM_PARSER_DEBUG
+	bool "Enable AT-parser debugging"
+	default n
+	---help---
+		Enable AT-parser debugging features.
+
+config UBMODEM_DEBUG_VERBOSE
+	bool "Enable verbose debug traces"
+	default n
+	---help---
+		Enable verbose debug traces.
+
+endif
+endmenu

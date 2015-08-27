@@ -1,0 +1,25 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "Network Device Operations"
+
+config NET_NETDEV
+	bool "Network Device Operation support"
+	default y
+	depends on NET_ETHERNET || NET_SLIP
+	---help---
+		Network Device Operation support on or off
+
+if NET_NETDEV
+
+config NETDEV_PHY_IOCTL
+	bool "Enable PHY ioctl()"
+	default n
+	---help---
+		Enable support for ioctl() commands to access PHY registers"
+
+endif # NET_NETDEV
+
+endmenu # Network Device Operations

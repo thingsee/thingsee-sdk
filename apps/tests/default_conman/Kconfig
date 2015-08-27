@@ -1,0 +1,69 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig TESTS_DEFAULT_CONMAN
+    bool "Connection manager testing utilities library"
+    default n
+    ---help---
+        This library is utilized by some test applications and
+        offers them some re-usable functions
+
+if TESTS_DEFAULT_CONMAN
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_SSID
+    string "Default WLAN SSID"
+    default "HaltianGuest"
+    ---help---
+        What SSID to configure for default WLAN connection
+        created with connection manager application
+
+choice TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION
+    prompt "Default WLAN encryption type"
+    default TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_WPA2
+    ---help---
+        Choose encryption method for default SSID used with
+        connection manager testing
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_NONE
+    bool "None"
+    ---help---
+        Try to connect with public network
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_WEP
+    bool "wep"
+    ---help---
+        Try to use WEP encryption
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_WPA
+    bool "wpa"
+    ---help---
+        Try to use WPA encryption
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_WPA2
+    bool "wpa2"
+    ---help---
+        Try to use WPA2 encryption
+
+endchoice
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION
+    string
+    default "wep" if TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_WEP
+    default "wpa" if TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_WPA
+    default "wpa2" if TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_ENCRYPTION_WPA2
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_WLAN_PASS
+    string "Default WLAN passphrase"
+    ---help---
+        Set the passphrase for default WLAN connection
+        used in connection manager test
+
+config TESTS_DEFAULT_CONMAN_DEFAULT_2G_APN
+    string "Default data connection APN"
+    default "internet"
+    ---help---
+        Configure APN name for cellular internet connection
+
+endif

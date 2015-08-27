@@ -1,0 +1,55 @@
+This folder hosts files to build cJSON unit test application
+
+# cJSON unit test
+
+The application runs in the host and is compiled as a google
+test executable.
+
+We use JSON generator to create the stimulus for parser library.
+Inputs are frozen and are under version control, but the executable
+is rebuilt every time.
+
+# Install PyModel
+
+The generator utilizes PyModel, which should be installed. Follow
+instructions at https://github.com/RomanSaveljev/PyModel
+
+Your shell needs to be altered before you can generate tests:
+
+``` shell
+$(.../PyModel/bin/pymodel_paths)
+```
+
+# Generate inputs
+
+```
+make -f get-tests.mk
+```
+
+The makefile will generate `cJSON_test.cc`, which lists all generated
+testcases.. Few files will be created and updated in the process. These
+need to be committed to version control to provide repeatable test
+results:
+
+* cJSON\_test.cc
+
+There is dedicated `.gitignore` file.
+
+# Customize test generator
+
+Test generator behavior is customizable through PyModel configuration
+files. For an example see `AllowLeadingZeroes.py`. Generator logic can
+be extended to allow more deviations or to restrict it somehow. Put some
+efforts to document new possibilities.
+
+# Build the application
+
+Application itself is built through build overlays. Run `./build-tests.sh` at
+the root of the workspace and it will create `tests/cjson_ut` executable.
+
+# Run tests
+
+Compiled for the host google-test application comes with all the benefits and
+is very fast. Just calling `cjson_ut` results in a test report of all included
+tests.
+

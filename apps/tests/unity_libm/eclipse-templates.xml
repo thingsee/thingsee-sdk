@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><templates><template autoinsert="true" context="org.eclipse.cdt.ui.text.templates.c" deleted="false" description="Generate testcase" enabled="true" name="d_d-checkcr">/****************************************************************************
+ * Name: ${word_selection}
+ *
+ * Description:
+ *   Verify ${word_selection}() function
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(Sanity, ${word_selection})
+{
+  static struct d_d t[] =
+    {
+#include "sanity/${word_selection}.h"
+    };
+  double y;
+  float d;
+  int i;
+  struct d_d *p;
+
+  for (i = 0; i &lt; sizeof(t) / sizeof(*t); i++)
+    {
+      p = t + i;
+
+      if (p-&gt;r &lt; 0)
+        {
+          continue;
+        }
+      y = ${word_selection} (p-&gt;x);
+      d = ulperr (y, p-&gt;y, p-&gt;dy);
+      if (!checkcr(y, p-&gt;y, p-&gt;r))
+        {
+          char buffer[128];
+          snprintf (buffer, sizeof(buffer),
+                    "%s:%d: %s ${word_selection}(%.8g) want %.8g got %.8g ulperr %.3f = %.8g + %.8g",
+                    p-&gt;file, p-&gt;line, rstr (p-&gt;r), p-&gt;x, p-&gt;y, y, d, d - p-&gt;dy,
+                    p-&gt;dy);
+          TEST_FAIL_MESSAGE(buffer);
+        }
+    }
+}
+${cursor}</template><template autoinsert="true" context="org.eclipse.cdt.ui.text.templates.c" deleted="false" description="Generate a simple test" enabled="true" name="d_d-checkulp">/****************************************************************************
+ * Name: ${word_selection}
+ *
+ * Description:
+ *   Verify ${word_selection}() function
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(Sanity, ${word_selection})
+{
+  static struct d_d t[] =
+    {
+#include "sanity/${word_selection}.h"
+    };
+  double y;
+  float d;
+  int i;
+  struct d_d *p;
+
+  for (i = 0; i &lt; sizeof(t) / sizeof(*t); i++)
+    {
+      p = t + i;
+
+      if (p-&gt;r &lt; 0)
+        {
+          continue;
+        }
+      y = ${word_selection} (p-&gt;x);
+      d = ulperr (y, p-&gt;y, p-&gt;dy);
+      if (!checkulp (d, p-&gt;r))
+        {
+          char buffer[128];
+          snprintf (buffer, sizeof(buffer),
+                    "%s:%d: %s ${word_selection}(%.8g) want %.8g got %.8g ulperr %.3f = %.8g + %.8g",
+                    p-&gt;file, p-&gt;line, rstr (p-&gt;r), p-&gt;x, p-&gt;y, y, d, d - p-&gt;dy,
+                    p-&gt;dy);
+          TEST_FAIL_MESSAGE(buffer);
+        }
+    }
+}
+${cursor}</template><template autoinsert="true" context="org.eclipse.cdt.ui.text.templates.c" deleted="false" description="Generate testcase" enabled="true" name="d_i-equality">/****************************************************************************
+ * Name: ${word_selection}
+ *
+ * Description:
+ *   Verify ${word_selection}() function
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(Sanity, ${word_selection})
+{
+  static struct d_i t[] =
+    {
+#include "sanity/${word_selection}.h"
+    };
+  long long yi;
+  float d;
+  int i;
+  struct d_i *p;
+
+  for (i = 0; i &lt; sizeof(t) / sizeof(*t); i++)
+    {
+      p = t + i;
+
+      if (p-&gt;r &lt; 0)
+        {
+          continue;
+        }
+      yi = ${word_selection} (p-&gt;x);
+      if (yi != p-&gt;i)
+        {
+          char buffer[128];
+          printf ("%s:%d: %s ${word_selection}(%.8g) want %lld got %lld", p-&gt;file, p-&gt;line,
+                  rstr (p-&gt;r), p-&gt;x, p-&gt;i, yi);
+          TEST_FAIL_MESSAGE(buffer);
+        }
+    }
+}
+${cursor}</template><template autoinsert="true" context="org.eclipse.cdt.ui.text.templates.c" deleted="false" description="Generate testcase" enabled="true" name="dd_d-checkcr">/****************************************************************************
+ * Name: ${word_selection}
+ *
+ * Description:
+ *   Verify ${word_selection}() function
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(Sanity, ${word_selection})
+{
+  static struct dd_d t[] =
+    {
+#include "sanity/${word_selection}.h"
+    };
+  double y;
+  float d;
+  int i;
+  struct dd_d *p;
+
+  for (i = 0; i &lt; sizeof(t) / sizeof(*t); i++)
+    {
+      p = t + i;
+
+      if (p-&gt;r &lt; 0)
+        {
+          continue;
+        }
+      y = ${word_selection} (p-&gt;x, p-&gt;x2);
+      d = ulperr (y, p-&gt;y, p-&gt;dy);
+      if (!checkcr(y, p-&gt;y, p-&gt;r))
+        {
+          char buffer[128];
+          snprintf (buffer, sizeof(buffer),
+                    "%s:%d: %s ${word_selection}(%.8g,%.8g) want %.8g got %.8g ulperr %.3f = %.8g + %.8g",
+                    p-&gt;file, p-&gt;line, rstr (p-&gt;r), p-&gt;x, p-&gt;x2, p-&gt;y, y, d, d - p-&gt;dy,
+                    p-&gt;dy);
+          TEST_FAIL_MESSAGE(buffer);
+        }
+    }
+}
+${cursor}</template><template autoinsert="true" context="org.eclipse.cdt.ui.text.templates.c" deleted="false" description="Generate testcase" enabled="true" name="dd_d-checkulp">/****************************************************************************
+ * Name: ${word_selection}
+ *
+ * Description:
+ *   Verify ${word_selection}() function
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(Sanity, ${word_selection})
+{
+  static struct dd_d t[] =
+    {
+#include "sanity/${word_selection}.h"
+    };
+  double y;
+  float d;
+  int i;
+  struct dd_d *p;
+
+  for (i = 0; i &lt; sizeof(t) / sizeof(*t); i++)
+    {
+      p = t + i;
+
+      if (p-&gt;r &lt; 0)
+        {
+          continue;
+        }
+      y = ${word_selection} (p-&gt;x, p-&gt;x2);
+      d = ulperr (y, p-&gt;y, p-&gt;dy);
+      if (!checkulp(d, p-&gt;r))
+        {
+          char buffer[128];
+          snprintf (buffer, sizeof(buffer),
+                    "%s:%d: %s ${word_selection}(%.8g,%.8g) want %.8g got %.8g ulperr %.3f = %.8g + %.8g",
+                    p-&gt;file, p-&gt;line, rstr (p-&gt;r), p-&gt;x, p-&gt;x2, p-&gt;y, y, d, d - p-&gt;dy,
+                    p-&gt;dy);
+          TEST_FAIL_MESSAGE(buffer);
+        }
+    }
+}
+${cursor}</template><template autoinsert="true" context="org.eclipse.cdt.ui.text.templates.c" deleted="false" description="Generate test" enabled="true" name="ddd_d-checkcr">/****************************************************************************
+ * Name: ${word_selection}
+ *
+ * Description:
+ *   Verify ${word_selection}() function
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(Sanity, ${word_selection})
+{
+  static struct ddd_d t[] =
+    {
+#include "sanity/${word_selection}.h"
+    };
+  double y;
+  float d;
+  int i;
+  struct ddd_d *p;
+
+  for (i = 0; i &lt; sizeof(t) / sizeof(*t); i++)
+    {
+      p = t + i;
+
+      if (p-&gt;r &lt; 0)
+        {
+          continue;
+        }
+      y = ${word_selection} (p-&gt;x, p-&gt;x2, p-&gt;x3);
+      d = ulperr (y, p-&gt;y, p-&gt;dy);
+      if (!checkcr(y, p-&gt;y, p-&gt;r))
+        {
+          char buffer[128];
+          snprintf (buffer, sizeof(buffer),
+                    "%s:%d: %s ${word_selection}(%.8g,%.8g,%.8g) want %.8g got %.8g ulperr %.3f = %.8g + %.8g",
+                    p-&gt;file, p-&gt;line, rstr (p-&gt;r), p-&gt;x, p-&gt;x2, p-&gt;x3, p-&gt;y, y, d, d - p-&gt;dy,
+                    p-&gt;dy);
+          TEST_FAIL_MESSAGE(buffer);
+        }
+    }
+}
+${cursor}</template></templates>

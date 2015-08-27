@@ -1,0 +1,110 @@
+############################################################################
+# drivers/sensors/Make.defs
+#
+#   Copyright (C) 2011-2012, 2015 Gregory Nutt. All rights reserved.
+#   Author: Gregory Nutt <gnutt@nuttx.org>
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in
+#    the documentation and/or other materials provided with the
+#    distribution.
+# 3. Neither the name NuttX nor the names of its contributors may be
+#    used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+# OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+# ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+#
+############################################################################
+
+# Include sensor drivers
+
+ifeq ($(CONFIG_SENSORS),y)
+
+ifeq ($(CONFIG_SENSORS_ADXL345),y)
+  CSRCS += adxl345_base.c
+endif
+
+# These drivers depend on I2C support
+
+ifeq ($(CONFIG_I2C),y)
+
+ifeq ($(CONFIG_LIS331DL),y)
+  CSRCS += lis331dl.c
+endif
+
+ifeq ($(CONFIG_LIS2DH),y)
+  CSRCS += lis2dh.c
+endif
+
+ifeq ($(CONFIG_ADXL345_I2C),y)
+  CSRCS += adxl345_i2c.c
+endif
+
+ifeq ($(CONFIG_I2C_LM75),y)
+  CSRCS += lm75.c
+endif
+
+ifeq ($(CONFIG_I2C_PRESSURE_DEV_LPS25H),y)
+  CSRCS += lps25h.c
+endif
+
+ifeq ($(CONFIG_I2C_HUMIDITY_DEV_SHT25),y)
+  CSRCS += sht25.c
+endif
+
+ifeq ($(CONFIG_HTS221_HUMIDITY),y)
+  CSRCS += hts221.c
+endif
+
+endif # CONFIG_I2C
+
+# These drivers depend on SPI support
+
+ifeq ($(CONFIG_SPI),y)
+ifeq ($(CONFIG_ADXL345_SPI),y)
+  CSRCS += adxl345_spi.c
+endif
+
+ifeq ($(CONFIG_MPL115A),y)
+  CSRCS += mpl115a.c
+endif
+endif # CONFIG_SPI
+
+# Quadrature encoder upper half
+
+ifeq ($(CONFIG_QENCODER),y)
+  CSRCS += qencoder.c
+endif
+
+ifeq ($(CONFIG_MAX44009_SENSOR),y)
+  CSRCS += max44009.c
+endif
+
+ifeq ($(CONFIG_LSM9DS1_SENS),y)
+  CSRCS += lsm9ds1.c
+endif
+
+# Include sensor driver build support
+
+DEPPATH += --dep-path sensors
+VPATH += :sensors
+CFLAGS += ${shell $(INCDIR) $(INCDIROPT) "$(CC)" $(TOPDIR)$(DELIM)drivers$(DELIM)sensors}
+
+endif # CONFIG_SENSORS

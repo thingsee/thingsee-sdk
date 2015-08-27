@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config THINGSEE_GPS_MODULE
+	bool "Thingsee u-blox 7 GPS module support"
+	default n
+	depends on THINGSEE_LIB && SERIAL_TERMIOS
+	---help---
+		Enable the Thingsee application support for u-blox 7 GPS module
