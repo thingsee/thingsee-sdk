@@ -14,7 +14,10 @@ if NETUTILS_NTPCLIENT
 
 config NETUTILS_NTPCLIENT_SERVERHOSTNAME
 	string "NTP server hostnames"
-	default "0.pool.ntp.org"
+	default "0.pool.ntp.org;1.pool.ntp.org;2.pool.ntp.org"
+	---help---
+		List of NTP server hostnames to use. Server names need to be separated
+		by ';'.
 
 config NETUTILS_NTPCLIENT_PORTNO
 	int "NTP server port number"

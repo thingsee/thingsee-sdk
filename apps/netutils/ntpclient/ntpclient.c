@@ -80,10 +80,17 @@
  */
 
 #define NTP2UNIX_TRANLSLATION 2208988800u
-#define NTP_VERSION          3
+
+#define NTP_VERSION_V3       3
+#define NTP_VERSION_V4       4
+#define NTP_VERSION          NTP_VERSION_V4
+
+#define MAX_SERVER_SELECTION_RETRIES 3
 
 #ifndef CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES
 # define CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES 5
+#elif CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES < 1
+# error "NTP sample number below 1, invalid configuration"
 #endif
 
 #ifndef ARRAY_SIZE
@@ -124,6 +131,7 @@ struct ntpc_daemon_s
   volatile uint8_t state; /* See enum ntpc_daemon_e */
   sem_t interlock;        /* Used to synchronize start and stop events */
   pid_t pid;              /* Task ID of the NTP daemon */
+  sq_queue_t kod_list;    /* KoD excluded server addresses */
 };
 
 /* NTP offset. */
@@ -142,6 +150,17 @@ struct ntp_servers_s
   in_addr_t list[CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES];
   size_t num;
   size_t pos;
+  char *hostlist_str;
+  char *hostlist_saveptr;
+  char *hostnext;
+};
+
+/* KoD exclusion list. */
+
+struct ntp_kod_exclude_s
+{
+  sq_entry_t node;
+  in_addr_t addr;
 };
 
 /****************************************************************************
@@ -181,7 +200,7 @@ static int sample_cmp(const void *_a, const void *_b)
  * Name: int64abs
  ****************************************************************************/
 
-static int64_t int64abs(int64_t value)
+static inline int64_t int64abs(int64_t value)
 {
   return value >= 0 ? value : -value;
 }
@@ -318,6 +337,36 @@ static inline uint32_t ntpc_getuint32(FAR const uint8_t *ptr)
 static inline uint64_t ntpc_getuint64(FAR const uint8_t *ptr)
 {
   return ((uint64_t)ntpc_getuint32(ptr) << 32) | ntpc_getuint32(&ptr[4]);
+}
+
+/****************************************************************************
+ * Name: ntpc_setuint32
+ *
+ * Description:
+ *   Write 4-byte value to buffer in network (big-endian) order.
+ *
+ ****************************************************************************/
+
+static inline void ntpc_setuint32(FAR uint8_t *ptr, uint32_t value)
+{
+  ptr[3] = (uint8_t)value;
+  ptr[2] = (uint8_t)(value >> 8);
+  ptr[1] = (uint8_t)(value >> 16);
+  ptr[0] = (uint8_t)(value >> 24);
+}
+
+/****************************************************************************
+ * Name: ntpc_setuint64
+ *
+ * Description:
+ *   Write 8-byte value to buffer in network (big-endian) order.
+ *
+ ****************************************************************************/
+
+static inline void ntpc_setuint64(FAR uint8_t *ptr, uint64_t value)
+{
+  ntpc_setuint32(ptr + 0, (uint32_t)(value >> 32));
+  ntpc_setuint32(ptr + 4, (uint32_t)value);
 }
 
 /****************************************************************************
@@ -477,11 +526,91 @@ static void ntpc_settime(int64_t offset)
         ntp_nsecpart(int64abs(offset)) / NSEC_PER_MSEC);
 }
 
+
+/****************************************************************************
+ * Name: ntp_address_in_kod_list
+ *
+ * Description: Check if address is in KoD KoD exclusion list.
+ *
+ ****************************************************************************/
+
+static bool ntp_address_in_kod_list(in_addr_t server_addr)
+{
+  struct ntp_kod_exclude_s *entry;
+
+  entry = (void *)sq_peek(&g_ntpc_daemon.kod_list);
+  while (entry)
+    {
+      if (entry->addr == server_addr)
+        return true;
+
+      entry = (void *)sq_next(&entry->node);
+    }
+
+  return false;
+}
+
+/****************************************************************************
+ * Name: ntp_is_kiss_of_death
+ *
+ * Description: Check if this is KoD response from the server. If it is,
+ * add server to KoD exclusion list and return 'true'.
+ *
+ ****************************************************************************/
+
+static bool ntp_is_kiss_of_death(const struct ntp_datagram_s *recv,
+                                 in_addr_t server_addr)
+{
+  /* KoD only specified for v4. */
+
+  if (GETVN(recv->lvm) != NTP_VERSION_V4)
+    {
+      if (recv->stratum == 0)
+        {
+          /* Stratum 0 is unspecified on v3, so ignore packet. */
+
+          return true;
+        }
+      else
+        {
+          return false;
+        }
+    }
+
+  /* KoD message if stratum == 0. */
+
+  if (recv->stratum != 0)
+    {
+      return false;
+    }
+
+  /* KoD message received. */
+
+  /* Check if we need to add server to access exclusion list. */
+
+  if (strncmp((char *)recv->refid, "DENY", 4) == 0 ||
+      strncmp((char *)recv->refid, "RSTR", 4) == 0 ||
+      strncmp((char *)recv->refid, "RATE", 4) == 0)
+    {
+      struct ntp_kod_exclude_s *entry;
+
+      entry = calloc(1, sizeof(*entry));
+      if (entry)
+        {
+          entry->addr = server_addr;
+          sq_addlast(&entry->node, &g_ntpc_daemon.kod_list);
+        }
+    }
+
+  return true;
+}
+
 /****************************************************************************
  * Name: ntpc_verify_recvd_ntp_datagram
  ****************************************************************************/
 
-static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *recv,
+static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *xmit,
+                                           const struct ntp_datagram_s *recv,
                                            size_t nbytes,
                                            const struct sockaddr_in *xmitaddr,
                                            const struct sockaddr_in *recvaddr,
@@ -509,7 +638,7 @@ static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *recv,
       return false;
     }
 
-  if (GETVN(recv->lvm) != NTP_VERSION)
+  if (GETVN(recv->lvm) != NTP_VERSION_V3 && GETVN(recv->lvm) != NTP_VERSION_V4)
     {
       /* Wrong version. */
 
@@ -523,6 +652,43 @@ static bool ntpc_verify_recvd_ntp_datagram(const struct ntp_datagram_s *recv,
       /* Response not in server mode. */
 
       svdbg("wrong mode: %d\n", GETMODE(recv->lvm));
+
+      return false;
+    }
+
+  if (GETMODE(recv->lvm) != 4)
+    {
+      /* Response not in server mode. */
+
+      svdbg("wrong mode: %d\n", GETMODE(recv->lvm));
+
+      return false;
+    }
+
+  if (ntp_is_kiss_of_death(recv, xmitaddr->sin_addr.s_addr))
+    {
+      /* KoD, Kiss-o'-Death. Ignore response. */
+
+      svdbg("kiss-of-death response.\n");
+
+      return false;
+    }
+
+  if (GETLI(recv->lvm) == 3)
+    {
+      /* Clock not synchronized. */
+
+      svdbg("LI: not synchronized\n");
+
+      return false;
+    }
+
+  if (memcmp(recv->origtimestamp, xmit->xmittimestamp, 8) != 0)
+    {
+      /* "The Originate Timestamp in the server reply should match the
+       * Transmit Timestamp used in the client request." */
+
+      svdbg("recv->origtimestamp <=> xmit->xmittimestamp mismatch.\n");
 
       return false;
     }
@@ -653,13 +819,55 @@ static int ntp_get_next_hostip(struct ntp_servers_s *srvs, in_addr_t *addr)
 
   if (srvs->pos >= srvs->num)
     {
+      char *hostname;
+
       srvs->pos = 0;
       srvs->num = 0;
 
+      /* Get next hostname. */
+
+      if (srvs->hostnext == NULL)
+        {
+          if (!srvs->hostlist_str)
+            {
+              /* Allocate hostname list buffer */
+
+              srvs->hostlist_str =
+                  strdup(CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME);
+              if (!srvs->hostlist_str)
+                {
+                  return ERROR;
+                }
+            }
+          else
+            {
+              /* Reset hostname list buffer */
+
+              strcpy(srvs->hostlist_str,
+                     CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME);
+            }
+
+          srvs->hostlist_saveptr = NULL;
+#ifndef __clang_analyzer__ /* Silence false 'possible memory leak'. */
+          srvs->hostnext =
+              strtok_r(srvs->hostlist_str, ";", &srvs->hostlist_saveptr);
+#endif
+        }
+
+      hostname = srvs->hostnext;
+      srvs->hostnext = strtok_r(NULL, ";", &srvs->hostlist_saveptr);
+
+      if (!hostname)
+        {
+          /* Invalid configuration. */
+
+          errno = EINVAL;
+          return ERROR;
+        }
+
       /* Refresh DNS for new IP-addresses. */
 
-      ret = dns_gethostip_multi(CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME,
-                                srvs->list, ARRAY_SIZE(srvs->list));
+      ret = dns_gethostip_multi(hostname, srvs->list, ARRAY_SIZE(srvs->list));
       if (ret <= 0)
         {
           return ERROR;
@@ -669,6 +877,7 @@ static int ntp_get_next_hostip(struct ntp_servers_s *srvs, in_addr_t *addr)
     }
 
   *addr = srvs->list[srvs->pos++];
+
   return OK;
 }
 
@@ -688,7 +897,7 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
   socklen_t socklen;
   ssize_t nbytes;
   int errval;
-  bool retry = true;
+  int retry = 0;
   int nsamples = curr_idx;
   bool addr_ok;
   int ret;
@@ -701,7 +910,7 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
 
   memset(&server, 0, sizeof(struct sockaddr_in));
   server.sin_family      = AF_INET;
-  server.sin_port        = htons(CONFIG_NETUTILS_NTPCLIENT_PORTNO);
+  server.sin_port        = HTONS(CONFIG_NETUTILS_NTPCLIENT_PORTNO);
 
   do
     {
@@ -717,6 +926,25 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
           goto sock_error;
         }
 
+      /* Make sure that server not in exclusion list. */
+
+      if (ntp_address_in_kod_list(server.sin_addr.s_addr))
+        {
+          if (retry < MAX_SERVER_SELECTION_RETRIES)
+            {
+              svdbg("on KoD list. retry DNS.\n");
+
+              retry++;
+              addr_ok = false;
+              continue;
+            }
+          else
+            {
+              errval = -EALREADY;
+              goto sock_error;
+            }
+        }
+
       /* Make sure that this sample is from new server. */
 
       for (i = 0; i < nsamples; i++)
@@ -727,9 +955,9 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
 
               svdbg("retry DNS.\n");
 
-              if (retry)
+              if (retry < MAX_SERVER_SELECTION_RETRIES)
                 {
-                  retry = false;
+                  retry++;
                   addr_ok = false;
                   break;
                 }
@@ -758,11 +986,12 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
   /* Format the transmit datagram */
 
   memset(&xmit, 0, sizeof(xmit));
-  xmit.lvm = MKLVM(0, 3, NTP_VERSION);
+  xmit.lvm = MKLVM(0, NTP_VERSION, 3);
 
-  svdbg("Sending a NTP packet\n");
+  svdbg("Sending a NTPv%d packet\n", NTP_VERSION);
 
   xmit_time = ntp_localtime();
+  ntpc_setuint64(xmit.xmittimestamp, xmit_time);
   ret = sendto(sd, &xmit, sizeof(struct ntp_datagram_s),
                0, (FAR struct sockaddr *)&server,
                sizeof(struct sockaddr_in));
@@ -789,7 +1018,7 @@ static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
    */
 
   if (nbytes > 0 && ntpc_verify_recvd_ntp_datagram(
-                      &recv, nbytes, &server, &recvaddr, socklen))
+                          &xmit, &recv, nbytes, &server, &recvaddr, socklen))
     {
       close(sd);
       sd = -1;
@@ -848,11 +1077,17 @@ sock_error:
 static int ntpc_daemon(int argc, char **argv)
 {
   struct ntp_sample_s samples[CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES];
-  struct ntp_servers_s srvs = { .num = 0, .pos = 0 };
+  struct ntp_servers_s srvs;
   int exitcode = EXIT_SUCCESS;
   int retries = 0;
   int nsamples;
   int ret;
+
+  srvs.num = 0;
+  srvs.pos = 0;
+  srvs.hostlist_saveptr = NULL;
+  srvs.hostlist_str = NULL;
+  srvs.hostnext = NULL;
 
   /* Indicate that we have started */
 
@@ -1001,6 +1236,7 @@ static int ntpc_daemon(int argc, char **argv)
 
   g_ntpc_daemon.state = NTP_STOPPED;
   sem_post(&g_ntpc_daemon.interlock);
+  free(srvs.hostlist_str);
   return exitcode;
 }
 
