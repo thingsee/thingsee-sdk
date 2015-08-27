@@ -85,6 +85,10 @@
 # define CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES 5
 #endif
 
+#ifndef ARRAY_SIZE
+#  define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -118,6 +122,15 @@ struct ntp_sample_s
   int64_t delay;
   in_addr_t srv_addr;
 } packet_struct;
+
+/* Server address list. */
+
+struct ntp_servers_s
+{
+  in_addr_t list[CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES];
+  size_t num;
+  size_t pos;
+};
 
 /****************************************************************************
  * Private Data
@@ -619,10 +632,40 @@ err_close:
 }
 
 /****************************************************************************
+ * Name: ntp_get_next_hostip
+ ****************************************************************************/
+
+static int ntp_get_next_hostip(struct ntp_servers_s *srvs, in_addr_t *addr)
+{
+  int ret;
+
+  if (srvs->pos >= srvs->num)
+    {
+      srvs->pos = 0;
+      srvs->num = 0;
+
+      /* Refresh DNS for new IP-addresses. */
+
+      ret = dns_gethostip_multi(CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME,
+                                srvs->list, ARRAY_SIZE(srvs->list));
+      if (ret <= 0)
+        {
+          return ERROR;
+        }
+
+      srvs->num = ret;
+    }
+
+  *addr = srvs->list[srvs->pos++];
+  return OK;
+}
+
+/****************************************************************************
  * Name: ntpc_get_ntp_sample
  ****************************************************************************/
 
-static int ntpc_get_ntp_sample(struct ntp_sample_s *samples, int curr_idx)
+static int ntpc_get_ntp_sample(struct ntp_servers_s *srvs,
+                               struct ntp_sample_s *samples, int curr_idx)
 {
   struct ntp_sample_s *sample = &samples[curr_idx];
   uint64_t xmit_time, recv_time;
@@ -652,8 +695,7 @@ static int ntpc_get_ntp_sample(struct ntp_sample_s *samples, int curr_idx)
 
 retry_dns:
 #ifdef CONFIG_NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-  ret = dns_gethostip(CONFIG_NETUTILS_NTPCLIENT_SERVERHOSTNAME,
-                      &server.sin_addr.s_addr);
+  ret = ntp_get_next_hostip(srvs, &server.sin_addr.s_addr);
   if (ret < 0)
     {
       errval = errno;
@@ -791,7 +833,8 @@ sock_error:
 
 static int ntpc_daemon(int argc, char **argv)
 {
-  struct ntp_sample_s *samples;
+  struct ntp_sample_s samples[CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES];
+  struct ntp_servers_s srvs = { .num = 0, .pos = 0 };
   int exitcode = EXIT_SUCCESS;
   int retries = 0;
   int nsamples;
@@ -801,14 +844,6 @@ static int ntpc_daemon(int argc, char **argv)
 
   g_ntpc_daemon.state = NTP_RUNNING;
   sem_post(&g_ntpc_daemon.interlock);
-
-  /* Allocate sample buffer. */
-
-  samples = malloc(sizeof(*samples) * CONFIG_NETUTILS_NTPCLIENT_NUM_SAMPLES);
-  if (!samples)
-    {
-      goto err_alloc;
-    }
 
   /* Here we do the communication with the NTP server. We collect set of
    * NTP samples (hopefully from different servers when using DNS) and
@@ -835,7 +870,7 @@ static int ntpc_daemon(int argc, char **argv)
         {
           /* Get next sample. */
 
-          ret = ntpc_get_ntp_sample(samples, nsamples);
+          ret = ntpc_get_ntp_sample(&srvs, samples, nsamples);
           if (ret < 0)
             {
               errval = errno;
@@ -950,10 +985,8 @@ static int ntpc_daemon(int argc, char **argv)
 
   sched_unlock();
 
-err_alloc:
   g_ntpc_daemon.state = NTP_STOPPED;
   sem_post(&g_ntpc_daemon.interlock);
-  free(samples);
   return exitcode;
 }
 
