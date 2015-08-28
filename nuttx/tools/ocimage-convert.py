@@ -1,5 +1,5 @@
 #!/usr/bin/python
-
+# -*- coding: latin-1 -*-
 #
 #  @file ocimage-convert.py
 #  @brief Offcode "ocImage converter"
