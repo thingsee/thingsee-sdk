@@ -638,7 +638,7 @@ int board_gpioconfig(uint32_t pinset, uint32_t * const _cfgset)
 
   regval  = getreg32(base + regoffset);
   regval &= GPIO_AFR_MASK(pos);
-  regval >>= GPIO_AFR_SHIFT(pin);
+  regval >>= GPIO_AFR_SHIFT(pos);
   cfgset |= regval << GPIO_AF_SHIFT;
 
   /* OSPEED */
