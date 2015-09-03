@@ -33,6 +33,30 @@ cd nuttx/configs
 make
 ```
 
+## Updating firmware
+
+Via the SD card
+
+ 1. Rename nuttx.oci to update.oci.
+ 2. Copy update.oci to Thingsee's mass memory (SD card).
+ 3. Shutdown and restart the device.
+ 4. Thingsee will flash the device automatically, when update.oci file is found on SD card at bootup.
+
+Alternatively you can flash the firmware dfu file with dfu-util (Please use >= dfu-util 0.8-1).
+
+The easiest way to activate DFU mode in the Thingsee device is to:
+
+ 1. Open the case to access the bottom side of the board.
+ 2. Locate “FLASH” and “RESET” buttons.
+ 3. Hold “FLASH” button and then press and release “RESET” button.
+ 4. Your device should now be in DFU mode and ready for flashing.
+
+Plug the USB cable to the micro-USB connector of your device. Use following command:
+
+```
+ dfu-util -d 0483:df11 -a0 -D nuttx.dfu -s :leave
+```
+
 ## Copyright & License
 
 Copyright (c) 2015 Thingsee - Released (mostly) under the BSD license.
