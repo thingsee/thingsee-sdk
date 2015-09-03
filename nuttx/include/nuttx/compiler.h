@@ -126,6 +126,13 @@
 # define DSEG
 # define CODE
 
+/* GCC 4.x have __builtin_ctz(|l|ll) and __builtin_clz(|l|ll). */
+
+#if __GNUC__ >= 4
+# define HAVE_BUILTIN_CTZ 1
+# define HAVE_BUILTIN_CLZ 1
+#endif
+
 /* Handle cases where sizeof(int) is 16-bits, sizeof(long) is 32-bits, and
  * pointers are 16-bits.
  */
