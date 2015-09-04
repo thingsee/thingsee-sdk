@@ -427,14 +427,16 @@ static void utooct(FAR struct lib_outstream_s *obj, unsigned int n)
 
 static void utobin(FAR struct lib_outstream_s *obj, unsigned int n)
 {
+  const unsigned int ibits = sizeof(unsigned int) * 8;
+  const unsigned int imask = ibits - 1;
   int shift;
 
-  shift = sizeof(unsigned int) * 8 - clz(n);
+  shift = ibits - clz(n);
   shift--;
 
   do
     {
-      unsigned int d = (n >> shift) & 1;
+      unsigned int d = (n >> ((unsigned int)shift & imask)) & 1;
 
       obj->put(obj, d + '0');
     }
@@ -995,14 +997,16 @@ static void llutooct(FAR struct lib_outstream_s *obj, unsigned long long n)
 
 static void llutobin(FAR struct lib_outstream_s *obj, unsigned long long n)
 {
+  const unsigned int llbits = sizeof(unsigned long long) * 8;
+  const unsigned int llmask = llbits - 1;
   int shift;
 
-  shift = sizeof(unsigned long long) * 8 - clzll(n);
+  shift = llbits - clzll(n);
   shift--;
 
   do
     {
-      unsigned int d = (n >> shift) & 1;
+      unsigned int d = (n >> ((unsigned int)shift & llmask)) & 1;
 
       obj->put(obj, d + '0');
     }
