@@ -147,45 +147,48 @@ static uint32_t g_port_config[BOARD_NGPIOS];
  * Private Functions
  ************************************************************************************/
 
-static inline bool is_gpio_unused_external_pad(uint32_t pinset)
+static inline void gpio_add_excluded(uint16_t *excluded_bitmap, uint32_t pinset)
+{
+  unsigned int port = (pinset & BOARD_GPIOPORT_MASK) >> BOARD_GPIOPORT_SHIFT;
+  unsigned int pin = (pinset & BOARD_GPIOPIN_MASK) >> BOARD_GPIOPIN_SHIFT;
+
+  if (pinset == GPIO_NON_EXISTING)
+    return;
+
+  excluded_bitmap[port] |= 1 << pin;
+}
+
+static inline void gpio_exclude_unused_external_pads(uint16_t *excluded_bitmap)
 {
   const uint32_t ppmask = GPIO_PIN_MASK | GPIO_PORT_MASK;
 
-  pinset &= ppmask;
-
 #ifdef GPIO_PAD_J9005
-  if ((GPIO_PAD_J9005 & ppmask) == pinset)
-    return true;
+  gpio_add_excluded(excluded_bitmap, GPIO_PAD_J9005 & ppmask);
 #endif
 
 #ifdef GPIO_PAD_J9006
-  if ((GPIO_PAD_J9006 & ppmask) == pinset)
-    return true;
+  gpio_add_excluded(excluded_bitmap, GPIO_PAD_J9006 & ppmask);
 #endif
 
 #ifdef GPIO_PAD_J9007
-  if ((GPIO_PAD_J9007 & ppmask) == pinset)
-    return true;
+  gpio_add_excluded(excluded_bitmap, GPIO_PAD_J9007 & ppmask);
 #endif
 
 #ifdef GPIO_PAD_J9008
-  if ((GPIO_PAD_J9008 & ppmask) == pinset)
-     return true;
+  gpio_add_excluded(excluded_bitmap, GPIO_PAD_J9008 & ppmask);
 #endif
 
 #ifdef GPIO_PAD_J9010
-  if ((GPIO_PAD_J9010 & ppmask) == pinset)
-    return true;
+  gpio_add_excluded(excluded_bitmap, GPIO_PAD_J9010 & ppmask);
 #endif
 
 #ifdef GPIO_PAD_J9016
   /* On B2.0, J9016 is VDD_EXT. */
-  if (board_get_hw_ver() < BOARD_HWVER_B2_0 &&
-      (GPIO_PAD_J9016 & ppmask) == pinset)
-    return true;
+  if (board_get_hw_ver() < BOARD_HWVER_B2_0)
+    {
+      gpio_add_excluded(excluded_bitmap, GPIO_PAD_J9016 & ppmask);
+    }
 #endif
-
-  return false;
 }
 
 /************************************************************************************
@@ -292,10 +295,91 @@ void gpio_initialize_sdcard_pins(void)
 void up_reconfigure_gpios_for_pmstop(void)
 {
   const uint32_t ppmask = GPIO_PIN_MASK | GPIO_PORT_MASK;
+  uint16_t excluded_gpios[BOARD_GPIO_PORTS] = {};
   uint32_t pins_left;
   uint32_t pin;
   uint8_t port;
   int pinpos = 0;
+
+  /*
+   * Board hangs when restoring the GPIOs PC12, PC14 or PC15 after the
+   * deep-sleep, no matter if we configure them as BOARD_GPIOANALOG here or not.
+   * PC14 and PC15 are connected to OSC32_IN and OSC32_OUT, respectively and PC12
+   * is UART5 TX used for debugging. Therefore, leave them as they were.
+   *
+   * Modem power control switch control line on pin D11 is missing pull-down resistor
+   * and must not be left floating.
+   *
+   * Pins from D13 to D15 (DISP_RES#, DISP_CS#, and DISP D/C) for LCD must be left out.
+   * So do two pins for SPI2. (TODO: Why?)
+   *
+   * All pins to SDCard must be handled specially (forced to low) and skipped here
+   * to avoid leak current. (TODO: Why? Is this issue with ESD protection chip on
+   * SDCard bus?)
+   */
+
+  /* OSC32_IN/OUT */
+
+  gpio_add_excluded(excluded_gpios, GPIO_PORTC | GPIO_PIN14);
+  gpio_add_excluded(excluded_gpios, GPIO_PORTC | GPIO_PIN15);
+
+  /* GPIO_HWWDG_DONE */
+
+  gpio_add_excluded(excluded_gpios, GPIO_HWWDG_DONE & ppmask);
+
+#ifdef CONFIG_BOARD_RECONFIGURE_GPIOS_SKIP_JTAG
+  /* Skip JTAG */
+
+  gpio_add_excluded(excluded_gpios, GPIO_PORTB | GPIO_PIN3);
+  gpio_add_excluded(excluded_gpios, GPIO_PORTB | GPIO_PIN4);
+  gpio_add_excluded(excluded_gpios, GPIO_PORTA | GPIO_PIN13);
+  gpio_add_excluded(excluded_gpios, GPIO_PORTA | GPIO_PIN14);
+  gpio_add_excluded(excluded_gpios, GPIO_PORTA | GPIO_PIN15);
+#endif
+
+  /* Unused external pads should be pulled down to prevent
+   * ESD chip leak current. */
+
+  gpio_exclude_unused_external_pads(excluded_gpios);
+
+#ifdef CONFIG_STM32_UART5
+  /* Skip debug trace uart TX */
+
+  gpio_add_excluded(excluded_gpios, GPIO_UART5_TX & ppmask);
+#endif
+
+  /* GPS GPIOs need to be left as is. */
+
+  gpio_add_excluded(excluded_gpios, GPIO_USART1_RX & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_USART1_TX & ppmask);
+
+  /* Modem GPIOs need to be left as is, as otherwise
+   * modem level-shifters might start oscillate.
+   */
+
+  gpio_add_excluded(excluded_gpios, GPIO_USART3_TX & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_USART3_RTS & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_USART3_RX & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_USART3_CTS & ppmask);
+
+  /* Sensor middleware wants to keep this powered on around deepsleep. */
+
+  gpio_add_excluded(excluded_gpios, GPIO_PWR_SWITCH_CAPSENSE_9AXIS & ppmask);
+
+  /* Skip display pins. */
+
+  gpio_add_excluded(excluded_gpios, GPIO_SPI2_MOSI & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_SPI2_SCK & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_CHIP_SELECT_DISPLAY & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_LCD_SSD1309_RESET & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_LCD_SSD1309_CMDDATA & ppmask);
+
+  /* Skip SDcard pins. */
+
+  gpio_add_excluded(excluded_gpios, GPIO_SPI3_MOSI & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_SPI3_MISO & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_SPI3_SCK & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_CHIP_SELECT_SDCARD & ppmask);
 
   pinpos = 0;
   pins_left = BOARD_NGPIOS;
@@ -317,26 +401,9 @@ void up_reconfigure_gpios_for_pmstop(void)
           board_gpioconfig(pinset, &cfgset);
           //lldbg("reading %c %d 0x%08x\n", board_gpioport_char(pinset), pin, cfgset);
 
-          /*
-           * Leave all EXTI input lines configured.
-           *
-           * Board hangs when restoring the GPIOs PC12, PC14 or PC15 after the
-           * deep-sleep, no matter if we configure them as BOARD_GPIOANALOG here or not.
-           * PC14 and PC15 are connected to OSC32_IN and OSC32_OUT, respectively and PC12
-           * is UART5 TX used for debugging. Therefore, leave them as they were.
-           *
-           * Modem power control switch control line on pin D11 is missing pull-down resistor
-           * and must not be left floating.
-           *
-           * Pins from D13 to D15 (DISP_RES#, DISP_CS#, and DISP D/C) for LCD must be left out.
-           * So do two pins for SPI2. (TODO: Why?)
-           *
-           * All pins to SDCard must be handled specially (forced to low) and skipped here
-           * to avoid leak current. (TODO: Why? Is this issue with ESD protection chip on
-           * SDCard bus?)
-           */
-
           g_port_config[pincurr] = 0xFFFFFFFFU; /* Encodes impossible GPIO PP15. */
+
+          /* Leave all EXTI input lines configured. */
 
           if (((cfgset & BOARD_GPIOMODE_MASK) == BOARD_GPIOINPUT &&
               (cfgset & BOARD_GPIOEXTI)))
@@ -346,94 +413,11 @@ void up_reconfigure_gpios_for_pmstop(void)
               continue;
             }
 
-          if ((pinset & ppmask) == (GPIO_PORTC | GPIO_PIN14) ||
-              (pinset & ppmask) == (GPIO_PORTC | GPIO_PIN15))
+          /* Check if this GPIO is in the exclusion list. */
+
+          if (excluded_gpios[port] & (1 << pin))
             {
-              /* OSC32_IN/OUT */
-
-              continue;
-            }
-
-          if ((pinset & ppmask) == (GPIO_PORTC | GPIO_PIN6))
-            {
-              /* GPIO_HWWDG_DONE */
-
-              continue;
-            }
-
-#ifdef CONFIG_BOARD_RECONFIGURE_GPIOS_SKIP_JTAG
-          if ((pinset & ppmask) == (GPIO_PORTB | GPIO_PIN3) ||
-              (pinset & ppmask) == (GPIO_PORTB | GPIO_PIN4) ||
-              (pinset & ppmask) == (GPIO_PORTA | GPIO_PIN13) ||
-              (pinset & ppmask) == (GPIO_PORTA | GPIO_PIN14) ||
-              (pinset & ppmask) == (GPIO_PORTA | GPIO_PIN15))
-            {
-              /* Skip JTAG */
-
-              continue;
-            }
-#endif
-
-          if (is_gpio_unused_external_pad(pinset))
-            {
-              /* Unused external pads should be pulled down to prevent
-               * ESD chip leak current. */
-
-              continue;
-            }
-
-#ifdef CONFIG_STM32_UART5
-          if ((pinset & ppmask) == (GPIO_UART5_TX & ppmask))
-            {
-              /* Skip debug trace uart TX */
-
-              continue;
-            }
-#endif
-          if ((pinset & ppmask) == (GPIO_USART1_RX & ppmask) ||
-              (pinset & ppmask) == (GPIO_USART1_TX & ppmask))
-            {
-              /* GPS GPIOs need to be left as is. */
-
-              continue;
-            }
-
-          if ((pinset & ppmask) == (GPIO_USART3_TX & ppmask) ||
-              (pinset & ppmask) == (GPIO_USART3_RTS & ppmask) ||
-              (pinset & ppmask) == (GPIO_USART3_RX & ppmask) ||
-              (pinset & ppmask) == (GPIO_USART3_CTS & ppmask))
-            {
-              /* Modem GPIOs need to be left as is, as otherwise
-               * modem level-shifters might start oscillate.
-               */
-
-              continue;
-            }
-
-          if ((pinset & ppmask) == (GPIO_PWR_SWITCH_CAPSENSE_9AXIS & ppmask))
-            {
-              /* Sensor middleware wants to keep this powered on around deepsleep. */
-
-              continue;
-            }
-
-          if ((pinset & ppmask) == (GPIO_SPI2_MOSI & ppmask) ||
-              (pinset & ppmask) == (GPIO_SPI2_SCK & ppmask) ||
-              (pinset & ppmask) == (GPIO_CHIP_SELECT_DISPLAY & ppmask) ||
-              (pinset & ppmask) == (GPIO_LCD_SSD1309_RESET & ppmask) ||
-              (pinset & ppmask) == (GPIO_LCD_SSD1309_CMDDATA & ppmask))
-            {
-              /* Skip display pins. */
-
-              continue;
-            }
-
-          if ((pinset & ppmask) == (GPIO_SPI3_MOSI & ppmask) ||
-              (pinset & ppmask) == (GPIO_SPI3_MISO & ppmask) ||
-              (pinset & ppmask) == (GPIO_SPI3_SCK & ppmask) ||
-              (pinset & ppmask) == (GPIO_CHIP_SELECT_SDCARD & ppmask))
-            {
-              /* Skip SDcard pins. */
+              /* Excluded ports are left as is. */
 
               continue;
             }
