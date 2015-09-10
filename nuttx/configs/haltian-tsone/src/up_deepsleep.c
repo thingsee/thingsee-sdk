@@ -91,6 +91,7 @@ void board_deepsleep_with_stopmode(uint32_t secs)
   struct timespec ts;
   struct timespec rtc_start_ts;
   struct timespec rtc_end_ts;
+  uint32_t bk1r, bk2r;
 #endif
 #ifdef CONFIG_BOARD_DEEPSLEEP_RECONFIGURE_GPIOS
   uint32_t gpio_off_mask;
@@ -316,10 +317,21 @@ void board_deepsleep_with_stopmode(uint32_t secs)
       ts.tv_sec++;
     }
 
-  /* Set current time / date */
+  /* Set current time / date. clock_settime will alter the state of backup
+   * registers which contain the last time system clock was set. We do not
+   * want this routine to alter those register, thus we backup and restore
+   * those registers before/after. */
+
+  bk1r = getreg32(STM32_RTC_BK1R);
+  bk2r = getreg32(STM32_RTC_BK2R);
 
   ret = clock_settime(CLOCK_REALTIME, &ts);
   DEBUGASSERT(ret != ERROR);
+
+  stm32_pwr_enablebkp(true);
+  putreg32(bk1r, STM32_RTC_BK1R);
+  putreg32(bk2r, STM32_RTC_BK2R);
+  stm32_pwr_enablebkp(false);
 
 #ifdef DEEPSLEEP_WAKETIME_DEBUG
   wake_ts = ts;
