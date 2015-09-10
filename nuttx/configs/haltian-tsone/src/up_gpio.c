@@ -291,14 +291,16 @@ void gpio_initialize_sdcard_pins(void)
 
 void up_reconfigure_gpios_for_pmstop(void)
 {
+  const uint32_t ppmask = GPIO_PIN_MASK | GPIO_PORT_MASK;
   uint32_t pins_left;
   uint32_t pin;
   uint8_t port;
+  int pinpos = 0;
 
+  pinpos = 0;
   pins_left = BOARD_NGPIOS;
   for (port = 0; port < BOARD_GPIO_PORTS; port++)
     {
-      const uint32_t ppmask = GPIO_PIN_MASK | GPIO_PORT_MASK;
       uint8_t pins = (pins_left >= BOARD_GPIOPORT_PINS(port) ?
                       BOARD_GPIOPORT_PINS(port) : pins_left);
 
@@ -306,6 +308,9 @@ void up_reconfigure_gpios_for_pmstop(void)
         {
           uint32_t pinset = BOARD_GPIOPORT(port) | BOARD_GPIOPIN(pin);
           uint32_t cfgset;
+          int pincurr = pinpos++;
+
+          DEBUGASSERT(pincurr < BOARD_NGPIOS);
 
           /* Read and save pin configuration */
 
@@ -331,7 +336,7 @@ void up_reconfigure_gpios_for_pmstop(void)
            * SDCard bus?)
            */
 
-          g_port_config[pinset] = 0;
+          g_port_config[pincurr] = 0xFFFFFFFFU; /* Encodes impossible GPIO PP15. */
 
           if (((cfgset & BOARD_GPIOMODE_MASK) == BOARD_GPIOINPUT &&
               (cfgset & BOARD_GPIOEXTI)))
@@ -433,7 +438,7 @@ void up_reconfigure_gpios_for_pmstop(void)
               continue;
             }
 
-          g_port_config[pinset] = cfgset;
+          g_port_config[pincurr] = cfgset;
 
           /* Configure pin as analog input */
 
@@ -455,16 +460,37 @@ void up_reconfigure_gpios_for_pmstop(void)
 
 void up_restore_gpios_after_pmstop(void)
 {
-  int pin;
+  const uint32_t ppmask = GPIO_PIN_MASK | GPIO_PORT_MASK;
+  uint32_t pins_left;
+  uint32_t pin;
+  uint8_t port;
+  int pinpos;
 
-  for (pin = 0; pin < BOARD_NGPIOS; pin++)
+  pinpos = 0;
+  pins_left = BOARD_NGPIOS;
+  for (port = 0; port < BOARD_GPIO_PORTS; port++)
     {
-      /* Restore pin configuration */
+      uint8_t pins = (pins_left >= BOARD_GPIOPORT_PINS(port) ?
+                      BOARD_GPIOPORT_PINS(port) : pins_left);
 
-      if (g_port_config[pin] != 0)
-          stm32_configgpio(g_port_config[pin]);
+      for (pin = 0; pin < pins; pin++)
+        {
+          uint32_t pinset = BOARD_GPIOPORT(port) | BOARD_GPIOPIN(pin);
+          int pincurr = pinpos++;
 
-      //lldbg("writing %d 0x%08x\n", pin, port_config[pin]);
+          DEBUGASSERT(pincurr < BOARD_NGPIOS);
+
+          /* Restore pin configuration */
+
+          if (g_port_config[pincurr] != 0xFFFFFFFFU)
+            {
+              DEBUGASSERT((g_port_config[pincurr] & ppmask) == pinset);
+
+              stm32_configgpio(g_port_config[pincurr]);
+
+              //lldbg("writing %d 0x%08x\n", pincurr, g_port_config[pincurr]);
+            }
+        }
     }
 }
 
