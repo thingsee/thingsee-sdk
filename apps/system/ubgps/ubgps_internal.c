@@ -1686,6 +1686,37 @@ void __ubgps_gc_callbacks(struct ubgps_s * const gps)
 }
 
 /****************************************************************************
+ * Name: __ubgps_full_write
+ ****************************************************************************/
+
+size_t __ubgps_full_write(int gps_fd, const void *buf, size_t writelen)
+{
+  const uint8_t *writebuf = buf;
+  size_t nwritten;
+  size_t total = 0;
+
+  do
+    {
+      nwritten = write(gps_fd, writebuf, writelen);
+      if (nwritten == ERROR)
+        {
+          int error = get_errno();
+          if (error != EAGAIN)
+            {
+              return ERROR;
+            }
+          nwritten = 0;
+        }
+      writebuf += nwritten;
+      writelen -= nwritten;
+      total += nwritten;
+    }
+  while (writelen > 0);
+
+  return total;
+}
+
+/****************************************************************************
  * Name: ubgps_check_alp_file_validity
  *
  * Description:

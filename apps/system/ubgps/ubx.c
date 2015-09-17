@@ -295,7 +295,7 @@ int ubx_msg_send(struct ubgps_s * const gps, const int fd, struct ubx_msg_s cons
 
   /* Send UBX sync characters */
 
-  ret = write(fd, header, sizeof(header));
+  ret = __ubgps_full_write(fd, header, sizeof(header));
   if (ret != sizeof(header))
     return ERROR;
 
@@ -311,7 +311,7 @@ int ubx_msg_send(struct ubgps_s * const gps, const int fd, struct ubx_msg_s cons
   printf("\n");
 #endif /* UBX_DEBUG */
 
-  ret = write(fd, msg, msg_len);
+  ret = __ubgps_full_write(fd, msg, msg_len);
   if (ret != msg_len)
     return ERROR;
 
@@ -329,7 +329,7 @@ int ubx_msg_send(struct ubgps_s * const gps, const int fd, struct ubx_msg_s cons
   checksum[0] = ck_a;
   checksum[1] = ck_b;
 
-  ret = write(fd, checksum, sizeof(checksum));
+  ret = __ubgps_full_write(fd, checksum, sizeof(checksum));
   if (ret != sizeof(checksum))
     return ERROR;
 

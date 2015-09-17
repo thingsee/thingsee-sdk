@@ -702,6 +702,12 @@ void __ubgps_gc_callbacks(struct ubgps_s * const gps);
 
 bool ubgps_check_alp_file_validity(const char *filepath);
 
+/****************************************************************************
+ * Name: __ubgps_full_write
+ ****************************************************************************/
+
+size_t __ubgps_full_write(int gps_fd, const void *buf, size_t writelen);
+
 #ifdef CONFIG_UBGPS_ASSIST_UPDATER
 
 /****************************************************************************
