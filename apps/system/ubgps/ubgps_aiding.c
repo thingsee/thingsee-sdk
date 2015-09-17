@@ -267,7 +267,7 @@ static int http_parse_response(char *inbuf, size_t *len,
       return OK;
     }
 
-  if(!updater.header_received)
+  if (!updater.header_received)
     {
       const char *pInbuf = inbuf;
       static const char substr [] = "\r\n";
@@ -332,6 +332,12 @@ static int http_parse_response(char *inbuf, size_t *len,
 
           pInbuf = pch + substr_len;
           currlen = *len - (pInbuf - inbuf);
+
+          if (updater.header_received)
+            {
+              aid_dbg("HTTP header done.\n");
+              break;
+            }
         }
 
       /* Adjust remaining length according to handled bytes */
