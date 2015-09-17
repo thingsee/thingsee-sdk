@@ -28,8 +28,8 @@ sudo apt-get install gcc-arm-none-eabi
 How to Build:
 
 ```
-cd nuttx/configs
-../tools/configure.sh haltian_tsone/retail
+cd nuttx/
+./tools/configure.sh haltian_tsone/retail
 make
 ```
 
