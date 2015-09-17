@@ -190,6 +190,12 @@ struct ubgps_s *ubgps_initialize(void)
 
   sq_init(&gps->callbacks);
 
+#ifdef CONFIG_UBGPS_ASSIST_UPDATER
+  /* Initialize A-GPS if A-GPS updater enabled. */
+
+  ubgps_set_aiding_params(false, "", 1, false, 0, 0, 0, 0);
+#endif
+
   /* Construct and provess state machine entry event */
 
   event.id = SM_EVENT_ENTRY;
@@ -611,6 +617,19 @@ int ubgps_set_aiding_params(bool const use_time,
   gps->assist->alp_file = NULL;
   gps->assist->alp_file_id = 0;
 
+#ifdef CONFIG_UBGPS_ASSIST_UPDATER
+  /* Ignore input ALP file, use A-GPS updater provided file instead. */
+
+  (void)alp_file;
+
+  if (ubgps_check_alp_file_validity(ubgps_aid_get_alp_filename()))
+    {
+      /* AlmanacPlus file available */
+
+      gps->assist->alp_file = strdup(ubgps_aid_get_alp_filename());
+      gps->assist->alp_file_id = 1;
+    }
+#else
   if (alp_file)
     {
       /* Check that AlmanacPlus file is present and valid */
@@ -623,6 +642,7 @@ int ubgps_set_aiding_params(bool const use_time,
           gps->assist->alp_file_id = alp_file_id;
         }
     }
+#endif
 
   gps->assist->use_loc = use_loc;
   gps->assist->latitude = (uint32_t)(latitude * 10000000.0f);

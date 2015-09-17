@@ -702,6 +702,8 @@ void __ubgps_gc_callbacks(struct ubgps_s * const gps);
 
 bool ubgps_check_alp_file_validity(const char *filepath);
 
+#ifdef CONFIG_UBGPS_ASSIST_UPDATER
+
 /****************************************************************************
  * Name: ubgps_aid_updater_start
  *
@@ -721,6 +723,14 @@ int ubgps_aid_updater_start(struct gps_assistance_s * const assist);
  ****************************************************************************/
 
 int ubgps_aid_updater_stop(struct gps_assistance_s * const assist);
+
+/****************************************************************************
+ * Name: ubgps_aid_get_alp_filename
+ ****************************************************************************/
+
+const char *ubgps_aid_get_alp_filename(void);
+
+#endif
 
 /****************************************************************************
  * Name: ubgps_psm_timer_cb

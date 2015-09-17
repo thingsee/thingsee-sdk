@@ -812,3 +812,12 @@ int ubgps_aid_updater_stop(struct gps_assistance_s * const assist)
   aid_dbg("<-\n");
   return OK;
 }
+
+/****************************************************************************
+ * Name: ubgps_aid_get_alp_filename
+ ****************************************************************************/
+
+const char *ubgps_aid_get_alp_filename(void)
+{
+  return ALP_FILE_PATH;
+}
