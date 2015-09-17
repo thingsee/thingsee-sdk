@@ -50,6 +50,7 @@
 #include <thingsee_ui.h>
 #include <ui_bitmaps.h>
 #include <ui_menu.h>
+#include <arch/board/board-reset.h>
 
 /****************************************************************************
  * Pre-Processor Definitions
@@ -311,7 +312,8 @@ static int start_gps_connectivity(void) {
     ret = ts_gps_callback_register(GPS_EVENT_TARGET_STATE_NOT_REACHED |
                                    GPS_EVENT_TARGET_STATE_REACHED |
                                    GPS_EVENT_TARGET_STATE_TIMEOUT |
-                                   GPS_EVENT_STATE_CHANGE,
+                                   GPS_EVENT_STATE_CHANGE |
+                                   GPS_EVENT_TIME,
                                    UI_gps_callback,
                                    NULL);
     if (ret < 0)
@@ -332,10 +334,39 @@ static int stop_gps_connectivity(void) {
     return ts_gps_request_state(GPS_STATE_POWER_OFF, GPS_FIX_TIMEOUT);
 }
 
+static int
+gps_set_time(uint16_t const year, uint8_t const month, uint8_t const day,
+             uint8_t const hour, uint8_t const min, uint8_t const sec) {
+    struct timespec ts;
+    struct tm t;
+
+    /* Prepare time structure */
+
+    t.tm_year = year - 1900;
+    t.tm_mon = month - 1;
+    t.tm_mday = day;
+    t.tm_hour = hour;
+    t.tm_min = min;
+    t.tm_sec = sec;
+
+    ts.tv_sec = mktime (&t);
+    ts.tv_nsec = 0;
+
+    /* Set clock */
+
+    clock_settime (CLOCK_REALTIME, &ts);
+
+    dbg ("System time set: %04d.%02d.%02d %02d:%02d:%02d.\n", year, month, day,
+        hour, min, sec);
+
+    return OK;
+}
+
 static void UI_gps_callback(void const * const e, void * const priv) {
     struct gps_event_s const * const event = e;
     struct gps_event_target_state_s const * const tevent = e;
     struct gps_event_state_change_s const * const cevent = e;
+    struct gps_event_time_s const * const gps = e;
 
     switch (event->id) {
         /* Show progress */
@@ -362,6 +393,23 @@ static void UI_gps_callback(void const * const e, void * const priv) {
                     update_test_result((uint8_t)GPS_TEST, g_test_failed_str);
                 stop_gps_connectivity();
             }
+            break;
+
+        case GPS_EVENT_TIME:
+
+            /* Check if time & date is available */
+            if (!gps->time->validity.time || !gps->time->validity.date)
+              break;
+
+            if (board_rtc_time_is_set(NULL)) {
+                /* System time is already set */
+                break;
+            }
+
+            /* Set system time */
+            gps_set_time (gps->time->year, gps->time->month, gps->time->day,
+              gps->time->hour, gps->time->min, gps->time->sec);
+
             break;
 
         default:
