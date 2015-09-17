@@ -1199,7 +1199,7 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
   UBX_SET_U2(msg, 18, yymm);      /* Year / month */
   UBX_SET_U4(msg, 20, ddhhmmss);  /* Day / hour / minute / seconds (ddhhmmss) */
   UBX_SET_I4(msg, 24, 0);         /* Fractional part of time of week */
-  UBX_SET_U4(msg, 28, 1000);      /* Milliseconds part of time accuracy */
+  UBX_SET_U4(msg, 28, 10000);     /* Milliseconds part of time accuracy */
   UBX_SET_U4(msg, 32, 0);         /* Nanoseconds part of time accuracy */
   UBX_SET_I4(msg, 36, 0);         /* Clock drift or frequency */
   UBX_SET_U4(msg, 40, 0);         /* Accuracy of clock drift or frequency */
