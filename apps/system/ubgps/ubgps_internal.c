@@ -1099,7 +1099,6 @@ int ubgps_send_aid_alp_poll(struct ubgps_s * const gps)
 int ubgps_send_aid_ini(struct ubgps_s * const gps)
 {
   struct ubx_msg_s * msg;
-  time_t currtime;
   struct tm t;
   uint32_t latitude = 0;
   uint32_t longitude = 0;
@@ -1117,13 +1116,10 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
   if (ubx_busy(&gps->state.ubx_receiver))
     return ERROR;
 
-  /* Check if assistance data is available */
-
-  if (!gps->assist)
-    return OK;
-
-  if (gps->assist->use_time)
+  if (board_rtc_time_is_set(NULL))
     {
+      time_t currtime;
+
       dbg_int("Using system time for GPS.\n");
 
       /* Construct time and date for GPS */
@@ -1141,24 +1137,52 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
       flags |= (1 << 1) | (1 << 10);
     }
 
-  if (gps->assist->alp_file)
+  if (gps->assist && gps->assist->alp_file)
     dbg_int("Using AssistNow Offline data from '%s', file ID %d.\n",
         gps->assist->alp_file, gps->assist->alp_file_id);
 
-  if (gps->assist->use_loc)
+  if (gps->hint && gps->hint->have_location)
     {
-      latitude = gps->assist->latitude;
-      longitude = gps->assist->longitude;
-      altitude = gps->assist->altitude;
-      accuracy = gps->assist->accuracy;
+      struct timespec currtime = {};
+      uint64_t current_accuracy;
 
-      dbg_int("Using last known location (lat: %.7f, long: %.7f).\n",
-          (double)latitude / 10000000.0f,
-          (double)longitude / 10000000.0f);
+      (void)clock_gettime(CLOCK_MONOTONIC, &currtime);
+
+      /* Adjust location accuracy by time*speed. */
+
+      current_accuracy = gps->hint->accuracy;
+      current_accuracy +=
+          ((uint64_t)HINT_LOCATION_ACCURACY_DEGRADE_SPEED_MPS *
+           (currtime.tv_sec - gps->hint->location_time.tv_sec));
+
+      current_accuracy *= 100; /* m => cm */
+      if (current_accuracy > UINT32_MAX)
+        current_accuracy = UINT32_MAX;
+
+      altitude = gps->hint->altitude * 100; /* m => cm */
+      if (altitude > INT32_MAX)
+        altitude = INT32_MAX;
+      else if (altitude < INT32_MIN)
+        altitude = INT32_MIN;
+
+      latitude = gps->hint->latitude;
+      longitude = gps->hint->longitude;
+      accuracy = current_accuracy;
+
+      dbg_int("Using last known position:\n");
+      dbg_int(" lat     : %d\n", gps->hint->latitude);
+      dbg_int(" long    : %d\n", gps->hint->longitude);
+      dbg_int(" alt     : %d meters\n", altitude / 100);
+      dbg_int(" acc_old : %u meters\n", gps->hint->accuracy);
+      dbg_int(" acc_curr: %u meters\n", (uint32_t)current_accuracy / 100);
 
       /* Position is given in lat / long / alt */
 
       flags |= (1 << 5);
+
+      /* Position is valid. */
+
+      flags |= (1 << 0);
     }
 
   /* Allocate and setup AID-INI message */
@@ -1291,6 +1315,13 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
                gps->location.ground_speed_accuracy/1000,
                gps->location.heading/100000,
                gps->location.heading_accuracy/100000);
+
+      /* Update location hint for A-GPS. */
+
+      (void)ubgps_give_location_hint((double)gps->location.latitude / 1e7,
+                                     (double)gps->location.longitude / 1e7,
+                                     gps->location.height / 1000,
+                                     gps->location.horizontal_accuracy / 1000);
     }
 
   return OK;

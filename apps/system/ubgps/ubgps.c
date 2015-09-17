@@ -83,6 +83,10 @@
 
 static struct ubgps_s g_gps;
 
+/* A-GPS hint data structure */
+
+static struct gps_assist_hint_s g_gps_hint;
+
 /* GPS state machine names */
 
 static const char * gps_sm_name[__GPS_STATE_MAX] =
@@ -134,6 +138,7 @@ struct ubgps_s *ubgps_initialize(void)
   /* Clear data */
 
   memset(gps, 0, sizeof(struct ubgps_s));
+  gps->hint = &g_gps_hint;
 
   /* Open GPS serial device */
 
@@ -599,6 +604,8 @@ int ubgps_set_aiding_params(bool const use_time,
 
   dbg_ubgps("\n");
 
+  (void)use_time;
+
   /* Free previously set assistance data */
 
   if (gps->assist)
@@ -614,7 +621,6 @@ int ubgps_set_aiding_params(bool const use_time,
   if (!gps->assist)
     return ERROR;
 
-  gps->assist->use_time = use_time;
   gps->assist->alp_file = NULL;
   gps->assist->alp_file_id = 0;
 
@@ -645,11 +651,88 @@ int ubgps_set_aiding_params(bool const use_time,
     }
 #endif
 
-  gps->assist->use_loc = use_loc;
-  gps->assist->latitude = (uint32_t)(latitude * 10000000.0f);
-  gps->assist->longitude = (uint32_t)(longitude * 10000000.0f);
-  gps->assist->altitude = altitude * 10;
-  gps->assist->accuracy = accuracy * 10;
+  if (use_loc)
+    {
+      if (!g_gps_hint.have_location)
+        {
+          /* Use only if GPS module does not internally already have
+           * location. */
+
+          (void)ubgps_give_location_hint(latitude, longitude, altitude,
+                                         accuracy);
+        }
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: ubgps_give_location_hint
+ *
+ * Description:
+ *   Give location hint for A-GPS
+ *
+ * Input Parameters:
+ *   latitude    - Latitude
+ *   longitude   - Longitude
+ *   altitude    - Altitude in meters
+ *   accuracy    - Horizontal accuracy in meters
+ *
+ * Returned Value:
+ *   Status
+ *
+ ****************************************************************************/
+
+int ubgps_give_location_hint(double const latitude,
+                             double const longitude,
+                             int32_t const altitude,
+                             uint32_t const accuracy)
+{
+  struct timespec currtime = {};
+
+  if (accuracy > HINT_LOCATION_MINIMUM_NEW_ACCURACY)
+    {
+      errno = EINVAL;
+      return ERROR;
+    }
+
+  (void)clock_gettime(CLOCK_MONOTONIC, &currtime);
+
+  if (g_gps_hint.have_location)
+    {
+      uint64_t current_accuracy;
+      uint32_t secs_since = currtime.tv_sec - g_gps_hint.location_time.tv_sec;
+
+      /* Adjust location accuracy by time*speed. */
+
+      current_accuracy = g_gps_hint.accuracy;
+      current_accuracy += ((uint64_t)HINT_LOCATION_ACCURACY_DEGRADE_SPEED_MPS *
+                           secs_since);
+
+      /* Use old location if its accuracy is better than new. Accuracy of
+       * old location data will degrade over time and eventually be overridden
+       * with new location. */
+
+      if (current_accuracy < accuracy)
+        {
+          errno = EALREADY;
+          return ERROR;
+        }
+    }
+
+
+  g_gps_hint.location_time = currtime;
+  g_gps_hint.have_location = true;
+  g_gps_hint.latitude = latitude * 1e7;
+  g_gps_hint.longitude = longitude * 1e7;
+  g_gps_hint.altitude = altitude;
+  g_gps_hint.accuracy = accuracy;
+
+  dbg_ubgps("New location hint:\n");
+  dbg_ubgps(" lat     : %d\n", g_gps_hint.latitude);
+  dbg_ubgps(" long    : %d\n", g_gps_hint.longitude);
+  dbg_ubgps(" alt     : %d meters\n", altitude);
+  dbg_ubgps(" accuracy: %u meters\n", g_gps_hint.accuracy);
 
   return OK;
 }

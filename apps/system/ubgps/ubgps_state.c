@@ -586,15 +586,6 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
                   gps->state.psm_timer_id = ts_core_timer_setup_date(&ts,
                       ubgps_psm_timer_cb, gps);
 
-                  /* Update assist params */
-
-                  gps->assist->use_time = true;
-                  gps->assist->use_loc = true;
-                  gps->assist->latitude = gps->location.latitude;
-                  gps->assist->longitude = gps->location.longitude;
-                  gps->assist->altitude = gps->location.height;
-                  gps->assist->accuracy = gps->location.horizontal_accuracy;
-
                   dbg_sm("gps->state.psm_timer_id:%d, set POWER_OFF\n",
                       gps->state.psm_timer_id);
                   ubgps_set_new_state(gps, GPS_STATE_POWER_OFF);

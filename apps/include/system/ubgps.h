@@ -500,6 +500,27 @@ int ubgps_set_aiding_params(bool use_time,
                              uint32_t accuracy);
 
 /****************************************************************************
+ * Name: ubgps_give_location_hint
+ *
+ * Description:
+ *   Give location hint for A-GPS
+ *
+ * Input Parameters:
+ *   latitude    - Latitude
+ *   longitude   - Longitude
+ *   altitude    - Altitude in meters
+ *   accuracy    - Horizontal accuracy in meters
+ *
+ * Returned Value:
+ *   Status
+ *
+ ****************************************************************************/
+int ubgps_give_location_hint(double const latitude,
+                             double const longitude,
+                             int32_t const altitude,
+                             uint32_t const accuracy);
+
+/****************************************************************************
  * Name: ubgps_setup_poll
  *
  * Description:
