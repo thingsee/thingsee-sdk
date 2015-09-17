@@ -589,7 +589,6 @@ int ubgps_set_aiding_params(bool const use_time,
                              uint32_t const accuracy)
 {
   struct ubgps_s * const gps = &g_gps;
-  int fd;
 
   dbg_ubgps("\n");
 
@@ -614,13 +613,10 @@ int ubgps_set_aiding_params(bool const use_time,
 
   if (alp_file)
     {
-      /* Check that AlmanacPlus file is present */
+      /* Check that AlmanacPlus file is present and valid */
 
-      fd = open(alp_file, O_RDONLY);
-      if (fd >= 0)
+      if (ubgps_check_alp_file_validity(alp_file))
         {
-          close(fd);
-
           /* AlmanacPlus file available */
 
           gps->assist->alp_file = strdup(alp_file);

@@ -379,18 +379,29 @@ static int http_parse_response(char *inbuf, size_t *len,
         {
           fclose(updater.fd);
 
-          /* Aiding data ready to be taken in use, file_id should differ from
-             the previous one to notify aiding client about updated data */
-
-          if (!assist->alp_file)
+          if (!ubgps_check_alp_file_validity(ALP_FILE_PATH))
             {
-              /* file does not exist */
+              /* Received data is invalid. */
+              unlink(ALP_FILE_PATH);
 
-              assist->alp_file = strdup(ALP_FILE_PATH);
+              assist->alp_file_id++;
+              status = ERROR;
             }
+          else
+            {
+              /* Aiding data ready to be taken in use, file_id should differ from
+                 the previous one to notify aiding client about updated data */
 
-          assist->alp_file_id++;
-          status = OK;
+              if (!assist->alp_file)
+                {
+                  /* file does not exist */
+
+                  assist->alp_file = strdup(ALP_FILE_PATH);
+                }
+
+              assist->alp_file_id++;
+              status = OK;
+            }
         }
     }
 
@@ -694,7 +705,6 @@ error:
   aid_dbg("<-\n");
   return NULL;
 }
-
 
 /****************************************************************************
  * Public Functions

@@ -693,6 +693,16 @@ void __ubgps_remove_timer(struct ubgps_s * const gps, uint16_t id);
 void __ubgps_gc_callbacks(struct ubgps_s * const gps);
 
 /****************************************************************************
+ * Name: ubgps_check_alp_file_validity
+ *
+ * Description:
+ *   Check that ALP file contains valid aiding data.
+ *
+ ****************************************************************************/
+
+bool ubgps_check_alp_file_validity(const char *filepath);
+
+/****************************************************************************
  * Name: ubgps_aid_updater_start
  *
  * Description:

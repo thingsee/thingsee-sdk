@@ -1492,6 +1492,13 @@ int ubgps_handle_aid_alpsrv(struct ubgps_s * const gps, struct ubx_msg_s const *
       return OK;
     }
 
+  if (!ubgps_check_alp_file_validity(gps->assist->alp_file))
+    {
+      free(gps->assist->alp_file);
+      gps->assist->alp_file = NULL;
+      return OK;
+    }
+
   requested_data_type = UBX_GET_U1(msg, 1);
   data_offset = (uint32_t)UBX_GET_U2(msg, 2) * 2;
   data_size = (uint32_t)UBX_GET_U2(msg, 4) * 2;
@@ -1679,4 +1686,79 @@ void __ubgps_gc_callbacks(struct ubgps_s * const gps)
 
       cb = cbnext;
     }
+}
+
+/****************************************************************************
+ * Name: ubgps_check_alp_file_validity
+ *
+ * Description:
+ *   Check that ALP file contains valid aiding data.
+ *
+ ****************************************************************************/
+
+bool ubgps_check_alp_file_validity(const char *filepath)
+{
+  bool ret = false;
+  uint8_t buf[2];
+  ssize_t rlen;
+  int fd;
+
+  fd = open(filepath, O_RDONLY);
+  if (fd < 0)
+    {
+      dbg("could not open file: \"%s\" (errno=%d)\n", filepath, get_errno());
+      goto out;
+    }
+
+  /* Get header */
+
+  rlen = read(fd, buf, 2);
+  if (rlen < 2)
+    {
+      dbg("could not read header, rlen=%d, errno=%d\n", rlen, get_errno());
+      goto out;
+    }
+
+  /* Expected header is 'µB' */
+
+  if (!(buf[0] == 0xB5 && buf[1] == 0x62))
+    {
+      dbg("invalid header, %02X:%02X\n", buf[0], buf[1]);
+      goto out;
+    }
+
+  /* Get tail */
+
+  rlen = lseek(fd, -2, SEEK_END);
+  if (rlen == -1)
+    {
+      dbg("could not seek to tail, rlen=%d, errno=%d\n", rlen, get_errno());
+      goto out;
+    }
+
+  rlen = read(fd, buf, 2);
+  if (rlen < 2)
+    {
+      dbg("could not read tail, rlen=%d, errno=%d\n", rlen, get_errno());
+      goto out;
+    }
+
+  /* Expected tail is 'XX' */
+
+  if (!(buf[0] == 'X' && buf[1] == 'X'))
+    {
+      dbg("invalid header, %02X:%02X\n", buf[0], buf[1]);
+      goto out;
+    }
+
+  /* ALP file appears to be valid. */
+
+  ret = true;
+
+out:
+  if (fd >= 0)
+    {
+      close(fd);
+    }
+  return ret;
 }
