@@ -1786,6 +1786,7 @@ bool ubgps_check_alp_file_validity(const char *filepath)
       goto out;
     }
 
+#if 0
   /* Get tail */
 
   rlen = lseek(fd, -2, SEEK_END);
@@ -1806,9 +1807,10 @@ bool ubgps_check_alp_file_validity(const char *filepath)
 
   if (!(buf[0] == 'X' && buf[1] == 'X'))
     {
-      dbg("invalid header, %02X:%02X\n", buf[0], buf[1]);
+      dbg("invalid tail, %02X:%02X\n", buf[0], buf[1]);
       goto out;
     }
+#endif
 
   /* ALP file appears to be valid. */
 
