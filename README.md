@@ -29,7 +29,7 @@ How to Build:
 
 ```
 cd nuttx/tools
-./configure.sh haltian_tsone/retail
+./configure.sh haltian-tsone/retail
 cd ..
 make
 ```
