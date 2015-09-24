@@ -213,6 +213,11 @@ static void http_parser_reset(void)
     {
       fclose(updater.fd);
       updater.fd = NULL;
+
+      /* This path is called only if download was aborted by socket error.
+       * ALP file is invalid at this stage, so remove it. */
+
+      unlink(ALP_FILE_PATH);
     }
 }
 
@@ -377,17 +382,28 @@ static int http_parse_response(char *inbuf, size_t *len,
         }
       else
         {
+          /* Write failed. */
+
           fclose(updater.fd);
+          updater.fd = NULL;
+
+          /* ALP file is invalid at this stage. */
+
+          unlink(ALP_FILE_PATH);
+
           status = ERROR;
+          assist->alp_file_id++;
         }
 
       if (updater.write_cnt >= updater.content_len)
         {
           fclose(updater.fd);
+          updater.fd = NULL;
 
           if (!ubgps_check_alp_file_validity(ALP_FILE_PATH))
             {
               /* Received data is invalid. */
+
               unlink(ALP_FILE_PATH);
 
               assist->alp_file_id++;
