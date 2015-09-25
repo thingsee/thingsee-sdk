@@ -450,7 +450,7 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
 
               /* Construct power save mode event */
 
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   struct sm_event_psm_event_s psm;
 
@@ -577,12 +577,12 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
             {
               /* Start SW controlled power save mode (PSM). */
 
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   struct timespec ts = {};
 
                   clock_gettime(CLOCK_MONOTONIC, &ts);
-                  ts.tv_sec += gps->state.navigation_rate/1000;
+                  ts.tv_sec += gps->state.navigation_rate / 1000;
                   gps->state.psm_timer_id = ts_core_timer_setup_date(&ts,
                       ubgps_psm_timer_cb, gps);
 
@@ -999,7 +999,7 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
               /* Set GPS navigation rate */
 
 #ifdef CONFIG_UBGPS_PSM_MODE
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD*1000)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   /* Use default navigation rate for SW controlled PSM */
 

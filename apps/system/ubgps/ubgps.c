@@ -464,7 +464,7 @@ int ubgps_config(gps_config_t const config, void const * const value)
               gps->state.current_state == GPS_STATE_FIX_ACQUIRED)
             {
 #ifdef CONFIG_UBGPS_PSM_MODE
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   /* Use default navigation rate for SW controlled PSM */
 
