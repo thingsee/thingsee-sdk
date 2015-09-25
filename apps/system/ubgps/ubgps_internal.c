@@ -1252,6 +1252,9 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
       gps->time.year = UBX_GET_U2(msg, 4);
       gps->time.month = UBX_GET_U1(msg, 6);
       gps->time.day = UBX_GET_U1(msg, 7);
+
+      dbg_int("valid:0x%02X, year:%04d, month:%02d, day:%02d\n",
+              valid, gps->time.year, gps->time.month,  gps->time.day);
     }
 
   if (gps->time.validity.time || gps->time.validity.fully_resolved)
@@ -1259,6 +1262,9 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
       gps->time.hour = UBX_GET_U1(msg, 8);
       gps->time.min = UBX_GET_U1(msg, 9);
       gps->time.sec = UBX_GET_U1(msg, 10);
+
+      dbg_int("valid:0x%02X, hour:%02d, min:%02d, sec:%02d\n",
+              valid, gps->time.hour, gps->time.min,  gps->time.sec);
     }
 
   /* Initialize location data */
@@ -1274,54 +1280,64 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
 
   /* Get location data if there's a fix */
 
-  if (gps->location.fix_type > GPS_FIX_NOT_AVAILABLE)
+  if (fix_type < __GPS_FIX_MAX)
     {
+      struct gps_location_s location = {};
+
+      location.fix_type = gps->location.fix_type;
+
       /* Get number of satellites used in navigation solution */
 
-      gps->location.num_of_used_satellites = UBX_GET_U1(msg, 23);
+      location.num_of_used_satellites = UBX_GET_U1(msg, 23);
 
-      /* Get longitude, latitude and horizontal accuracy */
+      /* Get longitude [1e-7 deg], latitude [1e-7 deg] and horizontal accuracy [mm] */
 
-      gps->location.longitude = UBX_GET_I4(msg, 24);
-      gps->location.latitude = UBX_GET_I4(msg, 28);
-      gps->location.horizontal_accuracy = UBX_GET_U4(msg, 40);
+      location.longitude = UBX_GET_I4(msg, 24);
+      location.latitude = UBX_GET_I4(msg, 28);
+      location.horizontal_accuracy = UBX_GET_U4(msg, 40);
 
-      /* Get height and vertical accuracy */
+      /* Get height [mm] and vertical accuracy [mm] */
 
-      gps->location.height = UBX_GET_I4(msg, 36);
-      gps->location.vertical_accuracy = UBX_GET_U4(msg, 44);
+      location.height = UBX_GET_I4(msg, 36);
+      location.vertical_accuracy = UBX_GET_U4(msg, 44);
 
-      /* Get ground speed and accuracy */
+      /* Get ground speed [mm/s] and accuracy [mm/s] */
 
-      gps->location.ground_speed = UBX_GET_I4(msg, 60);
-      gps->location.ground_speed_accuracy = UBX_GET_U4(msg, 68);
+      location.ground_speed = UBX_GET_I4(msg, 60);
+      location.ground_speed_accuracy = UBX_GET_U4(msg, 68);
 
-      /* Get heading and heading accuracy estimate */
+      /* Get heading [1e-5 deg] and heading accuracy estimate [1e-5 deg] */
 
-      gps->location.heading = UBX_GET_I4(msg, 64);
-      gps->location.heading_accuracy = UBX_GET_U4(msg, 72);
+      location.heading = UBX_GET_I4(msg, 64);
+      location.heading_accuracy = UBX_GET_U4(msg, 72);
 
-      dbg_int("fix:%d, flags:0x%02X, sat:%u, lat:%d, lon:%d, acc:%um, height:%dm,\n"
+      dbg_int("fix:%d (%s), flags:0x%02X, sat:%u, lat:%d, lon:%d, acc:%um, height:%dm, "
               "acc:%um, speed:%dm/s, acc:%um/s, heading:%ddeg, acc:%udeg\n",
-               gps->location.fix_type,
-               flags,
-               gps->location.num_of_used_satellites,
-               gps->location.latitude,
-               gps->location.longitude,
-               gps->location.horizontal_accuracy/1000,
-               gps->location.height/1000,
-               gps->location.vertical_accuracy/1000,
-               gps->location.ground_speed/1000,
-               gps->location.ground_speed_accuracy/1000,
-               gps->location.heading/100000,
-               gps->location.heading_accuracy/100000);
+              fix_type,
+              gps->location.fix_type != GPS_FIX_NOT_AVAILABLE ? "OK" : "NOK",
+              flags,
+              location.num_of_used_satellites,
+              location.latitude,
+              location.longitude,
+              location.horizontal_accuracy/1000,
+              location.height/1000,
+              location.vertical_accuracy/1000,
+              location.ground_speed/1000,
+              location.ground_speed_accuracy/1000,
+              location.heading/100000,
+              location.heading_accuracy/100000);
 
-      /* Update location hint for A-GPS. */
+      if (location.fix_type != GPS_FIX_NOT_AVAILABLE)
+        {
+          gps->location = location;
 
-      (void)ubgps_give_location_hint((double)gps->location.latitude / 1e7,
-                                     (double)gps->location.longitude / 1e7,
-                                     gps->location.height / 1000,
-                                     gps->location.horizontal_accuracy / 1000);
+          /* Update location hint for A-GPS. */
+
+          (void)ubgps_give_location_hint((double)location.latitude / 1e7,
+                                         (double)location.longitude / 1e7,
+                                         location.height / 1000,
+                                         location.horizontal_accuracy / 1000);
+        }
     }
 
   return OK;
