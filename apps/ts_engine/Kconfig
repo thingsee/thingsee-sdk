@@ -16,13 +16,13 @@ if THINGSEE_ENGINE
         ---help---
             Enable the Thingsee connectors
 
-    config THINGSEE_CONNECTOR_DEBUG
+    config THINGSEE_CONNECTORS_DEBUG
         bool "Thingsee connector debug"
         default n
         ---help---
             Enable the thingsee connectors debug
 
-    config THINGSEE_CONNECTOR_PROTOCOL_DEBUG
+    config THINGSEE_CONNECTORS_PROTOCOL_DEBUG
         bool "Thingsee connector protocol debug"
         default n
         ---help---
