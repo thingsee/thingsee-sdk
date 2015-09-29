@@ -4,8 +4,10 @@ include $(APPDIR)/Make.defs
 
 HOSTOBJEXT ?= .hobj
 
-HOSTCSRCS := ../json/cJSON.c
+HOSTCSRCS := ../json/cJSON.c ../json/cJSON_stream_parse.c
 HOSTCXXSRCS := cJSON_test.cc empty_arrays.cc empty_objects.cc
+
+HOSTCSRCS += nuttx_glue.c
 
 HOSTCOBJS		= $(HOSTCSRCS:.c=$(HOSTOBJEXT))
 HOSTCXXOBJS		= $(HOSTCXXSRCS:.cc=$(HOSTOBJEXT))

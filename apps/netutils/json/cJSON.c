@@ -49,6 +49,11 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+#define cJSON_malloc malloc
+#define cJSON_free free
+#define cJSON_realloc realloc
+#define cJSON_strdup strdup
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -57,9 +62,6 @@ static const char *ep;
 
 static const unsigned char firstByteMark[7] =
   { 0x00, 0x00, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc };
-
-static void *(*cJSON_malloc)(size_t sz) = malloc;
-static void (*cJSON_free)(void *ptr)    = free;
 
 /****************************************************************************
  * Private Prototypes
@@ -75,34 +77,6 @@ static char *print_object(cJSON *item, int depth, int fmt);
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-
-static char *cJSON_strdup(const char *str)
-{
-  size_t len;
-  char *copy;
-
-  len = strlen(str) + 1;
-  if (!(copy = (char *)cJSON_malloc(len)))
-    {
-      return 0;
-    }
-
-  memcpy(copy, str, len);
-  return copy;
-}
-
-/* Internal constructor. */
-
-static cJSON *cJSON_New_Item(void)
-{
-  cJSON *node = (cJSON *) cJSON_malloc(sizeof(cJSON));
-  if (node)
-    {
-      memset(node, 0, sizeof(cJSON));
-    }
-
-  return node;
-}
 
 static int cJSON_strcasecmp(const char *s1, const char *s2)
 {
@@ -1130,24 +1104,14 @@ static cJSON *create_reference(cJSON *item)
  * Public Functions
  ****************************************************************************/
 
+cJSON *cJSON_New_Item(void)
+{
+  return calloc(1, sizeof(cJSON));
+}
+
 const char *cJSON_GetErrorPtr(void)
 {
   return ep;
-}
-
-void cJSON_InitHooks(cJSON_Hooks *hooks)
-{
-  if (!hooks)
-    {
-      /* Reset hooks */
-
-      cJSON_malloc = malloc;
-      cJSON_free   = free;
-      return;
-    }
-
-  cJSON_malloc = (hooks->malloc_fn) ? hooks->malloc_fn : malloc;
-  cJSON_free = (hooks->free_fn) ? hooks->free_fn : free;
 }
 
 /* Delete a cJSON structure. */
@@ -1180,7 +1144,7 @@ void cJSON_Delete(cJSON *c)
 
 /* Parse an object - create a new root, and populate. */
 
-cJSON *cJSON_Parse(const char *value)
+cJSON *cJSON_Parse_Old(const char *value)
 {
   cJSON *c = cJSON_New_Item();
   ep = 0;
