@@ -43,6 +43,8 @@
 #include <stdbool.h>
 #include <time.h>
 
+#include <netinet/in.h>
+
 #include <apps/thingsee/ts_core.h>
 
 #include "engine/value.h"
@@ -80,6 +82,8 @@ struct url
     char *host;
     uint16_t port;
     char *api;
+    struct ts_value http_header;
+    struct sockaddr_in srv_ip4addr;
 };
 
 typedef bool
@@ -115,11 +119,11 @@ typedef int
     const void *priv);
 
 typedef int
-(*send_url_t) (struct ts_payload *payload, send_cb_t cb, const struct url * const url, const void *priv);
+(*send_url_t) (struct ts_payload *payload, send_cb_t cb, struct url * const url, const void *priv);
 
 typedef int
 (*multisend_url_t) (struct ts_payload **payload, int number_of_payloads,
-    send_cb_t cb, const struct url * const url, const void *priv);
+    send_cb_t cb, struct url * const url, const void *priv);
 
 struct ts_connector
 {

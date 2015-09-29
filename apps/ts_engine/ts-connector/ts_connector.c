@@ -84,9 +84,9 @@ static int tsc_send(struct ts_payload *payload, send_cb_t cb, const void *priv);
 static int tsc_multisend(struct ts_payload **payload, int number_of_payloads,
                          send_cb_t cb, const void *priv);
 static int tsc_multisend_url(struct ts_payload **payload, int number_of_payloads,
-                             send_cb_t cb, const struct url * const url, const void *priv);
+                             send_cb_t cb, struct url * const url, const void *priv);
 static int tsc_send_url(struct ts_payload *payload, send_cb_t cb,
-                        const struct url * const url,
+                        struct url * const url,
                         const void *priv);
 
 /****************************************************************************
@@ -125,6 +125,10 @@ static int tsc_post_data_construct(conn_workflow_context_s *context,
                                    char **outhdr, char **outdata)
 {
   int datalen = 0, hdrlen = 0;
+  char *header = NULL;
+  char *tmp;
+  int i;
+  int ret;
 
   /* Construct HTTP data */
   *outdata = context->payload;
@@ -133,6 +137,49 @@ static int tsc_post_data_construct(conn_workflow_context_s *context,
   if (datalen > 0)
     {
       /* Construct HTTP header */
+
+      if (context->url)
+        {
+          if (context->url->http_header.valuearray.number_of_items > 0)
+            {
+              for (i = 0; i < context->url->http_header.valuearray.number_of_items; i++)
+                {
+                  if (context->url->http_header.valuearray.items[i].valuetype != VALUESTRING)
+                    {
+                      con_dbg("Invalid valuetype=%d\n", context->url->http_header.valuearray.items[i].valuetype);
+                      free(header);
+                      return ERROR;
+                    }
+                  tmp = header ? header : strdup("");
+
+                  ret = asprintf(&header, "%s%s\r\n", tmp, context->url->http_header.valuearray.items[i].valuestring);
+                  free(tmp);
+                  if (ret < 0)
+                    {
+                      con_dbg("asprintf failed\n");
+                      return ERROR;
+                    }
+                }
+            }
+          else
+            {
+              header = strdup("");
+              if (!header)
+                {
+                  con_dbg("strdup failed\n");
+                  return ERROR;
+                }
+            }
+        }
+      else /* default ts backend token authentication */
+        {
+          ret = asprintf(&header, "Authorization: Bearer %s\r\n", ts_context.cloud_params.device_auth_token);
+          if (ret < 0)
+            {
+              return ERROR;
+            }
+        }
+
       hdrlen = asprintf(outhdr,
           "POST /%s%s HTTP/1.1\r\n"
           "connectorId: %d\r\n"
@@ -141,21 +188,23 @@ static int tsc_post_data_construct(conn_workflow_context_s *context,
           "User-Agent: %s\r\n"
           "Host: %s\r\n"
           "Accept: */*\r\n"
-          "Authorization: Bearer %s\r\n"
+          "%s" /* auth */
           "Connection: close\r\n"
           "Content-Length: %d\r\n"
           "Content-Type: application/json\r\n"
           "\r\n",
-          (context->url.host ? (context->url.api ? context->url.api : "") : ts_context.cloud_params.api),
-          (context->url.host ? "" : "/events"),
+          (context->url ? (context->url->api ? context->url->api : "") : ts_context.cloud_params.api),
+          (context->url ? "" : "/events"),
           ts_context.cloud_params.connector_id,
           ts_context.cloud_params.connector_name,
           ts_context.cloud_params.device_auth_uuid,
           HTTP_USER_AGENT,
-          (context->url.host ? context->url.host : ts_context.con.host),
-          ts_context.cloud_params.device_auth_token,
+          (context->url ? context->url->host : ts_context.con.host),
+          header,
           strlen(*outdata)
       );
+
+      free(header);
     }
   if (datalen >= 0 && hdrlen >= 0)
   con_dbg("SENDINGDATA:\n%s%s\n", *outhdr, *outdata);
@@ -368,7 +417,7 @@ static int tsc_uninit(void)
 }
 
 static conn_workflow_context_s *tsc_create_workflow_context(struct ts_payload **payload, int number_of_payloads,
-                                                            send_cb_t cb, const struct url * const url, const void *priv)
+                                                            send_cb_t cb, struct url * const url, const void *priv)
 {
   cJSON *root, *pload, *engine, *senses;
   conn_workflow_context_s *context = NULL;
@@ -446,9 +495,7 @@ static conn_workflow_context_s *tsc_create_workflow_context(struct ts_payload **
           context->cb = cb;
           if (url)
             {
-              context->url.host = strdup(url->host);
-              context->url.port = url->port;
-              context->url.api = strdup(url->api);
+              context->url = url;
             }
           context->priv = priv;
         }
@@ -460,7 +507,7 @@ static conn_workflow_context_s *tsc_create_workflow_context(struct ts_payload **
 }
 
 static int tsc_multisend_url(struct ts_payload **payload, int number_of_payloads,
-                             send_cb_t cb, const struct url * const url, const void *priv)
+                             send_cb_t cb, struct url * const url, const void *priv)
 {
   int ret = OK;
   struct conn_network_task_s *send_task = NULL;
@@ -501,7 +548,7 @@ static int tsc_multisend_url(struct ts_payload **payload, int number_of_payloads
 }
 
 static int tsc_send_url(struct ts_payload *payload, send_cb_t cb,
-                        const struct url * const url,
+                        struct url * const url,
                         const void *priv)
 {
   return tsc_multisend_url(&payload, 1, cb, url, priv);

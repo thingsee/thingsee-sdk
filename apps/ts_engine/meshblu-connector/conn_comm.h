@@ -81,8 +81,9 @@ typedef struct
 {
   char *payload;
   send_cb_t cb;
-  struct url url;
+  struct url *url;
   const void *priv;
+  struct sockaddr_in srv_ip4addr;
 } conn_workflow_context_s;
 
 typedef int (*conn_request_construct_t)

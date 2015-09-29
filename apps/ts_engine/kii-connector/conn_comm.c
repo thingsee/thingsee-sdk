@@ -443,6 +443,7 @@ static int execute_http_request(struct sockaddr_in *srv_addr, uint16_t port, cha
   size_t pos;
   char *host;
   struct timeval tv;
+  struct sockaddr_in *current_srv_ip4addr;
 
   DEBUGASSERT(srv_addr && hdr && pdata && pstatus_code && pcontent);
 
@@ -450,28 +451,26 @@ static int execute_http_request(struct sockaddr_in *srv_addr, uint16_t port, cha
 
   http_con_dbg("HTTP:\n%s%s", hdr, pdata);
 
-  if (context->url.host)
+  if (context->url)
     {
-      con->srv_ip4addr.sin_addr.s_addr = 0;
-      host = context->url.host;
-      port = context->url.port;
+      host = context->url->host;
+      port = context->url->port;
+      current_srv_ip4addr = &context->url->srv_ip4addr;
     }
   else
     {
       host = con->host;
+      current_srv_ip4addr = &con->srv_ip4addr;
     }
 
-  if (srv_addr == &con->srv_ip4addr)
+  /* Fetch server IP address. */
+  if (current_srv_ip4addr->sin_addr.s_addr == 0)
     {
-      /* Fetch server IP address. */
-      if (con->srv_ip4addr.sin_addr.s_addr == 0)
-        {
-          con->network_ready = false;
-          if (get_server_address(&con->srv_ip4addr, host) != OK)
-            return NETWORK_ERROR;
+      con->network_ready = false;
+      if (get_server_address(current_srv_ip4addr, host) != OK)
+        return NETWORK_ERROR;
 
-          con->network_ready = true;
-        }
+      con->network_ready = true;
     }
 
   /* Open HTTP connection to server. */
@@ -485,11 +484,11 @@ static int execute_http_request(struct sockaddr_in *srv_addr, uint16_t port, cha
   ret = connect(sock, (struct sockaddr *)srv_addr, sizeof(*srv_addr));
   if (ret < 0)
     {
-      if (srv_addr == &con->srv_ip4addr)
+      if (srv_addr == current_srv_ip4addr)
         {
           /* Could not connect to server. Try updating server IP address on
            * next try. */
-          memset(&con->srv_ip4addr, 0, sizeof(con->srv_ip4addr));
+          memset(current_srv_ip4addr, 0, sizeof(*current_srv_ip4addr));
         }
       goto err_close;
     }
@@ -822,8 +821,6 @@ void conn_complete_task_workflow(conn_workflow_context_s *context, int err)
         }
 
       conn_free_pointer((void**)&context->payload);
-      conn_free_pointer((void**)&context->url.host);
-      conn_free_pointer((void**)&context->url.api);
       conn_free_pointer((void**)&context);
     }
 }
