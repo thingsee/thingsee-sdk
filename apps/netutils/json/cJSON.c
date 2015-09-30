@@ -1166,12 +1166,12 @@ cJSON *cJSON_Parse_Old(const char *value)
 
 /* Render a cJSON item/entity/structure to text. */
 
-char *cJSON_Print(cJSON *item)
+char *cJSON_Print_Old(cJSON *item)
 {
   return print_value(item, 0, 1);
 }
 
-char *cJSON_PrintUnformatted(cJSON *item)
+char *cJSON_PrintUnformatted_Old(cJSON *item)
 {
   return print_value(item, 0, 0);
 }
