@@ -33,6 +33,8 @@
 #ifndef __APPS_INCLUDE_NETUTILS_JSON_H
 #define __APPS_INCLUDE_NETUTILS_JSON_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -126,6 +128,17 @@ char *cJSON_Print(cJSON *item);
  */
 
 char *cJSON_PrintUnformatted(cJSON *item);
+
+/* Render a cJSON entity to text for transfer/storage with or without
+ * formatting.
+ */
+
+void cJSON_Print_Stream(cJSON *item, bool formatted,
+                        void (*putc_fn)(char c, void *priv), void *putc_priv);
+
+/* Render a cJSON item/entity/structure to buffer. */
+
+size_t cJSON_Print_Buf(cJSON *item, bool formatted, char *buf, size_t buflen);
 
 /* Delete a cJSON entity and all subentities. */
 
