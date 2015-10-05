@@ -480,16 +480,13 @@ static int execute_http_request(struct sockaddr_in *srv_addr, uint16_t port, cha
     return NETWORK_ERROR;
 
   http_con_dbg("Connect to port %d ...\n", port);
-  srv_addr->sin_port = htons(port);
-  ret = connect(sock, (struct sockaddr *)srv_addr, sizeof(*srv_addr));
+  current_srv_ip4addr->sin_port = htons(port);
+  ret = connect(sock, (struct sockaddr *)current_srv_ip4addr, sizeof(*current_srv_ip4addr));
   if (ret < 0)
     {
-      if (srv_addr == current_srv_ip4addr)
-        {
-          /* Could not connect to server. Try updating server IP address on
-           * next try. */
-          memset(current_srv_ip4addr, 0, sizeof(*current_srv_ip4addr));
-        }
+      /* Could not connect to server. Try updating server IP address on
+       * next try. */
+      memset(current_srv_ip4addr, 0, sizeof(*current_srv_ip4addr));
       goto err_close;
     }
 
