@@ -38,7 +38,7 @@
 include $(APPDIR)/Make.defs
 
 ASRCS		=
-CSRCS		= cJSON.c
+CSRCS		= cJSON.c cJSON_stream_parse.c cJSON_stream_print.c
 
 AOBJS		= $(ASRCS:.S=$(OBJEXT))
 COBJS		= $(CSRCS:.c=$(OBJEXT))

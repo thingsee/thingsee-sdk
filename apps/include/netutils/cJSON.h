@@ -33,6 +33,8 @@
 #ifndef __APPS_INCLUDE_NETUTILS_JSON_H
 #define __APPS_INCLUDE_NETUTILS_JSON_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -99,25 +101,21 @@ typedef struct cJSON
   char *string;
 } cJSON;
 
-typedef struct cJSON_Hooks
-{
-  void *(*malloc_fn)(size_t sz);
-  void (*free_fn)(void *ptr);
-} cJSON_Hooks;
-
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
-
-/* Supply malloc, realloc and free functions to cJSON */
-
-void cJSON_InitHooks(cJSON_Hooks* hooks);
 
 /* Supply a block of JSON, and this returns a cJSON object you can
  * interrogate. Call cJSON_Delete when finished.
  */
 
 cJSON *cJSON_Parse(const char *value);
+
+/* Supply a stream of JSON, and this returns a cJSON object you can
+ * interrogate. Call cJSON_Delete when finished.
+ */
+
+cJSON *cJSON_Parse_Stream(char (*getc_fn)(void *priv), void *priv);
 
 /* Render a cJSON entity to text for transfer/storage. Free the char* when
  * finished.
@@ -130,6 +128,17 @@ char *cJSON_Print(cJSON *item);
  */
 
 char *cJSON_PrintUnformatted(cJSON *item);
+
+/* Render a cJSON entity to text for transfer/storage with or without
+ * formatting.
+ */
+
+void cJSON_Print_Stream(cJSON *item, bool formatted,
+                        void (*putc_fn)(char c, void *priv), void *putc_priv);
+
+/* Render a cJSON item/entity/structure to buffer. */
+
+size_t cJSON_Print_Buf(cJSON *item, bool formatted, char *buf, size_t buflen);
 
 /* Delete a cJSON entity and all subentities. */
 
