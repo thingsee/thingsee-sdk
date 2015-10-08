@@ -104,6 +104,13 @@ static inline void stream_puts(cJSON_outstream *stream, char *string)
     }
 }
 
+static bool dbl_equal(double a, double b)
+{
+  double fabs_a = fabs(a);
+  double fabs_b = fabs(b);
+  return fabs(a - b) <= ((fabs_a > fabs_b ? fabs_b : fabs_a) * DBL_EPSILON);
+}
+
 /* Render the number nicely from the given item into a string. */
 
 static void stream_print_number(cJSON *item, cJSON_outstream *stream)
@@ -116,20 +123,58 @@ static void stream_print_number(cJSON *item, cJSON_outstream *stream)
 
   /* Get type and needed length output string. */
 
-  if ((d <= INT_MAX && d >= INT_MIN) &&
-      (fabs(id - d) <= DBL_EPSILON || fabs(floor(d) - d) <= DBL_EPSILON))
+  if (item->valueint == 0 && d == 0.0)
     {
+      /* Handle zero separately as it's relation to DBL_EPSILON is special one
+       * and as zero has two exact presentations in floating point format (positive
+       * zero and negative zero). */
+
+      if (copysign(1.0, d) > 0.0)
+        {
+          /* Simply zero. */
+
+          str[0] = '0';
+          str[1] = '\0';
+          slen = 1;
+          type = 3;
+        }
+      else
+        {
+          /* Negative zero. */
+
+          slen = snprintf(str, sizeof(str), "%s", "-0.0");
+          type = 2;
+        }
+    }
+  else if (item->valueint != 0 && (d <= INT_MAX && d >= INT_MIN) &&
+           dbl_equal(d, id))
+    {
+      /* Integer value can accurately represent this value. */
+
       slen = snprintf(str, sizeof(str), "%d", item->valueint);
       type = 1;
     }
-  else if (fabs(d) < 1.0e-6 || fabs(d) > 1.0e9)
+  else if (fabs(d) < 1.0e-6 || fabs(d) > 1.0e14)
     {
-      slen = snprintf(str, sizeof(str), "%e", d);
+      /* Double can represent 15 significant digits. */
+
+      slen = snprintf(str, sizeof(str), "%.14e", d);
       type = -1;
     }
   else
     {
-      slen = snprintf(str, sizeof(str), "%.10f", d);
+      int ndigits_before_dot = (int)log10(fabs(d));
+      int ndigits_after_dot = 15 - ndigits_before_dot;
+      char fmtstr[8];
+
+      /* Double can represent 15 significant digits. */
+
+      if (ndigits_after_dot < 0)
+        ndigits_after_dot = 0;
+
+      snprintf(fmtstr, sizeof(fmtstr), "%%.%df", ndigits_after_dot);
+
+      slen = snprintf(str, sizeof(str), fmtstr, d);
       type = 0;
     }
 
