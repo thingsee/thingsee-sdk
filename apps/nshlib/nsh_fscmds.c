@@ -104,16 +104,6 @@ typedef int (*direntry_handler_t)(FAR struct nsh_vtbl_s *, const char *,
  * Private Data
  ****************************************************************************/
 
-#if CONFIG_NFILE_DESCRIPTORS > 0
-/* Common buffer for file I/O.  Note the use of this common buffer precludes
- * multiple copies of NSH running concurrently.  It should be allocated per
- * NSH instance and retained in the "vtbl" as is done for the telnet
- * connection.
- */
-
-static char g_iobuffer[IOBUFFERSIZE];
-#endif
-
 /****************************************************************************
  * Public Data
  ****************************************************************************/
@@ -627,6 +617,13 @@ int cmd_cp(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
   int rdfd;
   int wrfd;
   int ret = ERROR;
+  char *iobuffer;
+
+  iobuffer = malloc(IOBUFFERSIZE);
+  if (!iobuffer)
+    {
+      goto errout;
+    }
 
   /* Get the full path to the source file */
 
@@ -706,7 +703,7 @@ int cmd_cp(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
 
       do
         {
-          nbytesread = read(rdfd, g_iobuffer, IOBUFFERSIZE);
+          nbytesread = read(rdfd, iobuffer, IOBUFFERSIZE);
           if (nbytesread == 0)
             {
               /* End of file */
@@ -737,7 +734,7 @@ int cmd_cp(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
 
       do
         {
-          nbyteswritten = write(wrfd, g_iobuffer, nbytesread);
+          nbyteswritten = write(wrfd, iobuffer, nbytesread);
           if (nbyteswritten >= 0)
             {
               nbytesread -= nbyteswritten;
@@ -788,6 +785,10 @@ errout_with_srcpath:
       nsh_freefullpath(srcpath);
     }
 errout:
+  if (iobuffer)
+    {
+      free(iobuffer);
+    }
   return ret;
 }
 #endif
