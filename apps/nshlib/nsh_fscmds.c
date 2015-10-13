@@ -147,19 +147,26 @@ static void trim_dir(char *arg)
 #if CONFIG_NFILE_DESCRIPTORS > 0
 static char *nsh_getdirpath(const char *path, const char *file)
 {
+  char *dirpath = NULL;
+  int ret;
+
   /* Handle the case where all that is left is '/' */
 
   if (strcmp(path, "/") == 0)
     {
-      sprintf(g_iobuffer, "/%s", file);
+      ret = asprintf(&dirpath, "/%s", file);
     }
   else
     {
-      sprintf(g_iobuffer, "%s/%s", path, file);
+      ret = asprintf(&dirpath, "%s/%s", path, file);
     }
 
-  g_iobuffer[PATH_MAX] = '\0';
-  return strdup(g_iobuffer);
+  if (ret < 0)
+    {
+      dirpath = NULL;
+    }
+
+  return dirpath;
 }
 #endif
 
