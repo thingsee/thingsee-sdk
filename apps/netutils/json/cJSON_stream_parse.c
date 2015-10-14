@@ -876,6 +876,7 @@ cJSON *cJSON_Parse_Stream(char (*getc_fn)(void *priv), void *priv)
       return NULL;
     }
 
+#ifndef CONFIG_NETUTILS_JSON_PARSE_IGNORE_MISSING_NULL_TERMINATOR
   skip(&stream);
   if (stream_get(&stream))
     {
@@ -884,6 +885,7 @@ cJSON *cJSON_Parse_Stream(char (*getc_fn)(void *priv), void *priv)
       cJSON_Delete(c);
       return NULL;
     }
+#endif
 
   return c;
 }
