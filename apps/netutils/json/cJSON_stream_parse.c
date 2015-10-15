@@ -147,7 +147,7 @@ static cJSON_instream *stream_parse_number(cJSON *item, cJSON_instream *in)
       if (stream_peek(in) != '.' && stream_peek(in) != 'e' &&
           stream_peek(in) != 'E')
         {
-          n = sign * 0.0;
+          n = copysign(0.0, sign);
           item->valuedouble = n;
           item->valueint = (int)n;
           item->type = cJSON_Number;
@@ -211,7 +211,7 @@ static cJSON_instream *stream_parse_number(cJSON *item, cJSON_instream *in)
 
   /* number = +/- number.fraction * 10^+/-exponent */
 
-  n = sign * n * pow(10.0, (scale + subscale * signsubscale));
+  n = copysign(n * pow(10.0, (scale + subscale * signsubscale)), sign);
   item->valuedouble = n;
   item->valueint = (int)n;
   item->type = cJSON_Number;
