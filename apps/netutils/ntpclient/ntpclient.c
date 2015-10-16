@@ -497,16 +497,52 @@ static void ntpc_calculate_offset(int64_t *offset, int64_t *delay,
  *
  ****************************************************************************/
 
-static void ntpc_settime(int64_t offset)
+static void ntpc_settime(int64_t offset, struct timespec *start_realtime,
+                         struct timespec *start_monotonic)
 {
+  struct timespec curr_monotonic;
+  struct timespec curr_realtime;
   struct timespec tp;
+  int64_t diffms_real;
+  int64_t diffms_mono;
+  int64_t diff_diff_ms;
 
-  /* Get the system time */
+  /* Get the system times */
 
-  (void)clock_gettime(CLOCK_REALTIME, &tp);
+  (void)clock_gettime(CLOCK_REALTIME, &curr_realtime);
+  (void)clock_gettime(CLOCK_MONOTONIC, &curr_monotonic);
+
+  /* Check differences between monotonic and realtime. */
+
+  diffms_real = curr_realtime.tv_sec - start_realtime->tv_sec;
+  diffms_real *= 1000;
+  diffms_real += (int64_t)(curr_realtime.tv_nsec - start_realtime->tv_nsec) /
+                          (1000 * 1000);
+
+  diffms_mono = curr_monotonic.tv_sec - start_monotonic->tv_sec;
+  diffms_mono *= 1000;
+  diffms_mono += (int64_t)(curr_monotonic.tv_nsec - start_monotonic->tv_nsec) /
+                          (1000 * 1000);
+
+  /* Detect if real-time has been altered by other task. */
+
+  diff_diff_ms = diffms_real - diffms_mono;
+  if (diff_diff_ms < 0)
+    {
+      diff_diff_ms = -diff_diff_ms;
+    }
+
+  if (diff_diff_ms >= 1000)
+    {
+      dbg("System time altered by other task by %lld msecs, "
+          "do not apply offset.\n", diff_diff_ms);
+
+      return;
+    }
 
   /* Apply offset */
 
+  tp = curr_realtime;
   tp.tv_sec  += ntp_secpart(offset);
   tp.tv_nsec += ntp_nsecpart(offset);
   while (tp.tv_nsec >= NSEC_PER_SEC)
@@ -1110,8 +1146,12 @@ static int ntpc_daemon(int argc, char **argv)
   sched_lock();
   while (g_ntpc_daemon.state != NTP_STOP_REQUESTED)
     {
+      struct timespec start_realtime, start_monotonic;
       int errval = 0;
       int i;
+
+      (void)clock_gettime(CLOCK_REALTIME, &start_realtime);
+      (void)clock_gettime(CLOCK_MONOTONIC, &start_monotonic);
 
       /* Collect samples. */
 
@@ -1184,7 +1224,7 @@ static int ntpc_daemon(int argc, char **argv)
 
           /* Adjust system time. */
 
-          ntpc_settime(offset);
+          ntpc_settime(offset, &start_realtime, &start_monotonic);
 
 #ifndef CONFIG_NETUTILS_NTPCLIENT_STAY_ON
           /* Configured to exit at success. */
