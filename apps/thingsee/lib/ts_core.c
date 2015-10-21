@@ -1219,7 +1219,6 @@ int __ts_core_fd_register(const int fd, const pollevent_t events,
 {
   struct ts_core_s * ts_core = &g_ts_core;
   struct file_s * file;
-  bool reuse = false;
 
   /* Check input parameters */
 
@@ -1246,9 +1245,10 @@ int __ts_core_fd_register(const int fd, const pollevent_t events,
               return ERROR;
             }
 
-          reuse = true;
-
-          goto reuse_file;
+          /* We used to 'reuse' entry here. We must not do this, as
+           * new 'fd' might not be for same device instance as the original
+           * 'file->fd'. Setting 'active' could activate callback too early
+           * if poll result handling loop is being currently processed. */
         }
 
       /* Move to next file */
@@ -1258,15 +1258,13 @@ int __ts_core_fd_register(const int fd, const pollevent_t events,
 
   /* Allocate memory for file */
 
-  file = malloc(sizeof(struct file_s));
+  file = calloc(1, sizeof(struct file_s));
   if (!file)
     {
       set_errno(ENOMEM);
 
       return ERROR;
     }
-
-reuse_file:
 
   /* Setup file descriptor for monitoring */
 
@@ -1277,12 +1275,9 @@ reuse_file:
   file->priv = priv;
   file->reg_func_name = reg_func_name;
 
-  if (!reuse)
-    {
-      /* Add file to file descriptor queue */
+  /* Add file to file descriptor queue */
 
-      sq_addlast(&file->entry, &ts_core->files);
-    }
+  sq_addlast(&file->entry, &ts_core->files);
 
   return OK;
 }
