@@ -2633,6 +2633,22 @@ static void up_dma_rxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
         }
 #endif
     }
+
+  /* Get the masked USART status word to check and clear error flags.
+   * If error flag is not cleared, Rx DMA will be stuck. Clearing errors
+   * will release Rx DMA. */
+
+  priv->sr = up_serialin(priv, STM32_USART_SR_OFFSET);
+
+  if ((priv->sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE)) != 0)
+    {
+#if defined(CONFIG_STM32_STM32F30XX) || defined(CONFIG_STM32_STM32F37XX)
+      up_serialout(priv, STM32_USART_ICR_OFFSET,
+                  (USART_ICR_NCF | USART_ICR_ORECF | USART_ICR_FECF));
+#else
+      (void)up_serialin(priv, STM32_USART_RDR_OFFSET);
+#endif
+    }
 }
 #endif
 
