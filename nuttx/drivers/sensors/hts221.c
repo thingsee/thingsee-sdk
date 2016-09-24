@@ -245,7 +245,7 @@ static int hts221_get_id(FAR struct hts221_dev_t *priv, uint8_t * value)
 
   ret = hts221_read_reg(priv, &cmd, value);
 
-  hts221_lldbg("Who am I request: 0x%02X\n", *value);
+  hts221_dbg("Who am I request: 0x%02X\n", *value);
 
   return ret;
 }
@@ -261,7 +261,7 @@ static int hts221_cfgr_resolution(FAR struct hts221_dev_t *priv,
   const uint8_t mask = 0x3F;
 
   ret = hts221_read_reg(priv, &addr, &regval);
-  hts221_lldbg("Default resolution: 0x%02X\n", regval);
+  hts221_dbg("Default resolution: 0x%02X\n", regval);
   if (ret < 0)
     {
       return ERROR;
@@ -271,11 +271,11 @@ static int hts221_cfgr_resolution(FAR struct hts221_dev_t *priv,
   regval &= ~mask;
   cmd[0] = addr;
   cmd[1] = regval | value;
-  hts221_lldbg("New resolution: 0x%02X\n", cmd[1]);
+  hts221_dbg("New resolution: 0x%02X\n", cmd[1]);
 
   ret = hts221_write_reg8(priv, cmd);
 
-  hts221_lldbg("Resolution changed: temp=%d humid=%d ret=%d\n",
+  hts221_dbg("Resolution changed: temp=%d humid=%d ret=%d\n",
                settings->temp_resol, settings->humid_resol, ret);
 
   return ret;
@@ -291,7 +291,7 @@ static int hts221_config_ctrl_reg3(FAR struct hts221_dev_t *priv,
   uint8_t data_to_write[2] = { 0 };
 
   ret = hts221_read_reg(priv, &addr, &regval);
-  hts221_lldbg("CTRL_REG3: 0x%02X\n", regval);
+  hts221_dbg("CTRL_REG3: 0x%02X\n", regval);
   if (ret < 0)
     {
       return ERROR;
@@ -320,7 +320,7 @@ static int hts221_config_ctrl_reg2(FAR struct hts221_dev_t *priv,
   uint8_t data_to_write[2] = { 0 };
 
   ret = hts221_read_reg(priv, &addr, &regval);
-  hts221_lldbg("CTRL_REG2: 0x%02X\n", regval);
+  hts221_dbg("CTRL_REG2: 0x%02X\n", regval);
   if (ret < 0)
     {
       return ERROR;
@@ -347,7 +347,7 @@ static int hts221_config_ctrl_reg1(FAR struct hts221_dev_t *priv,
   uint8_t data_to_write[2] = { 0 };
 
   ret = hts221_read_reg(priv, &addr, &regval);
-  hts221_lldbg("CTRL_REG1: 0x%02X\n", regval);
+  hts221_dbg("CTRL_REG1: 0x%02X\n", regval);
   if (ret < 0)
     {
       return ERROR;
@@ -374,7 +374,7 @@ static int hts221_power_on_off(FAR struct hts221_dev_t *priv, bool on)
   uint8_t data_to_write[2];
 
   ret = hts221_read_reg(priv, &addr, &regval);
-  hts221_lldbg("CTRL_REG1: 0x%02X\n", regval);
+  hts221_dbg("CTRL_REG1: 0x%02X\n", regval);
   if (ret < 0)
     {
       return ret;
@@ -446,7 +446,7 @@ static int hts221_start_conversion(FAR struct hts221_dev_t *priv)
   ret = hts221_write_reg8(priv, data_to_write);
   if (ret < 0)
     {
-      hts221_lldbg("Cannot start conversion\n");
+      hts221_dbg("Cannot start conversion\n");
       ret = ERROR;
     }
 
@@ -516,7 +516,7 @@ static int hts221_read_raw_data(FAR struct hts221_dev_t *priv,
   priv->int_pending = false;
   irqrestore(flags);
 
-  hts221_lldbg("Humid: 0x%02X, 0x%02X Temper: 0x%02X 0x%02X\n",
+  hts221_dbg("Humid: 0x%02X, 0x%02X Temper: 0x%02X 0x%02X\n",
                data->humid_high_bits, data->humid_low_bits,
                data->temp_high_bits, data->temp_low_bits);
 
@@ -615,14 +615,14 @@ static int hts221_load_calibration_data(FAR struct hts221_dev_t *priv)
   priv->calib.h0_t0_out = (uint16_t) (h0t0_out_lsb | (h0t0_out_msb << 8));
   priv->calib.h1_t0_out = (uint16_t) (h1t0_out_lsb | (h1t0_out_msb << 8));
 
-  hts221_lldbg("calib.t0_x8: %d\n", priv->calib.t0_x8);
-  hts221_lldbg("calib.t1_x8: %d\n", priv->calib.t1_x8);
-  hts221_lldbg("calib.t0_out: %d\n", priv->calib.t0_out);
-  hts221_lldbg("calib.t1_out: %d\n", priv->calib.t1_out);
-  hts221_lldbg("calib.h0_x2: %d\n", priv->calib.h0_x2);
-  hts221_lldbg("calib.h1_x2: %d\n", priv->calib.h1_x2);
-  hts221_lldbg("calib.h0_t0_out: %d\n", priv->calib.h0_t0_out);
-  hts221_lldbg("calib.h1_t0_out: %d\n", priv->calib.h1_t0_out);
+  hts221_dbg("calib.t0_x8: %d\n", priv->calib.t0_x8);
+  hts221_dbg("calib.t1_x8: %d\n", priv->calib.t1_x8);
+  hts221_dbg("calib.t0_out: %d\n", priv->calib.t0_out);
+  hts221_dbg("calib.t1_out: %d\n", priv->calib.t1_out);
+  hts221_dbg("calib.h0_x2: %d\n", priv->calib.h0_x2);
+  hts221_dbg("calib.h1_x2: %d\n", priv->calib.h1_x2);
+  hts221_dbg("calib.h0_t0_out: %d\n", priv->calib.h0_t0_out);
+  hts221_dbg("calib.h1_t0_out: %d\n", priv->calib.h1_t0_out);
 
   /* As calibration coefficients are unique to each sensor device,
    * they are a good candidate to be added to entropy pool.
@@ -654,7 +654,7 @@ static int hts221_calculate_temperature(FAR struct hts221_dev_t *priv,
 
   *temperature = (int)y;
 
-  hts221_lldbg("Interpolation data temper: %d\n", *temperature);
+  hts221_dbg("Interpolation data temper: %d\n", *temperature);
 
   return OK;
 }
@@ -680,7 +680,7 @@ static int hts221_calculate_humidity(FAR struct hts221_dev_t *priv,
 
   *humidity = (int)y;
 
-  hts221_lldbg("Interpolation data humidity: %d\n", *humidity);
+  hts221_dbg("Interpolation data humidity: %d\n", *humidity);
 
   return OK;
 }
@@ -703,7 +703,7 @@ static int hts221_read_convert_data(FAR struct hts221_dev_t *priv,
       return ERROR;
     }
 
-  hts221_lldbg("Temperature calculated\n");
+  hts221_dbg("Temperature calculated\n");
 
   ret = hts221_calculate_humidity(priv, &data->humidity, &raw_data);
   if (ret < 0)
@@ -711,7 +711,7 @@ static int hts221_read_convert_data(FAR struct hts221_dev_t *priv,
       return ERROR;
     }
 
-  hts221_lldbg("Humidity calculated\n");
+  hts221_dbg("Humidity calculated\n");
 
   return ret;
 }
@@ -731,28 +731,28 @@ static int hts221_dump_registers(FAR struct hts221_dev_t *priv)
     {
       return ERROR;
     }
-  hts221_lldbg("AV_CONF_REG: 0x%02X\n", regval);
+  hts221_dbg("AV_CONF_REG: 0x%02X\n", regval);
 
   ret = hts221_read_reg(priv, &ctrl_reg1_addr, &regval);
   if (ret < 0)
     {
       return ERROR;
     }
-  hts221_lldbg("CTRL_REG_1: 0x%02X\n", regval);
+  hts221_dbg("CTRL_REG_1: 0x%02X\n", regval);
 
   ret = hts221_read_reg(priv, &ctrl_reg2_addr, &regval);
   if (ret < 0)
     {
       return ERROR;
     }
-  hts221_lldbg("CTRL_REG_2: 0x%02X\n", regval);
+  hts221_dbg("CTRL_REG_2: 0x%02X\n", regval);
 
   ret = hts221_read_reg(priv, &ctrl_reg3_addr, &regval);
   if (ret < 0)
     {
       return ERROR;
     }
-  hts221_lldbg("CTRL_REG_3: 0x%02X\n", regval);
+  hts221_dbg("CTRL_REG_3: 0x%02X\n", regval);
 
   return ret;
 }

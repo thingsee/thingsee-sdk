@@ -72,9 +72,9 @@ typedef int (*ts_fd_callback_t)(const struct pollfd * const pfd, void * const pr
 /* Timer type */
 
 enum ts_timer_type_e {
-  TS_TIMER_TYPE_INTERVAL = 0,           /* Timer type is interval */
-  TS_TIMER_TYPE_TIMEOUT,                /* Timer type is one shot timeout */
-  TS_TIMER_TYPE_DATE,                   /* Timer type is absolute date/time */
+  TS_TIMER_TYPE_DATE = 0,       /* Timer type is date timer (using RTC, allow deep-sleep) */
+  TS_TIMER_TYPE_INTERVAL,       /* Timer type is interval (using RTC, allow deep-sleep) */
+  TS_TIMER_TYPE_TIMEOUT,        /* Timer type is one shot timeout (using RTC, allow deep-sleep) */
   TS_TIMER_TYPE_MAX,
 };
 typedef enum ts_timer_type_e ts_timer_type_t;
@@ -151,6 +151,26 @@ int __ts_core_fd_register(const int fd, const pollevent_t events,
                           const char *reg_func_name);
 
 /****************************************************************************
+ * Name: ts_core_fd_set_poll_events
+ *
+ * Description:
+ *   Update new poll events for file descriptor.
+ *   Call this only from callback
+ *
+ * Input Parameters:
+ *   fd          - File descriptor that is currently monitored
+ *   events      - new poll events
+ *
+ * Returned Value:
+ *   0 (OK) means the function was executed successfully
+ *  -1 (ERROR) means the function was executed unsuccessfully. Check value of
+ *  errno for more details.
+ *
+ ****************************************************************************/
+
+int ts_core_fd_set_poll_events(const int fd, const pollevent_t events);
+
+/****************************************************************************
  * Name: ts_core_fd_unregister
  *
  * Description:
@@ -222,6 +242,9 @@ int ts_core_timer_setup_date(const struct timespec *date, const ts_timer_date_ca
  *
  ****************************************************************************/
 #define ts_core_timer_stop(timer_id) ({ \
+    char __fail_compile_if_timer_id_type_is_unsigned[ \
+      (!(((typeof(timer_id))-1) >= 0) * 2 - 1) \
+    ]; \
     DEBUGASSERT(timer_id >= TS_CORE_FIRST_TIMER_ID); \
     __ts_core_timer_stop(timer_id); \
   })

@@ -350,6 +350,42 @@ int usrsock_socket(int domain, int type, int protocol, FAR struct socket *psock)
 
 int usrsock_close(FAR struct usrsock_conn_s *conn);
 
+
+/* Defined in usrsock_bind.c ************************************************/
+/****************************************************************************
+ * Name: usrsock_bind
+ *
+ * Description:
+ *   usrsock_bind() gives the socket 'conn' the local address 'addr'. 'addr'
+ *   is 'addrlen' bytes long. Traditionally, this is called "assigning a name
+ *   to a socket." When a socket is created with socket, it exists in a name
+ *   space (address family) but has no name assigned.
+ *
+ * Parameters:
+ *   conn     usrsock socket connection structure
+ *   addr     Socket local address
+ *   addrlen  Length of 'addr'
+ *
+ * Returned Value:
+ *   0 on success; -1 on error with errno set appropriately
+ *
+ *   EACCES
+ *     The address is protected, and the user is not the superuser.
+ *   EADDRINUSE
+ *     The given address is already in use.
+ *   EINVAL
+ *     The socket is already bound to an address.
+ *   ENOTSOCK
+ *     psock is a descriptor for a file, not a socket.
+ *
+ * Assumptions:
+ *
+ ****************************************************************************/
+
+int usrsock_bind(FAR struct usrsock_conn_s *conn,
+                 FAR const struct sockaddr *addr,
+                 socklen_t addrlen);
+
 /* Defined in usrsock_connect.c *********************************************/
 /****************************************************************************
  * Name: usrsock_connect

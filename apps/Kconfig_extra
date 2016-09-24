@@ -1,0 +1,6 @@
+source "$APPSDIR/examples/cbordump/Kconfig"
+source "$APPSDIR/examples/coap_cli/Kconfig"
+source "$APPSDIR/external/example_app/Kconfig"
+source "$APPSDIR/netutils/libcoap/Kconfig"
+source "$APPSDIR/netutils/mbedtls/Kconfig"
+source "$APPSDIR/netutils/tinycbor/Kconfig"

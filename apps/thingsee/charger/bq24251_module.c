@@ -2,7 +2,8 @@
  * apps/thingsee/charger/bq24251_module.c
  *
  *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
- *   Author: Dmitry Nikolaev <dmitry.nikolaev@haltian.com>
+ *   Authors: Dmitry Nikolaev <dmitry.nikolaev@haltian.com>
+ *            Juha Niskanen <juha.niskanen@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,31 +48,37 @@
 #include <poll.h>
 #include <string.h>
 #include <apps/thingsee/ts_core.h>
-#include <arch/board/board.h>
 
 #include <nuttx/power/bq24251.h>
+#include <arch/board/board.h>
+#include <arch/board/board-battery.h>
+
 #include "bq24251_module.h"
 
 #define CHARGER_DEV_PATH			"/dev/charger0"
 #define CHARGER_DEV_DELAY_SEC		2
 
 #undef bq24251_dbg
-#undef bq24251_lldbg
 #ifdef CONFIG_THINGSEE_CHARGER_MODULE_DBG
 #  define bq24251_dbg(x, ...)   dbg(x, ##__VA_ARGS__)
-#  define bq24251_lldbg(x, ...) lldbg(x, ##__VA_ARGS__)
 #  define bq24251_dbg_perror(x) dbg("%s: %d\n", x, errno)
 #else
 #  define bq24251_dbg(x, ...)
-#  define bq24251_lldbg(x, ...)
 #  define bq24251_dbg_perror(x)
 #endif
+
+enum bq24251_plugged_state_e
+{
+  PLUGGED_STATE_UNKNOWN = 0,
+  PLUGGED_STATE_TRUE,
+  PLUGGED_STATE_FALSE,
+};
 
 typedef struct bq24251_charger_dev_t
   {
     int file;
     int timer;
-    bool is_plugged;
+    enum bq24251_plugged_state_e plugged;
     unsigned char det_attempts;
     bq24251_state_t state;
   } bq24251_charger_dev_t;
@@ -88,7 +95,7 @@ static int bq24251_check_status_bits(void);
 static bq24251_charger_dev_t g_charger = {
   .file = -1,
   .timer = -1,
-  .is_plugged = false,
+  .plugged = PLUGGED_STATE_UNKNOWN,
   .det_attempts = 0,
   .state = BQ24251_READY_ST,
 };
@@ -192,8 +199,7 @@ static int bq24251_timer_callback(const int timer_id,
  *   Charger stops charger IC from doing bad things
  *
  * Input Parameters:
- *   is_dead_fault    - if fault is dangerous for TS device,
- *   					it will be shot down
+ *   is_dead_fault    - if fault is dangerous for TS device, turn device off.
  *
  * Returned Value:
  * 	0 on success and -1 on ERROR
@@ -205,26 +211,17 @@ static int bq24251_charger_stop_charging(bool is_dead_fault)
   bq24251_data_t data = {
     .enable_ce = false,
     .enable_hz = false,
-    .enable_term = false,
   };
 
   if (is_dead_fault)
     {
-      ret =
-        ioctl(g_charger.file, BQ24251_IOC_SET_CHARGE_ENABLE,
-              (unsigned int)&data);
+      ret = ioctl(g_charger.file, BQ24251_IOC_SET_CHARGE_ENABLE,
+                  (unsigned int)&data);
       if (ret < 0)
         {
           bq24251_dbg_perror("Failed to disable charger");
           goto fail;
         }
-    }
-
-  ret = ioctl(g_charger.file, BQ24251_IOC_SET_TERM, (unsigned int)&data);
-  if (ret < 0)
-    {
-      bq24251_dbg_perror("Failed to set TERM");
-      goto fail;
     }
 
   ret = ioctl(g_charger.file, BQ24251_IOC_SET_HZ, (unsigned int)&data);
@@ -293,9 +290,8 @@ static int bq24251_charger_type_detection(enum bq24251_state_t status)
 
   bq24251_stop_detect_timer();
 
-  switch (data.chrg_type)
+  if (data.chrg_type == BQ24251_CHRG_DCP)
     {
-    case BQ24251_CHRG_DCP:
       /*
        * DCP is reported after USB detection is completed and there is no
        * charger actually connected. Use status to determinate if we are
@@ -312,24 +308,22 @@ static int bq24251_charger_type_detection(enum bq24251_state_t status)
           ret = -ENOLINK;
           goto fail;
         }
+    }
 
-      data.ilim = BQ24251_ILIM_CHRG_1500MA;
-      data.chrg_current = BQ24251_CHRG_CURRENT_2000;
+  /* Parse port type and notify upper SW layers. */
+
+  switch (data.chrg_type)
+    {
+    case BQ24251_CHRG_DCP:
       porttype = "DCP";
       break;
     case BQ24251_CHRG_CDP:
-      data.ilim = BQ24251_ILIM_CHRG_1500MA;
-      data.chrg_current = BQ24251_CHRG_CURRENT_1500;
       porttype = "CDP";
       break;
     case BQ24251_CHRG_SDP:
-      data.ilim = BQ24251_ILIM_USB20_500MA;
-      data.chrg_current = BQ24251_CHRG_CURRENT_500;
       porttype = "SDP";
       break;
     case BQ24251_CHRG_TT:
-      data.ilim = BQ24251_ILIM_USB20_500MA;
-      data.chrg_current = BQ24251_CHRG_CURRENT_500;
       porttype = "nonstd";
       break;
     default:
@@ -339,6 +333,38 @@ static int bq24251_charger_type_detection(enum bq24251_state_t status)
 
   bq24251_notify_usb_connect(porttype);
 
+  /* Set charging limits and currents. */
+
+#ifdef HAVE_BOARD_GET_BATTERY_SAFE_LIMITS
+  data.ilim = board_get_battery_safe_ilim(data.chrg_type);
+  data.chrg_current = board_get_battery_safe_charger_current(data.chrg_type);
+
+  /* Increase charge termination threshold for easier
+     detection of charging ending: */
+  data.term_current = BQ24251_ITERM_100MA;
+#else /* Thingsee */
+  switch (data.chrg_type)
+    {
+    case BQ24251_CHRG_DCP:
+      data.ilim = BQ24251_ILIM_CHRG_1500MA;
+      data.chrg_current = BQ24251_CHRG_CURRENT_2000;
+      break;
+    case BQ24251_CHRG_CDP:
+      data.ilim = BQ24251_ILIM_CHRG_1500MA;
+      data.chrg_current = BQ24251_CHRG_CURRENT_1500;
+      break;
+    case BQ24251_CHRG_SDP:
+      data.ilim = BQ24251_ILIM_USB20_500MA;
+      data.chrg_current = BQ24251_CHRG_CURRENT_500;
+      break;
+    case BQ24251_CHRG_TT:
+      data.ilim = BQ24251_ILIM_USB20_500MA;
+      data.chrg_current = BQ24251_CHRG_CURRENT_500;
+      break;
+    }
+  data.term_current = BQ24251_ITERM_DEFAULT;
+#endif
+
   ret = ioctl(g_charger.file, BQ24251_IOC_SET_ILIM, (unsigned int)&data);
   if (ret < 0)
     {
@@ -347,8 +373,7 @@ static int bq24251_charger_type_detection(enum bq24251_state_t status)
       goto fail;
     }
 
-  ret =
-    ioctl(g_charger.file, BQ24251_IOC_SET_CHRG_CURRENT, (unsigned int)&data);
+  ret = ioctl(g_charger.file, BQ24251_IOC_SET_CHRG_CURRENT, (unsigned int)&data);
   if (ret < 0)
     {
       ret = -errno;
@@ -378,7 +403,10 @@ static int bq24251_charger_work_handler(bq24251_data_t * work_status)
 
   if (work_status->sts->state != BQ24251_DONE_ST)
     {
-      bq24251_charger_event(BQ24251_CHRG_EVENT_CHARGING);
+      if (g_charger.plugged != PLUGGED_STATE_UNKNOWN)
+        {
+          bq24251_charger_event(BQ24251_CHRG_EVENT_CHARGING);
+        }
     }
   else
     {
@@ -386,17 +414,17 @@ static int bq24251_charger_work_handler(bq24251_data_t * work_status)
       bq24251_charger_stop_charging(false);
     }
 
-  bq24251_lldbg("g_charger.det_attempts = %d\n",
+  bq24251_dbg("g_charger.det_attempts = %d\n",
                 (int)g_charger.det_attempts);
 
   if (g_charger.det_attempts > 3)
     {
-      g_charger.is_plugged = false;
+      g_charger.plugged = PLUGGED_STATE_FALSE;
       bq24251_stop_detect_timer();
       return ERROR;
     }
 
-  if (!g_charger.is_plugged)
+  if (g_charger.plugged != PLUGGED_STATE_TRUE) /* FALSE or UNKNOWN */
     {
       ret = ioctl(g_charger.file, BQ24251_IOC_INIT, 0);
       if (ret < 0)
@@ -416,14 +444,26 @@ static int bq24251_charger_work_handler(bq24251_data_t * work_status)
               bq24251_setup_detect_timer();
             }
           else
-            goto fail;
+            {
+              goto fail;
+            }
         }
       else
         g_charger.det_attempts = 0;
     }
 
   if (ret == OK)
-    g_charger.is_plugged = true;
+    {
+      if (g_charger.plugged == PLUGGED_STATE_UNKNOWN)
+        {
+          if (work_status->sts->state != BQ24251_DONE_ST)
+            {
+              bq24251_charger_event(BQ24251_CHRG_EVENT_CHARGING);
+            }
+        }
+
+      g_charger.plugged = PLUGGED_STATE_TRUE;
+    }
 
 fail:
   return ret;
@@ -448,7 +488,7 @@ static int bq24251_charger_fault_handler(bq24251_data_t * status_fault)
 
   switch (status_fault->sts->fault)
     {
-#define X(x) case x: bq24251_lldbg("fault: %s\n", #x); break;
+#define X(x) case x: bq24251_dbg("fault: %s\n", #x); break;
       X(BQ24251_INPUT_OVP);
       X(BQ24251_THERMAL_SHUTDOWN);
       X(BQ24251_BATTERY_OVP);
@@ -464,47 +504,49 @@ static int bq24251_charger_fault_handler(bq24251_data_t * status_fault)
 #undef X
     }
 
-  // TO DO: go through the list of faults if needed
-  // For now only the first fault will be checked
+  /* TODO: go through the entire list of faults.
+   * For now only the first fault will be checked.
+   */
   switch (status_fault->sts->fault)
     {
-    case BQ24251_INPUT_OVP:    /* Input OVP */
-    case BQ24251_THERMAL_SHUTDOWN:     /* TS SHUTDOWN */
+    case BQ24251_INPUT_OVP:
+    case BQ24251_THERMAL_SHUTDOWN:
     case BQ24251_BATTERY_OVP:
-      bq24251_lldbg("Dead fault occurred\n");
+      bq24251_dbg("Dead fault occurred\n");
       bq24251_charger_stop_charging(true);
       bq24251_charger_event(BQ24251_CHRG_EVENT_FAULT);
       break;
     case BQ24251_INPUT_UVLO:
-    case BQ24251_LDO_SHORT:    /* LDO Short */
-    case BQ24251_SLEEP:        /* SLEEP */
-      if (g_charger.is_plugged)
+    case BQ24251_LDO_SHORT:
+    case BQ24251_SLEEP:
+      if (g_charger.plugged != PLUGGED_STATE_FALSE) /* TRUE or UNKNOWN */
         {
-          bq24251_lldbg("Charger disconnected\n");
+          bq24251_dbg("Charger disconnected\n");
           bq24251_charger_stop_charging(false);
           bq24251_charger_event(BQ24251_CHRG_EVENT_NO_CHARGER);
           bq24251_notify_usb_connect(NULL);
-          g_charger.is_plugged = false;
+          g_charger.plugged = PLUGGED_STATE_FALSE;
           g_charger.det_attempts = 0;
         }
       else if (g_charger.det_attempts > 0)
         {
           /* poll might be running if we are in middle of USB detection cycle. */
           bq24251_stop_detect_timer();
+          bq24251_charger_event(BQ24251_CHRG_EVENT_FAULT);
         }
       break;
     case BQ24251_BATTERY_TS_FAULT:
     case BQ24251_TIMER_FAULT:
-    case BQ24251_NO_BATTERY_CONNECTED: /* No BAT Connected */
-    case BQ24251_ISET_SHORT:   /* ISET Short */
-      bq24251_lldbg("Device is still alive\n");
+    case BQ24251_NO_BATTERY_CONNECTED:
+    case BQ24251_ISET_SHORT:
+      bq24251_dbg("Device is still alive\n");
       bq24251_charger_stop_charging(false);
       bq24251_charger_event(BQ24251_CHRG_EVENT_FAULT);
-      g_charger.is_plugged = false;
+      g_charger.plugged = PLUGGED_STATE_FALSE;
       g_charger.det_attempts = 0;
       break;
     default:
-      bq24251_lldbg("Unknown fault detected\n");
+      bq24251_dbg("Unknown fault detected\n");
       break;
     }
 
@@ -556,9 +598,10 @@ static int bq24251_check_status_bits(void)
           break;
         }
 
-      bq24251_lldbg("Check status bit state: %d Fault member: %d Fault count: %d Is plugged: %d\n",
+      bq24251_dbg("Check status bit state: %d Fault member: %d Fault count: %d Is plugged: %s\n",
                     data.sts->state, data.sts->fault, fault_count,
-                    (g_charger.is_plugged ? 1 : 0));
+                    (g_charger.plugged == PLUGGED_STATE_FALSE ? "false" :
+                     (g_charger.plugged == PLUGGED_STATE_TRUE ? "true" : "unknown")));
 
       g_charger.state = data.sts->state;
 
@@ -571,6 +614,18 @@ static int bq24251_check_status_bits(void)
       else
         {
           ret = bq24251_charger_work_handler(&data);
+          if (ret == -ENOLINK)
+            {
+              if (g_charger.plugged == PLUGGED_STATE_UNKNOWN)
+                {
+                  /* Not connected, missed SLEEP fault because reboot.
+                   * Generate SLEEP. */
+
+                  data.sts->fault = BQ24251_SLEEP;
+
+                  bq24251_charger_fault_handler(&data);
+                }
+            }
           break;
         }
     }

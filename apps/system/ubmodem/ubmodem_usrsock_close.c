@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_usrsock_close.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,6 +55,10 @@
 
 #include <nuttx/net/usrsock.h>
 
+#ifdef CONFIG_NETUTILS_DNSCLIENT
+#include <apps/netutils/dnsclient.h>
+#endif
+
 #include "ubmodem_internal.h"
 #include "ubmodem_usrsock.h"
 
@@ -88,6 +92,7 @@ static void close_socket_handler(struct ubmodem_s *modem,
                                  size_t stream_len, void *priv)
 {
   struct modem_socket_s *sock = priv;
+  int ret;
 
   /*
    * Response handler for +USOCL socket close.
@@ -115,6 +120,48 @@ static void close_socket_handler(struct ubmodem_s *modem,
 
   sock->is_freeing_pending = true;
   __ubsocket_work_done(sock);
+
+  if (info->status == RESP_STATUS_TIMEOUT)
+    {
+      /* Timeout for closing socket command can mean only one thing: Modem
+       * is stuck in bad state. */
+
+      /* Prepare task for bringing modem alive from stuck state. */
+
+      ret = __ubmodem_recover_stuck_hardware(modem);
+      MODEM_DEBUGASSERT(modem, ret != ERROR);
+      return;
+    }
+#if defined(CONFIG_NETUTILS_DNSCLIENT) && \
+    !defined(CONFIG_UBMODEM_DISABLE_GPRS_RESET_AFTER_REPEATED_DNS_FAILURES)
+  else
+    {
+      unsigned int failcount = dns_get_lookup_failed_count();
+
+#ifdef CONFIG_UBMODEM_VOICE
+      if (failcount > 0 && (modem->voice.active || modem->voice.ringing))
+        {
+          /* Voice-call can block GRPS communication and cause DNS queries
+           * to fail. Clear accumulated fail count in this case. */
+
+          dns_clear_lookup_failed_count();
+          return;
+        }
+#endif
+
+      if (failcount >= UBMODEM_MAX_GPRS_DNS_FAILED_COUNT)
+        {
+          /* GPRS connection might be stuck and DNS requests failing as result.
+           * Attempt to recover GRPS connection, without dropping GSM network. */
+
+          /* Prepare task for reinitializing GRPS. */
+
+          ret = __ubmodem_reinitialize_gprs(modem);
+          MODEM_DEBUGASSERT(modem, ret != ERROR);
+          return;
+        }
+    }
+#endif
 }
 
 /****************************************************************************

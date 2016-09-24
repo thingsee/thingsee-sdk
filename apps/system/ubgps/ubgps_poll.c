@@ -58,7 +58,7 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#ifdef CONFIG_SYSTEM_UBGPS_VERBOSE_DEBUG
+#ifdef UBGPS_DEBUG_TIMERS
  #define dbg_poll(...) dbg(__VA_ARGS__)
 #else
   #define dbg_poll(...)
@@ -216,6 +216,7 @@ int __ubgps_set_timer(struct ubgps_s *gps,
 {
   struct timespec alarm;
   struct gps_priv_timer_s *timer;
+  struct gps_event_new_timer_s event;
 
   DEBUGASSERT(gps && timer_cb);
 
@@ -242,6 +243,9 @@ int __ubgps_set_timer(struct ubgps_s *gps,
   timer->cb_priv = cb_priv;
 
   sq_addlast(&timer->entry, &gps->timers);
+
+  event.super.id = GPS_EVENT_NEW_TIMER;
+  ubgps_publish_event(gps, (struct gps_event_s *)&event);
 
   return timer->id;
 }

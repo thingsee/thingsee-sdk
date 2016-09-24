@@ -52,6 +52,7 @@
 
 #include <arch/board/board-adc.h>
 #include <arch/board/board-battery.h>
+#include "stm32_adc.h"
 
 /************************************************************************************
  * Definitions
@@ -73,7 +74,6 @@
 #define BATTVOLT_R1_KILOOHMS          (1000)
 #define BATTVOLT_R2_KILOOHMS          BATTVOLT_R1_KILOOHMS
 
-#define BATTVOLT_VREF_MILLIVOLTS      3000
 #define BATTVOLT_ADC_MAX_VALUE        ((1 << 12) - 1)
 
 
@@ -149,13 +149,13 @@ static int find_low_index(const float voltage, const struct v2p_curve * const cu
  *
  ****************************************************************************/
 
-static uint32_t adc_to_millivolts(uint32_t adc)
+static uint32_t adc_to_millivolts(uint32_t adc, uint32_t vref_mvolts)
 {
   uint64_t vbat;
 
   vbat = (uint64_t)adc;
   vbat *= BATTVOLT_R1_KILOOHMS + BATTVOLT_R2_KILOOHMS;
-  vbat *= BATTVOLT_VREF_MILLIVOLTS;
+  vbat *= vref_mvolts;
   vbat /= BATTVOLT_R2_KILOOHMS * BATTVOLT_ADC_MAX_VALUE;
 
   return (uint32_t)vbat;
@@ -200,41 +200,27 @@ uint16_t board_get_battery_capacity(void)
 
 int board_get_battery_voltage(uint32_t *voltage)
 {
-  ssize_t nbytes = 0;
-  uint8_t sample[5] = { 0 };
   uint32_t val;
+  uint32_t vdda_mvolts;
+  int ret;
 
-  board_adc_vbat_setctrl(true);
-
-  int fd = open("/dev/adc0", O_RDWR);
-  if (fd < 0)
+  ret = board_adc_measure_vbat(&val);
+  if (ret < 0)
     {
-      lldbg("Can't open ADC converter\n");
-      board_adc_vbat_setctrl(false);
-      return ERROR;
+      dbg("could not read VBAT\n");
+      return ret;
     }
 
-  nbytes = read(fd, sample, sizeof(sample));
-  if (nbytes != sizeof(sample))
+  ret = board_adc_measure_vrefint(&vdda_mvolts);
+  if (ret < 0)
     {
-      lldbg("Can't read samples from ADC converter\n");
-      close(fd);
-      board_adc_vbat_setctrl(false);
-      return ERROR;
+      dbg("could not read VREFINT\n");
+      return ret;
     }
-
-  close(fd);
-  board_adc_vbat_setctrl(false);
-
-  val = sample[1] | (sample[2] << 8) | (sample[3] << 16) | (sample[4] << 24);
-
-  /* Add the raw value to entropy pool. */
-
-  add_sensor_randomness(val);
 
   /* Convert it to actual millivolts. */
 
-  val = adc_to_millivolts(val);
+  val = adc_to_millivolts(val, vdda_mvolts);
 
   *voltage = val;
 

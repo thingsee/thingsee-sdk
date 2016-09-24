@@ -36,6 +36,7 @@
  *
  ****************************************************************************/
 
+
 /****************************************************************************
  * Included Files
  ****************************************************************************/
@@ -70,16 +71,18 @@
 #  define lis2dh_lldbg(x, ...)
 #endif
 
-//#define LIS2DH_SELFTEST
-#ifdef LIS2DH_SELFTEST
-#define SELFTEST_BUF_SIZE           5
-#define SELFTEST_MAX_READ_ATTEMPTS  100
-#define SELFTEST_ABS_DIFF_MIN       17
-#define SELFTEST_ABS_DIFF_MAX       360
-#define SELFTEST_0                  0
-#define SELFTEST_1                  1
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
+#define LSB_AT_10BIT_RESOLUTION       4
+#define LSB_AT_12BIT_RESOLUTION       1
+#define SELFTEST_BUF_SIZE             5
+#define SELFTEST_MAX_READ_ATTEMPTS    200
+#define SELFTEST_ABS_DIFF_MIN_10BIT   17
+#define SELFTEST_ABS_DIFF_MAX_10_BIT  360
+#define SELFTEST_ABS_DIFF_MIN_12BIT   (LSB_AT_10BIT_RESOLUTION * SELFTEST_ABS_DIFF_MIN_10BIT)
+#define SELFTEST_ABS_DIFF_MAX_12BIT   (LSB_AT_10BIT_RESOLUTION * SELFTEST_ABS_DIFF_MAX_10_BIT)
+#define SELFTEST_0                    0
+#define SELFTEST_1                    1
 #endif
-
 /* Other macros */
 
 #define LIS2DH_I2C_RETRIES  10
@@ -112,10 +115,6 @@ struct lis2dh_dev_s
 #ifndef CONFIG_DISABLE_POLL
   struct pollfd               *fds[CONFIG_LIS2DH_NPOLLWAITERS];
 #endif
-#ifdef LIS2DH_SELFTEST
-  bool                        selftest_mode;
-  uint8_t                     selftest_read_count;
-#endif
 };
 
 /****************************************************************************
@@ -142,10 +141,10 @@ static unsigned int      lis2dh_get_fifo_readings(FAR struct lis2dh_dev_s *priv,
                                              FAR struct lis2dh_result *res,
                                              unsigned int readcount,
                                              int *perr);
-#ifdef LIS2DH_SELFTEST
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
 static int               lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv);
 static int16_t           lis2dh_raw_convert_to_12bit(uint8_t raw_hibyte, uint8_t raw_lobyte);
-static FAR const struct  lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err);
+static FAR const struct lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, int *err);
 #endif
 
 /****************************************************************************
@@ -410,7 +409,7 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
         }
       while (!fifo_empty && ptr->header.meas_count < readcount);
 
-      if (!fifo_empty)
+      if (!fifo_empty && fifo_mode != LIS2DH_TRIGGER_MODE)
         {
           /* FIFO was not read empty, more data available. */
 
@@ -538,13 +537,6 @@ static int lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       /* Make sure interrupt will get cleared (by reading this register) in case of latched configuration */
 
       lis2dh_clear_interrupts(priv, LIS2DH_INT1 | LIS2DH_INT2);
-
-#ifdef LIS2DH_SELFTEST
-      /* After this, currently selftest is not allowed anymore */
-
-      priv->selftest_mode = false;
-      priv->selftest_read_count = 0;
-#endif
     }
     break;
 
@@ -591,17 +583,12 @@ static int lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
     break;
 
   case SNIOC_START_SELFTEST:
-#ifdef LIS2DH_SELFTEST
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
     {
-      if (priv->selftest_mode == false)
-        {
-          ret = -EINVAL;
-        }
-      else
-        {
-          lis2dh_clear_interrupts(priv, LIS2DH_INT1 | LIS2DH_INT2);
-          ret = lis2dh_handle_selftest(priv);
-        }
+      priv->config->irq_enable(priv->config, false);
+      lis2dh_clear_interrupts(priv, LIS2DH_INT1 | LIS2DH_INT2);
+      ret = lis2dh_handle_selftest(priv);
+      priv->config->irq_enable(priv->config, true);
     }
 #else
     {
@@ -773,34 +760,126 @@ static int lis2dh_int_handler(int irq, FAR void *context)
   return OK;
 }
 
-#ifdef LIS2DH_SELFTEST
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
+/****************************************************************************
+ * Name: lis2dh_clear_registers
+ *
+ * Description:
+ *   Clear lis2dh registers
+ *
+ * Input Parameters:
+ *   priv   - pointer to LIS2DH Private Structure
+ *
+ * Returned Value:
+ *   Returns OK in case of success, otherwise ERROR
+ ****************************************************************************/
+static int lis2dh_clear_registers(FAR struct lis2dh_dev_s *priv)
+{
+  uint8_t i, buf = 0;
 
+  DEBUGASSERT(priv);
+
+  for (i = ST_LIS2DH_TEMP_CFG_REG; i <= ST_LIS2DH_ACT_DUR_REG; i++)
+    {
+      /* Skip read only registers */
+      if ((i <= 0x1E) || (i >= 0x27 && i <= 0x2D) || (i == 0x2F) || (i == 0x31))
+        {
+          continue;
+        }
+      if (lis2dh_access(priv, i, &buf, -1) != 1)
+        {
+          lis2dh_dbg("lis2dh: Failed to clear register 0x%02x\n", i);
+          return ERROR;
+        }
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: lis2dh_write_register
+ *
+ * Description:
+ *   Clear lis2dh registers
+ *
+ * Input Parameters:
+ *   priv   - pointer to LIS2DH Private Structure
+ *   reg    - target register
+ *   value  - value to write
+ *
+ * Returned Value:
+ *   Returns OK in case of success, otherwise ERROR
+ ****************************************************************************/
+static int lis2dh_write_register(FAR struct lis2dh_dev_s *priv, uint8_t reg, uint8_t value)
+{
+  DEBUGASSERT(priv);
+
+  if (lis2dh_access(priv, reg, &value, -1) != 1)
+    {
+      lis2dh_dbg("lis2dh: Failed to write %d to register 0x%02x\n", value, reg);
+      return ERROR;
+    }
+  return OK;
+}
+
+/****************************************************************************
+ * Name: lis2dh_read_register
+ *
+ * Description:
+ *   read lis2dh register
+ *
+ * Input Parameters:
+ *   priv   - pointer to LIS2DH Private Structure
+ *   reg    - register to read
+ *
+ * Returned Value:
+ *   Returns positive register value in case of success, otherwise ERROR ( < 0)
+ ****************************************************************************/
+static int lis2dh_read_register(FAR struct lis2dh_dev_s *priv, uint8_t reg)
+{
+  uint8_t buf;
+
+  DEBUGASSERT(priv);
+
+  if (lis2dh_access(priv, reg, &buf, sizeof(buf)) == sizeof(buf))
+    {
+      return buf;
+    }
+    return ERROR;
+}
 /****************************************************************************
  * Name: lis2dh_handle_selftest
  *
  * Description:
- *   Handle selftest
+ *   Handle selftest. Note, that after running selftest lis2dh is left in shutdown
+ *   mode without valid setup. Therefore SNIOC_WRITESETUP must be
+ *   sent again to proceed with normal operations.
  *
  ****************************************************************************/
 static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
 {
   const struct lis2dh_vector_s *results;
   uint8_t i, j, buf;
-  int8_t attempt;
   int16_t avg_x_no_st = 0, avg_y_no_st = 0, avg_z_no_st = 0;
   int16_t avg_x_with_st = 0, avg_y_with_st = 0, avg_z_with_st = 0;
   int16_t abs_st_x_value,abs_st_y_value, abs_st_z_value;
   int ret = OK;
   int err = OK;
 
+  DEBUGASSERT(priv);
+
   lis2dh_powerdown(priv);
 
+  if (lis2dh_clear_registers(priv) != OK)
+    {
+      ret = -EIO;
+      goto out;
+    }
   /* Set the control register (23h) to ±2g FS, normal mode with BDU (Block Data Update)
    * and HR (High Resolution) bits enabled.
    */
 
-  buf = 0x88;
-  if (lis2dh_access(priv, ST_LIS2DH_CTRL_REG4, &buf, -1) != 1)
+  if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG4, 0x88) != OK)
     {
       lis2dh_dbg("lis2dh: Failed to write CTRL4 REG for selftest\n");
       ret = -EIO;
@@ -809,8 +888,7 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
 
   /* Set the control register (20h) to 50Hz ODR (Output Data Rate) with X/Y/Z axis enabled. */
 
-  buf = 0x47;
-  if (lis2dh_access(priv, ST_LIS2DH_CTRL_REG1, &buf, -1) != 1)
+  if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG1, 0x47) != OK)
     {
       lis2dh_dbg("lis2dh: Failed to write CTRL1 REG for selftest\n");
       ret = -EIO;
@@ -820,21 +898,20 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
   /* Dummy reads so that values have stabilized */
   for (i = 0; i < 20; i++)
     {
-      results = NULL;
-      attempt = SELFTEST_MAX_READ_ATTEMPTS;
-      while (results == NULL && --attempt > 0)
+      if (lis2dh_get_raw_readings(priv, &err) == NULL)
         {
-          results = lis2dh_get_raw_readings(priv, false, &err);
+          ret = -EIO;
+          goto out;
         }
     }
 
   for (i = 0; i < SELFTEST_BUF_SIZE; i++)
     {
-      results = NULL;
-      attempt = SELFTEST_MAX_READ_ATTEMPTS;
-      while (results == NULL && --attempt > 0)
+      results = lis2dh_get_raw_readings(priv, &err);
+      if (results == NULL)
         {
-          results = lis2dh_get_raw_readings(priv, false, &err);
+          ret = -EIO;
+          goto out;
         }
       avg_x_no_st += results->x;
       avg_y_no_st += results->y;
@@ -846,11 +923,15 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
 
   for (i = SELFTEST_0; i <= SELFTEST_1; i++)
     {
+      avg_x_with_st = 0;
+      avg_y_with_st = 0;
+      avg_z_with_st = 0;
+
       /* Enable self-test 0 or 1 at +/-2g FS with BDU and HR bits enabled. */
 
       buf = (i == SELFTEST_0) ? 0x8A : 0x8C;
 
-      if (lis2dh_access(priv, ST_LIS2DH_CTRL_REG4, &buf, -1) != 1)
+      if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG4, buf) != OK)
         {
           lis2dh_dbg("lis2dh: Failed to write CTRL4 REG for selftest\n");
           ret = -EIO;
@@ -858,23 +939,22 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
         }
 
       /* Dummy reads so that values have stabilized */
-      for (j = 0; j < 10; j++)
+      for (i = 0; i < 10; i++)
         {
-          results = NULL;
-          attempt = SELFTEST_MAX_READ_ATTEMPTS;
-          while (results == NULL && --attempt > 0)
+          if (lis2dh_get_raw_readings(priv, &err) == NULL)
             {
-              results = lis2dh_get_raw_readings(priv, false, &err);
+              ret = -EIO;
+              goto out;
             }
         }
 
       for (j = 0; j < SELFTEST_BUF_SIZE; j++)
         {
-          results = NULL;
-          attempt = SELFTEST_MAX_READ_ATTEMPTS;
-          while (results == NULL && --attempt > 0)
+          results = lis2dh_get_raw_readings(priv, &err);
+          if (results == NULL)
             {
-              results = lis2dh_get_raw_readings(priv, false, &err);
+              ret = -EIO;
+              goto out;
             }
           avg_x_with_st += results->x;
           avg_y_with_st += results->y;
@@ -884,28 +964,112 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
       avg_y_with_st = avg_y_with_st / SELFTEST_BUF_SIZE;
       avg_z_with_st = avg_z_with_st / SELFTEST_BUF_SIZE;
 
-      /* FIXME: Why do we need to divide by 2 to get proper results? */
-
-      abs_st_x_value = abs(avg_x_with_st - avg_x_no_st) / 2;
-      abs_st_y_value = abs(avg_y_with_st - avg_y_no_st) / 2;
-      abs_st_z_value = abs(avg_z_with_st - avg_z_no_st) / 2;
+      abs_st_x_value = abs(avg_x_with_st - avg_x_no_st);
+      abs_st_y_value = abs(avg_y_with_st - avg_y_no_st);
+      abs_st_z_value = abs(avg_z_with_st - avg_z_no_st);
 
       dbg ("ST %d, ABSX: %d, ABSY: %d, ABSZ: %d\n", i, abs_st_x_value, abs_st_y_value, abs_st_z_value);
 
-      if (abs_st_x_value < SELFTEST_ABS_DIFF_MIN || abs_st_x_value > SELFTEST_ABS_DIFF_MAX ||
-          abs_st_y_value < SELFTEST_ABS_DIFF_MIN || abs_st_y_value > SELFTEST_ABS_DIFF_MAX ||
-          abs_st_z_value < SELFTEST_ABS_DIFF_MIN || abs_st_z_value > SELFTEST_ABS_DIFF_MAX)
+      if (abs_st_x_value < SELFTEST_ABS_DIFF_MIN_12BIT || abs_st_x_value > SELFTEST_ABS_DIFF_MAX_12BIT ||
+          abs_st_y_value < SELFTEST_ABS_DIFF_MIN_12BIT || abs_st_y_value > SELFTEST_ABS_DIFF_MAX_12BIT ||
+          abs_st_z_value < SELFTEST_ABS_DIFF_MIN_12BIT || abs_st_z_value > SELFTEST_ABS_DIFF_MAX_12BIT)
         {
           dbg("Selftest %d fail! Limits (%d <= value <= %d). Results: x: %d, y: %d, z: %d ",
               i,
-              SELFTEST_ABS_DIFF_MIN, SELFTEST_ABS_DIFF_MAX,
+              SELFTEST_ABS_DIFF_MIN_12BIT, SELFTEST_ABS_DIFF_MAX_12BIT,
               abs_st_x_value, abs_st_y_value, abs_st_z_value);
+          ret = -ERANGE;
+          goto out;
+        }
+    }
+
+  /* Verify INT1 and INT2 lines */
+  if (lis2dh_clear_registers(priv) != OK)
+    {
+      ret = -EIO;
+      goto out;
+    }
+
+  /* Both INT lines should be low */
+  if (priv->config->read_int1_pin() != 0)
+    {
+      dbg("INT1 line is HIGH - expected LOW\n");
+      ret = -ENXIO;
+      goto out;
+    }
+  if (priv->config->read_int2_pin)
+    {
+      if (priv->config->read_int2_pin() != 0)
+        {
+          dbg("INT2 line is HIGH - expected LOW\n");
+          ret = -ENODEV;
+          goto out;
+        }
+    }
+  /* 400Hz ODR all axes enabled
+     FIFO overrun & DATA READY on INT1
+     FIFO enabled and INT1 & INT2 latched
+     FIFO mode, INT1 , THS 0
+     OR combination, all events enabled */
+
+  if ((lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG1, 0x77) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG3, 0x12) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG5, 0x4A) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_FIFO_CTRL_REG, 0x40) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_INT1_CFG_REG, 0x3F) != OK))
+    {
+      dbg("Writing registers for INT line check failed\n");
+      ret = -EIO;
+      goto out;
+    }
+
+  /* Clear INT1 & INT2*/
+  if ((lis2dh_read_register(priv, ST_LIS2DH_INT1_SRC_REG) == ERROR) ||
+      (lis2dh_read_register(priv, ST_LIS2DH_INT2_SRC_REG) == ERROR))
+    {
+      dbg("Failed to clear INT1 / INT2 registers\n");
+      ret = -EIO;
+      goto out;
+    }
+
+  usleep(20000);
+
+  /* Now INT1 should have been latched high and INT2 should be still low */
+  if (priv->config->read_int1_pin() != 1)
+    {
+      dbg("INT1 line is LOW - expected HIGH\n");
+      ret = -ENXIO;
+      goto out;
+    }
+  if (priv->config->read_int2_pin)
+    {
+      if (priv->config->read_int2_pin() != 0)
+        {
+          dbg("INT2 line is HIGH - expected LOW\n");
+          ret = -ENODEV;
+          goto out;
+        }
+
+      /* Enable interupt 1 on INT2 pin */
+      if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG6, 0x40) != OK)
+        {
+          dbg("Failed to enable interrupt 1 on INT2 pin");
           ret = -EIO;
+          goto out;
+        }
+
+      usleep(20000);
+
+      if (priv->config->read_int2_pin() != 1)
+        {
+          dbg("INT2 line is LOW - expected HIGH\n");
+          ret = -ENODEV;
           goto out;
         }
     }
 
 out:
+  (void)lis2dh_clear_registers(priv);
   lis2dh_powerdown(priv);
 
   return ret;
@@ -944,6 +1108,31 @@ static int16_t lis2dh_raw_convert_to_12bit(uint8_t raw_hibyte, uint8_t raw_lobyt
 }
 
 /****************************************************************************
+ * Name: lis2dh_data_available
+ *
+ * Description:
+ *   Check if new data is available to read
+ *
+ * Input Parameters:
+ *   dev        - pointer to LIS2DH Private Structure
+ *
+ * Returned Value:
+ *   Return true if new data is available. Otherwise returns false
+ ****************************************************************************/
+static bool lis2dh_data_available(FAR struct lis2dh_dev_s * dev)
+{
+  uint8_t retval;
+
+  DEBUGASSERT(dev);
+
+  if (lis2dh_access(dev, ST_LIS2DH_STATUS_REG, &retval, sizeof(retval)) == sizeof(retval))
+    {
+      return ((retval & ST_LIS2DH_SR_ZYXDA) != 0);
+    }
+  return false;
+}
+
+/****************************************************************************
  * Name: lis2dh_get_raw_readings
  *
  * Description:
@@ -951,49 +1140,38 @@ static int16_t lis2dh_raw_convert_to_12bit(uint8_t raw_hibyte, uint8_t raw_lobyt
  *
  * Input Parameters:
  *   dev        - pointer to LIS2DH Private Structure
- *   force_read - Read even if new data is not available (old data)
  *
  * Returned Value:
  *   Returns acceleration vectors (High resolution = 12bit values) on success, NULL otherwise.
  ****************************************************************************/
-static FAR const struct lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err)
+static FAR const struct lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, int *err)
 {
   uint8_t retval[6];
+  uint8_t retries_left = SELFTEST_MAX_READ_ATTEMPTS;
 
-  DEBUGASSERT(dev != NULL);
+  DEBUGASSERT(dev);
 
   *err = 0;
 
-  if (force_read == false)
+  while (--retries_left > 0)
     {
-      /* Check if there is new data available */
-      if (lis2dh_access(dev, ST_LIS2DH_STATUS_REG, retval, 1) == 1)
+      usleep(20000);
+      if (lis2dh_data_available(dev))
         {
-          /* If result is not yet ready, return NULL */
-
-          if (!(retval[0] & ST_LIS2DH_SR_ZYXDA))
+          if (lis2dh_access(dev, ST_LIS2DH_OUT_X_L_REG, retval, sizeof(retval)) == sizeof(retval))
             {
-              lis2dh_dbg("lis2dh: Results were not ready\n");
-              *err = -EAGAIN;
-              return NULL;
+              dev->vector_data.x = lis2dh_raw_convert_to_12bit(retval[1], retval[0]);
+              dev->vector_data.y = lis2dh_raw_convert_to_12bit(retval[3], retval[2]);
+              dev->vector_data.z = lis2dh_raw_convert_to_12bit(retval[5], retval[4]);
+              return &dev->vector_data;
             }
+          return NULL;
         }
     }
-
-  if (lis2dh_access(dev, ST_LIS2DH_OUT_X_L_REG, retval, 6) == 6)
-    {
-      dev->vector_data.x = lis2dh_raw_convert_to_12bit(retval[1], retval[0]);
-      dev->vector_data.y = lis2dh_raw_convert_to_12bit(retval[3], retval[2]);
-      dev->vector_data.z = lis2dh_raw_convert_to_12bit(retval[5], retval[4]);
-      return &dev->vector_data;
-    }
-
-  lis2dh_dbg("Cannot get raw readings!\n");
-
   return NULL;
 }
 
-#endif /* LIS2DH_SELFTEST */
+#endif /* CONFIG_LIS2DH_DRIVER_SELFTEST */
 
 /****************************************************************************
  * Name: lis2dh_clear_interrupts
@@ -1322,6 +1500,7 @@ static int lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr,
         }
     }
 
+  lis2dh_dbg("failed, error: %d\n", retval);
   return retval;
 }
 
@@ -1644,13 +1823,6 @@ int lis2dh_register(FAR const char *devpath,
   priv->int_pending = 0;
 #else
   priv->int_pending = false;
-#endif
-
-#ifdef LIS2DH_SELFTEST
-  /* Selftest is currently supported only right after boot */
-
-  priv->selftest_mode = true;
-  priv->selftest_read_count = 0;
 #endif
 
   /* Set static pointer to priv data */

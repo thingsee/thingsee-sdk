@@ -175,17 +175,41 @@ struct sm_event_psm_event_s
   bool enable;
 };
 
-/****************************************************************************
- * Public Function Prototypes
- ****************************************************************************/
-
 struct ubgps_s;
 struct sm_event_s;
 
 /* GPS state machine function prototype */
 
-typedef int (*gps_sm_t)(struct ubgps_s * const gps, struct sm_event_s const * const event);
+typedef int (*ubgps_sm_func_t)(struct ubgps_s * const gps, struct sm_event_s const * const event);
 
-extern const gps_sm_t gps_sm[__GPS_STATE_MAX];
+/* GPS state machine structure */
+
+struct ubgps_sm_s
+{
+  const ubgps_sm_func_t func;
+  const char *name;
+};
+
+/****************************************************************************
+ * Public Data Externs
+ ****************************************************************************/
+
+extern const struct ubgps_sm_s ubgps_state_machines[__GPS_STATE_MAX];
+
+/****************************************************************************
+ * Public Internal Function Prototypes
+ ****************************************************************************/
+
+/* Return current state-machine for given 'state'. */
+
+const struct ubgps_sm_s *ubgps_sm(struct ubgps_s * const gps, gps_state_t state);
+
+/* Interface for overriding internal state-machine, useful for low-level access
+ * for ie. production testing. */
+
+void ubgps_set_override_sm(struct ubgps_s * const gps,
+                           const struct ubgps_sm_s *override_sm);
+
+void ubgps_clear_override_sm(struct ubgps_s * const gps);
 
 #endif /* __THINGSEE_GPS_EVENTS_H */

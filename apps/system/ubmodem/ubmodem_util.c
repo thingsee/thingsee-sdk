@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_util.c
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,6 +46,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include <apps/system/ubmodem.h>
 
@@ -57,9 +58,25 @@
  * Private Types
  ****************************************************************************/
 
+struct modem_check_cmee_priv_s
+{
+  modem_check_cmee_func_t callback_fn;
+  void *callback_priv;
+};
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
+
+static const struct at_cmd_def_s cmd_ATpCMEE_read =
+{
+  .name         = "+CMEE",
+  .resp_format  =
+  (const uint8_t[]){
+    RESP_FMT_INT8,
+  },
+  .resp_num     = 1,
+};
 
 /****************************************************************************
  * Private Function
@@ -104,6 +121,49 @@ static bool check_apn_authentication(struct ubmodem_s *modem,
     }
 
   return true;
+}
+
+static void read_CMEE_handler(struct ubmodem_s *modem,
+                              const struct at_cmd_def_s *cmd,
+                              const struct at_resp_info_s *info,
+                              const uint8_t *resp_stream,
+                              size_t stream_len, void *priv)
+{
+  struct modem_check_cmee_priv_s cmee_cb =
+      *(struct modem_check_cmee_priv_s *)priv;
+  int8_t cmee_setting = -1;
+  bool cmee_ok = false;
+
+  free(priv);
+
+  /*
+   * Response handler for 'AT+CMEE?'
+   */
+
+  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpCMEE_read);
+
+  if (resp_status_is_error_or_timeout(info->status) ||
+      info->status != RESP_STATUS_OK)
+    {
+      goto out;
+    }
+
+  /* Read CMEE setting. */
+
+  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &cmee_setting))
+    {
+      cmee_setting = -1;
+      goto out;
+    }
+
+  /* CMEE is configured to '1' at initialization. Other setting means that
+   * modem is in unknown state (possibly has reseted itself). */
+
+  cmee_ok = (cmee_setting == 1);
+
+out:
+
+  cmee_cb.callback_fn(modem, cmee_ok, cmee_setting, cmee_cb.callback_priv);
 }
 
 /****************************************************************************
@@ -238,6 +298,45 @@ int __ubmodem_set_nonblocking(struct ubmodem_s *modem, bool set)
     return ERROR;
 
   modem->is_nonblocking = set;
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: __ubmodem_check_cmee_status
+ *
+ * Description:
+ *   Check current CMEE setting
+ *
+ * Input Parameters:
+ *   callback_fn    : callback result function
+ *   callback_priv  : callback private data
+ *
+ * Returned Values:
+ *   OK: If success
+ *   ERROR: If failed
+ *
+ ****************************************************************************/
+
+int __ubmodem_check_cmee_status(struct ubmodem_s *modem,
+                                modem_check_cmee_func_t callback_fn,
+                                void *callback_priv)
+{
+  struct modem_check_cmee_priv_s *cmee_cb;
+  int err;
+
+  cmee_cb = calloc(1, sizeof(*cmee_cb));
+  if (!cmee_cb)
+    {
+      return ERROR;
+    }
+
+  cmee_cb->callback_fn = callback_fn;
+  cmee_cb->callback_priv = callback_priv;
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCMEE_read, read_CMEE_handler,
+                           cmee_cb, "?");
+  MODEM_DEBUGASSERT(modem, err == OK);
 
   return OK;
 }

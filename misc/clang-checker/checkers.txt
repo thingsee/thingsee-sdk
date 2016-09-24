@@ -1,0 +1,21 @@
+# This file configures enabled/disabled checkers for build-scan.
+#
+# The syntax is as follows:
+# - disabled.checker
+# + enabled.checker
+# # comment line
+#
+# To get a list of available checkers run:
+#    scan-build --help-checkers
+
+# Objective-C checking
+- core.CallAndMessage
+# There is too many of them now and they are relatively harmless. TODO: enable in future
+- deadcode.DeadStores
+# Relatively harmless
+- security.insecureAPI.mktemp
+# Relatively harmless
+- security.insecureAPI.mkstemp
+# C++ specific
+- cplusplus.NewDelete
++ core.DivideZero

@@ -212,6 +212,7 @@
 
 /* USART3 connected to modem (HW flow control, baud: 115200) */
 
+#  define MODEM_USART_NUM        3
 #  define MODEM_SERIAL_DEVNAME   "/dev/ttyS2"
 #  define GPIO_USART3_RX         GPIO_USART3_RX_3  /* PD9 */
 #  define GPIO_USART3_TX         GPIO_USART3_TX_3  /* PD8 */

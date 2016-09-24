@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/conman/conman_wifi_stubs.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Authors: Pekka Niemimaa <pekka.niemimaa@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,21 +44,52 @@
 int __conman_cc3000_request_connection(struct conman_s *conman,
                                        enum conman_connection_type_e type)
 {
-	(void)conman;
-	(void)type;
-        conman_dbg("no WiFi configs available\n");
-	return ERROR;
+  (void)conman;
+  (void)type;
+  conman_dbg("no WiFi configs available\n");
+  return ERROR;
 }
 
 int __conman_cc3000_get_status_connection(struct conman_s *conman,
                                           struct conman_status_s *status)
 {
-      (void)conman;
-      status->status = CONMAN_STATUS_OFF;
-      return ERROR;
+  (void)conman;
+  status->status = CONMAN_STATUS_OFF;
+  return ERROR;
 }
+
 bool __conman_cc3000_is_destroying(struct conman_s *conman)
 {
-        (void)conman;
-	return false;
+  (void)conman;
+  return false;
+}
+
+int __conman_cc3000_wifi_scan(struct conman_s *conman)
+{
+  (void)conman;
+  return ERROR;
+}
+
+unsigned int __conman_cc3000_get_max_pollfds(struct conman_s *conman)
+{
+  (void)conman;
+  return 0;
+}
+
+void __conman_cc3000_setup_pollfds(struct conman_s *conman,
+                                   struct pollfd *pfds, int maxfds,
+                                   int *fds_pos, int *min_timeout)
+{
+  (void)conman;
+  (void)pfds;
+  (void)maxfds;
+  (void)fds_pos;
+  (void)min_timeout;
+}
+
+void __conman_cc3000_handle_pollfds(struct conman_s *conman,
+                                    struct pollfd *pfds)
+{
+  (void)conman;
+  (void)pfds;
 }

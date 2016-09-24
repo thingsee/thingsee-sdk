@@ -38,7 +38,7 @@
 include $(APPDIR)/Make.defs
 
 ASRCS		=
-CSRCS		= urldecode.c base64.c md5.c
+CSRCS		= urldecode.c base64.c
 
 AOBJS		= $(ASRCS:.S=$(OBJEXT))
 COBJS		= $(CSRCS:.c=$(OBJEXT))

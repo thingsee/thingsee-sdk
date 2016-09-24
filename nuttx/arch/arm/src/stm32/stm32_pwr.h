@@ -84,6 +84,22 @@ extern "C"
 void stm32_pwr_enablebkp(bool writable);
 
 /************************************************************************************
+ * Name: stm32_pwr_resetbkprefcount
+ *
+ * Description:
+ *   Resets backup domain reference count.
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Values:
+ *   None
+ *
+ ************************************************************************************/
+
+void stm32_pwr_resetbkprefcount(void);
+
+/************************************************************************************
  * Name: stm32_pwr_enablebreg
  *
  * Description:

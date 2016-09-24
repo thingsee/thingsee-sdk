@@ -46,6 +46,7 @@
 #include <errno.h>
 #include <string.h>
 #include <debug.h>
+#include <assert.h>
 
 #ifdef CONFIG_NET_PKT
 #  include <netpacket/packet.h>
@@ -60,6 +61,7 @@
 #include "udp/udp.h"
 #include "pkt/pkt.h"
 #include "local/local.h"
+#include "usrsock/usrsock.h"
 
 /****************************************************************************
  * Private Functions
@@ -206,6 +208,20 @@ int psock_bind(FAR struct socket *psock, const struct sockaddr *addr,
 
   switch (psock->s_type)
     {
+#ifdef CONFIG_NET_USRSOCK
+      case SOCK_USRSOCK_TYPE:
+        {
+          FAR struct usrsock_conn_s *conn = psock->s_conn;
+
+          DEBUGASSERT(conn);
+
+          /* Perform the usrsock bind operation */
+
+          ret = usrsock_bind(psock->s_conn, addr, addrlen);
+        }
+        break;
+#endif
+
 #ifdef CONFIG_NET_PKT
       case SOCK_RAW:
         ret = pkt_bind(psock->s_conn, lladdr);

@@ -1121,6 +1121,12 @@ static int uart_close(FAR struct file *filep)
 
   while (dev->xmit.head != dev->xmit.tail)
     {
+#ifdef CONFIG_SERIAL_REMOVABLE
+      if (dev->disconnected)
+        {
+          break;
+        }
+#endif
 #ifndef CONFIG_DISABLE_SIGNALS
       usleep(HALF_SECOND_USEC);
 #else
@@ -1132,6 +1138,12 @@ static int uart_close(FAR struct file *filep)
 
   while (!uart_txempty(dev))
     {
+#ifdef CONFIG_SERIAL_REMOVABLE
+      if (dev->disconnected)
+        {
+          break;
+        }
+#endif
 #ifndef CONFIG_DISABLE_SIGNALS
       usleep(HALF_SECOND_USEC);
 #else

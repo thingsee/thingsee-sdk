@@ -4,63 +4,144 @@
 #
 
 config THINGSEE_ENGINE
-    bool "Thingsee engine"
-    default n
-    ---help---
-        Enable the Thingsee engine
+	bool "Thingsee engine"
+	default n
+	select THINGSEE_LIB
+	select THINGSEE_CHARGER_MODULE
+	---help---
+		Enable the Thingsee engine
 
 if THINGSEE_ENGINE
-    config THINGSEE_CONNECTORS
-        bool "Thingsee connectors"
-        default y
-        ---help---
-            Enable the Thingsee connectors
 
-    config THINGSEE_CONNECTORS_DEBUG
-        bool "Thingsee connector debug"
-        default n
-        ---help---
-            Enable the thingsee connectors debug
+config THINGSEE_ENGINE_CONNECTION_CUTOFF_TIME
+	int "Thingsee connection cut-off time"
+	default 30
+	---help---
+		Close connection after this amount of inactivity time.
 
-    config THINGSEE_CONNECTORS_PROTOCOL_DEBUG
-        bool "Thingsee connector protocol debug"
-        default n
-        ---help---
-            Enable verbose network protocol debugging traces (HTTP, etc)
+config THINGSEE_ENGINE_EEPROM
+	bool "Thingsee eeprom support"
+	default n
+	---help---
+		Enable the Thingsee engine EEPROM support
 
+config THINGSEE_ENGINE_UI
+	bool "Thingsee engine UI"
+	default y
+	---help---
+		Enable the Thingsee engine UI
 
-    choice
-        prompt "Active connector"
-        default THINGSEE_CONNECTOR_TS
-        depends on THINGSEE_CONNECTORS
+config THINGSEE_ENGINE_DBG
+	bool "Thingsee engine debug"
+	default n
+	depends on THINGSEE_ENGINE
+	---help---
+		Enable the Thingsee engine debugs
 
-        config THINGSEE_CONNECTOR_TS
-            bool "Thingsee connector"
-            ---help---
-                Enable the Thingsee connector
+config THINGSEE_ENGINE_SENSE_TEMPERATURE
+	bool "Thingsee engine sense temperature"
+	default y
+	depends on THINGSEE_ENGINE
+	select HTS221_HUMIDITY
+	depends on I2C_PRESSURE_DEV_LPS25H
+	---help---
+		Enable the Thingsee engine temperature sense
 
-        config THINGSEE_CONNECTOR_KII
-            bool "Kii connector"
-            ---help---
-                Enable the Kii connector
+config THINGSEE_ENGINE_SENSE_HUMIDITY
+	bool "Thingsee engine sense humidity"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on HTS221_HUMIDITY
+	---help---
+		Enable the Thingsee engine humidity sense
 
-        config THINGSEE_CONNECTOR_MESHBLU
-            bool "Meshblu connector"
-            ---help---
-                Enable the Meshblu connector
+config THINGSEE_ENGINE_SENSE_PRESSURE
+	bool "Thingsee engine sense pressure"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on I2C_PRESSURE_DEV_LPS25H
+	---help---
+		Enable the Thingsee engine pressure sense
 
-    endchoice
+config THINGSEE_ENGINE_SENSE_AMBIENT_LIGHT
+	bool "Thingsee engine sense ambient light"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on MAX44009_SENSOR
+	---help---
+		Enable the Thingsee engine ambient light sense
 
-    if THINGSEE_CONNECTOR_TS
-        source "$APPSDIR/ts_engine/ts-connector/Kconfig_extra"
-    endif
+config THINGSEE_ENGINE_SENSE_LOCATION
+	bool "Thingsee engine sense location"
+	default y
+	depends on THINGSEE_ENGINE
+	select THINGSEE_GPS_MODULE
+	---help---
+		Enable the Thingsee engine location sense
 
-    if THINGSEE_CONNECTOR_KII
-        source "$APPSDIR/ts_engine/kii-connector/Kconfig_extra"
-    endif
+config THINGSEE_ENGINE_SENSE_ACCELERATION
+	bool "Thingsee engine sense acceleration"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on LIS2DH || LSM9DS1_SENS
+	---help---
+		Enable the Thingsee engine acceleration sense
 
-    if THINGSEE_CONNECTOR_MESHBLU
-        source "$APPSDIR/ts_engine/meshblu-connector/Kconfig_extra"
-    endif
+config THINGSEE_ENGINE_SENSE_IMPACT
+	bool "Thingsee engine sense impact"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on  LIS2DH
+	---help---
+		Enable the Thingsee engine impact sense
 
+config THINGSEE_ENGINE_SENSE_MAGNETIC_FIELD
+	bool "Thingsee engine sense magnetic field"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on LSM9DS1_SENS
+	---help---
+		Enable the Thingsee engine magnetic field sense
+
+config THINGSEE_ENGINE_SENSE_ORIENTATION
+	bool "Thingsee engine sense orientation"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on LSM9DS1_SENS
+	---help---
+		Enable the Thingsee engine orientation sense
+
+config THINGSEE_ENGINE_SENSE_SPEED
+	bool "Thingsee engine sense speed"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on THINGSEE_GPS_MODULE
+	---help---
+		Enable the Thingsee engine speed sense
+
+config THINGSEE_ENGINE_SENSE_ENERGY
+	bool "Thingsee engine sense energy"
+	default y
+	depends on THINGSEE_ENGINE
+	depends on THINGSEE_CHARGER_MODULE
+	---help---
+		Enable the Thingsee engine energy sense
+
+config THINGSEE_ENGINE_SENSE_TIME
+	bool "Thingsee engine sense time"
+	default y
+	depends on THINGSEE_ENGINE
+	---help---
+		Enable the Thingsee engine time sense
+
+config THINGSEE_ENGINE_PING
+	bool "Thingsee engine retry ping"
+	default y
+	depends on THINGSEE_ENGINE
+	---help---
+		Enable the Thingsee ping feature if backend supports retry pings
+
+source "$APPSDIR/ts_engine/control/Kconfig"
 endif
+
+source "$APPSDIR/ts_engine/connectors/Kconfig"

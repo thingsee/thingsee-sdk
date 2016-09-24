@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_info.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Timo Voutilainen <timo.voutilainen@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -207,7 +207,7 @@ static void AT_string_resp_handler(struct ubmodem_s *modem,
                                    size_t stream_len, void *priv)
 {
   struct info_priv_s info_priv = *(struct info_priv_s *)priv;
-  uint16_t strlen = 0;
+  uint16_t str_len = 0;
   const char *str = NULL;
 
   MODEM_DEBUGASSERT(modem, cmd == info_priv.cmd);
@@ -217,7 +217,7 @@ static void AT_string_resp_handler(struct ubmodem_s *modem,
       return;
     }
 
-  dbg("Stream length: %d\n", stream_len);
+  ubdbg("Stream length: %d\n", stream_len);
 
   free(priv);
 
@@ -236,7 +236,7 @@ static void AT_string_resp_handler(struct ubmodem_s *modem,
     }
 
 
-  if (!__ubmodem_stream_get_string(&resp_stream, &stream_len, &str, &strlen))
+  if (!__ubmodem_stream_get_string(&resp_stream, &stream_len, &str, &str_len))
     {
       MODEM_DEBUGASSERT(modem, false); /* Should not get here. */
       return;
@@ -244,7 +244,7 @@ static void AT_string_resp_handler(struct ubmodem_s *modem,
 
   /* Finally call user's callback */
 
-  info_priv.result_cb(info_priv.caller_data, str, strlen, true, info_priv.type);
+  info_priv.result_cb(info_priv.caller_data, str, str_len, true, info_priv.type);
 
   /* Go to waiting state */
 
@@ -502,7 +502,13 @@ int ubmodem_get_info(struct ubmodem_s *modem, ubmodem_info_cb_t result_cb,
     info_priv->cmd = &cmd_ATpUDOPN_query_string;
     info_priv->at_handler = UDOPN_resp_handler;
     info_priv->args = "=1";
-    info_priv->min_level = UBMODEM_LEVEL_SIM_ENABLED;
+    info_priv->min_level = UBMODEM_LEVEL_NETWORK;
+    break;
+  case UB_INFO_MCC_MNC:
+    info_priv->cmd = &cmd_ATpUDOPN_query_string;
+    info_priv->at_handler = UDOPN_resp_handler;
+    info_priv->args = "=0";
+    info_priv->min_level = UBMODEM_LEVEL_NETWORK;
     break;
   default:
     free(info_priv);

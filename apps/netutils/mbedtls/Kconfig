@@ -1,0 +1,298 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig MBEDTLS
+	bool "mbedTLS TLS library"
+	default n
+	---help---
+		Enable mbedTLS library for TLS support.
+
+if MBEDTLS
+
+config MBEDTLS_SERVER
+	bool "Enable TLS server support"
+	default n
+	---help---
+		Enable TLS server support.
+
+config MBEDTLS_CLIENT
+	bool "Enable TLS client support"
+	default y
+	---help---
+		Enable TLS client support.
+
+config MBEDTLS_SSL3
+	bool "Enable SSL 3.0 support"
+	default n
+	select MBEDTLS_ENABLE_CBC
+	select MBEDTLS_ENABLE_MD5
+	select MBEDTLS_ENABLE_SHA1
+	---help---
+		Enable SSL 3.0 support.
+
+config MBEDTLS_TLS10
+	bool "Enable TLS 1.0 support"
+	default n
+	select MBEDTLS_ENABLE_CBC
+	select MBEDTLS_ENABLE_MD5
+	select MBEDTLS_ENABLE_SHA1
+	---help---
+		Enable TLS 1.0 support.
+
+config MBEDTLS_TLS11
+	bool "Enable TLS 1.1 / DTLS 1.0 support"
+	default n
+	select MBEDTLS_ENABLE_CBC
+	select MBEDTLS_ENABLE_MD5
+	select MBEDTLS_ENABLE_SHA1
+	---help---
+		Enable TLS 1.1 and DTLS 1.0 support.
+
+config MBEDTLS_TLS12
+	bool "Enable TLS 1.2 / DTLS 1.2 support"
+	default y
+	depends on MBEDTLS_ENABLE_CBC || MBEDTLS_ENABLE_GCM || MBEDTLS_ENABLE_CCM
+	select MBEDTLS_ENABLE_SHA256
+	---help---
+		Enable TLS 1.2 and DTLS 1.2 support.
+
+config MBEDTLS_DTLS
+	bool "Enable DTLS support"
+	default n
+	depends on MBEDTLS_TLS11 || MBEDTLS_TLS12
+	---help---
+		Enable Datagram Transport Layer Security (DTLS) support.
+
+config MBEDTLS_RENEGOTIATION
+	bool "Enable renegotiation support"
+	default n
+	---help---
+		Enable TLS renogotiation support.
+
+config MBEDTLS_MAX_FRAGMENT
+	bool "Enable Maximum Fragment Length Negotiation TLS extension"
+	default y
+	---help---
+		Enable Maximum Fragment Length Negotiation TLS extension (RFC 6066).
+
+config MBEDTLS_TRUNCATED_HMAC
+	bool "Enable Truncated HMAC TLS extension"
+	default n
+	---help---
+		Enable Truncated HMAC TLS extension (RFC 6066).
+
+config MBEDTLS_SESSION_TICKET
+	bool "Enable Session Ticket TLS extension"
+	default y
+	---help---
+		Enable Session Ticket TLS extension (RFC 5077).
+
+config MBEDTLS_MAX_FRAGMENT_LEN
+	int "Maximum fragment length in bytes"
+	default 0
+	---help---
+		Maximum fragment length in bytes, determines the size of each of
+		the two internal I/O buffers.
+
+		Note: output fragment size can be overridden by
+		MBEDTLS_MAX_OUT_FRAGMENT_LEN setting.
+
+		Note: the RFC defines the default size of SSL / TLS messages.
+		If you change the value here, other clients / servers may not
+		be able to communicate with you anymore. Only change this value
+		if you control both sides of the connection and have it reduced
+		at both sides, or if you're using the Max Fragment Length
+		extension and you know all your peers are using it too!
+
+		Setting to '0' will select protocol default maximum fragment
+		length which is 16 KiB (16384 bytes).
+
+config MBEDTLS_MAX_OUT_FRAGMENT_LEN
+	int "Maximum output fragment length in bytes"
+	default 0
+	---help---
+		Maximum fragment length in bytes, determines the size of the internal
+		output I/O buffer.
+
+		Note: the RFC defines the default size of SSL / TLS messages.
+		If you change the value here, output messages have smaller fragment
+		size than maximum specified for protocol. This setting allows
+		reducing RAM usage at expense of additional networking overhead.
+
+		Setting to '0' will select protocol default maximum fragment
+		length which is 16 KiB (16384 bytes).
+
+config MBEDTLS_ENABLE_PSK
+	bool "Enable PSK ciphersuite modes"
+	default n
+
+config MBEDTLS_ENABLE_CTR_DRBG
+	bool "Enable the CTR_DRBG AES-256-based random generator"
+	select MBEDTLS_ENABLE_AES
+	default y
+
+config MBEDTLS_ENABLE_HMAC_DRBG
+	bool "Enable the HMAC_DRBG random generator"
+	default y
+
+config MBEDTLS_ENABLE_RSA
+	bool "Enable RSA support"
+	default y
+
+config MBEDTLS_ENABLE_DH
+	bool "Enable DH support"
+	default y
+
+config MBEDTLS_ENABLE_ECDH
+	bool "Enable ECDH support"
+	select MBEDTLS_ENABLE_EC
+	default y
+
+config MBEDTLS_ENABLE_ECDSA
+	bool "Enable ECDSA support"
+	select MBEDTLS_ENABLE_EC
+	select MBEDTLS_ENABLE_HMAC_DRBG
+	default n
+
+config MBEDTLS_ENABLE_EC
+	bool "Enable ECC support"
+	select MBEDTLS_EC_SECP256R1
+	select MBEDTLS_ENABLE_SHA256
+	default n
+
+if MBEDTLS_ENABLE_EC
+config MBEDTLS_ENABLE_ALL_EC_CURVES
+	bool "Enable all EC curves"
+	select MBEDTLS_EC_SECP192R1
+	select MBEDTLS_EC_SECP224R1
+	select MBEDTLS_EC_SECP256R1
+	select MBEDTLS_EC_SECP384R1
+	select MBEDTLS_EC_SECP521R1
+	select MBEDTLS_EC_SECP192K1
+	select MBEDTLS_EC_SECP224K1
+	select MBEDTLS_EC_SECP256K1
+	select MBEDTLS_EC_BP256R1
+	select MBEDTLS_EC_BP384R1
+	select MBEDTLS_EC_BP512R1
+	select MBEDTLS_EC_CURVE25519
+	default n
+	---help---
+		Enable all EC curves.
+
+config MBEDTLS_EC_SECP192R1
+	bool "Enable secp192r1 curve"
+	default n
+
+config MBEDTLS_EC_SECP224R1
+	bool "Enable secp224r1 curve"
+	default n
+
+config MBEDTLS_EC_SECP256R1
+	bool "Enable secp256r1 curve"
+	default n
+
+config MBEDTLS_EC_SECP384R1
+	bool "Enable secp384r1 curve"
+	default n
+
+config MBEDTLS_EC_SECP521R1
+	bool "Enable secp521r1 curve"
+	default n
+
+config MBEDTLS_EC_SECP192K1
+	bool "Enable secp192k1 curve"
+	default n
+
+config MBEDTLS_EC_SECP224K1
+	bool "Enable secp224k1 curve"
+	default n
+
+config MBEDTLS_EC_SECP256K1
+	bool "Enable secp256k1 curve"
+	default n
+
+config MBEDTLS_EC_BP256R1
+	bool "Enable brainpoolP256r1 curve"
+	default n
+
+config MBEDTLS_EC_BP384R1
+	bool "Enable brainpoolP384r1 curve"
+	default n
+
+config MBEDTLS_EC_BP512R1
+	bool "Enable brainpoolP512r1 curve"
+	default n
+
+config MBEDTLS_EC_CURVE25519
+	bool "Enable curve25519 curve"
+	default n
+
+endif #MBEDTLS_ENABLE_EC
+
+config MBEDTLS_ENABLE_CBC
+	bool "Enable CBC cipher mode"
+	default y
+
+config MBEDTLS_ENABLE_CFB
+	bool "Enable CFB cipher mode"
+	default n
+
+config MBEDTLS_ENABLE_CTR
+	bool "Enable CTR cipher mode"
+	default n
+
+config MBEDTLS_ENABLE_GCM
+	bool "Enable GCM AEAD cipher mode"
+	default y
+
+config MBEDTLS_ENABLE_CCM
+	bool "Enable CCM AEAD cipher mode"
+	default n
+
+config MBEDTLS_ENABLE_AES
+	bool "Enable AES cipher algorithm"
+	default y
+
+config MBEDTLS_ENABLE_3DES
+	bool "Enable triple-DES cipher algorithm"
+	default n
+
+config MBEDTLS_ENABLE_BLOWFISH
+	bool "Enable Blowfish cipher algorithm"
+	default n
+
+config MBEDTLS_ENABLE_RC4
+	bool "Enable RC4 cipher algorithm"
+	default n
+
+config MBEDTLS_ENABLE_CAMELLIA
+	bool "Enable Camellia cipher algorithm"
+	default n
+
+config MBEDTLS_ENABLE_MD4
+	bool "Enable MD4 hash algorithm"
+	default n
+
+config MBEDTLS_ENABLE_MD5
+	bool "Enable MD5 hash algorithm"
+	default n
+
+config MBEDTLS_ENABLE_SHA1
+	bool "Enable SHA-1 hash algorithm"
+	default y
+
+config MBEDTLS_ENABLE_SHA256
+	bool "Enable SHA-256 hash algorithm"
+	default y
+
+config MBEDTLS_ENABLE_SHA512
+	bool "Enable SHA-512 hash algorithm"
+	default n
+
+config MBEDTLS_ENABLE_RIPEMD
+	bool "Enable RIPEMD-160 hash algorithm"
+	default n
+
+endif #MBEDTLS

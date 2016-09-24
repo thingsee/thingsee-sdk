@@ -120,6 +120,18 @@ int ts_gps_callback_unregister(gps_callback_t callback);
 gps_state_t ts_gps_get_state(void);
 
 /****************************************************************************
+ * Name: ts_gps_reset_odometer
+ *
+ * Description:
+ *   Resets the traveled distance computed by the odometer
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+int ts_gps_reset_odometer(void);
+
+/****************************************************************************
  * Name: ts_gps_get_location
  *
  * Description:

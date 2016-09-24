@@ -158,7 +158,6 @@ struct nmea_data_s
   size_t current_len;
 };
 
-
 /* GPS assistance data structure */
 
 struct gps_assistance_s {
@@ -255,8 +254,11 @@ struct ubgps_s {
 
   struct gps_assistance_s * assist;
   struct gps_assist_hint_s * hint;
-};
 
+  /* Override state-machine */
+
+  const struct ubgps_sm_s *override_sm;
+};
 
 /* GPS callback queue entry */
 

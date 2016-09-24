@@ -76,6 +76,8 @@
 #define _PIPEBASE       (0x1700) /* FIFO/pipe ioctl commands */
 #define _RTCBASE        (0x1800) /* RTC ioctl commands */
 #define _BOARDBASE      (0x1900) /* boardctl commands */
+#define _MCBASE         (0x1a00) /* Stepper motor control ioctl commands */
+#define _USBCBASE       (0x1b00) /* USB-C controller ioctl commands */
 
 /* Macros used to manage ioctl commands */
 
@@ -345,6 +347,18 @@
 
 #define _BOARDIOCVALID(c) (_IOC_TYPE(c)==_BOARDBASE)
 #define _BOARDIOC(nr)     _IOC(_BOARDBASE,nr)
+
+/* Stepper motor control driver ioctl definitions ***************************/
+/* (see nuttx/include/motor/stepper.h */
+
+#define _MCIOCVALID(c)    (_IOC_TYPE(c)==_MCBASE)
+#define _MCIOC(nr)        _IOC(_MCBASE,nr)
+
+/* USB-C controller driver ioctl definitions ********************************/
+/* (see nuttx/include/usb/xxx.h */
+
+#define _USBCIOCVALID(c)  (_IOC_TYPE(c)==_USBCBASE)
+#define _USBCIOC(nr)      _IOC(_USBCBASE,nr)
 
 /****************************************************************************
  * Public Type Definitions

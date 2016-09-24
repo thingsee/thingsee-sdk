@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# Try to pick the latest and greatest available scan-build binary
+: ${REAL_SCAN_BUILD:=$(which scan-build scan-build-3.4 scan-build-3.5 scan-build-3.6 2>/dev/null | tail -1)}
+
+[ -z "$REAL_SCAN_BUILD" ] &&
+    echo "Can not locate scan-build on your system. Install appropriate clang package" 1>&2 &&
+    exit 1
+
+# Figure out the path to the real clang compiler for our proxy
+if [ -z "$REAL_CLANG" ]
+then
+    # Specific scan-build version works with specific clang version and hardcodes its path
+    SCAN_BUILD_VERSION=${REAL_SCAN_BUILD##*-}
+    # clang-3.3 brings scan-build
+    if [ "$SCAN_BUILD_VERSION" = "build" ]
+    then
+        echo "Your version of clang is not supported. It needs to be at least 3.5" 1>&2
+        exit 1
+    else
+        export REAL_CLANG="/usr/lib/llvm-${SCAN_BUILD_VERSION}/bin/clang"
+    fi
+fi
+
+inspect()
+{
+    local VARIABLE=$1
+    # inspect.mk depends on proper working directory
+    make -s -C $(dirname $0) -f inspect.mk print-${VARIABLE}
+}
+
+# This parameter gets default value here to produce comparable results in every environment
+: ${SCAN_BUILD_MAXLOOP:=56}
+
+# Expects either arm or sim
+[ "$(inspect CONFIG_ARCH)" = "arm" ] && COMPILER_SELECTION="--use-cc arm-none-eabi-gcc --use-c++ arm-none-eabi-g++"
+
+# readlink should be available everywhere
+$REAL_SCAN_BUILD $($(dirname $0)/get-checkers) --use-analyzer $(readlink -e $(dirname $0)/clang-proxy) $COMPILER_SELECTION -maxloop $SCAN_BUILD_MAXLOOP -analyze-headers "$@"

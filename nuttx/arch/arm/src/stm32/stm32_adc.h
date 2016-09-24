@@ -678,6 +678,28 @@
 #endif
 
 /************************************************************************************
+ * Public Types
+ ************************************************************************************/
+
+#ifdef CONFIG_STM32_STM32L15XX
+typedef enum ADC_IO_CMDS
+{
+  IO_ENABLE_TEMPER_VOLT_CH = 0,
+  IO_ENABLE_DISABLE_PDI,
+  IO_ENABLE_DISABLE_PDD,
+  IO_ENABLE_DISABLE_PDD_PDI,
+  IO_ENABLE_DISABLE_AWDIE,
+  IO_ENABLE_DISABLE_EOCIE,
+  IO_ENABLE_DISABLE_JEOCIE,
+  IO_ENABLE_DISABLE_OVRIE = 7,
+  IO_ENABLE_DISABLE_ALL_INTS,
+  IO_START_CONV,
+  IO_STOP_ADC,
+  IO_START_ADC,
+} ADC_IO_CMDS;
+#endif
+
+/************************************************************************************
  * Public Function Prototypes
  ************************************************************************************/
 

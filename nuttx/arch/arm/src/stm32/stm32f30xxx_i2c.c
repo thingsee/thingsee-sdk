@@ -218,7 +218,7 @@ struct stm32_trace_s
   uint32_t count;              /* Interrupt count when status change */
   enum stm32_intstate_e event; /* Last event that occurred with this status */
   uint32_t parm;               /* Parameter associated with the event */
-  uint32_t time;               /* First of event or first status */
+  systime_t time;              /* First of event or first status */
 };
 
 /* I2C Device hardware configuration */
@@ -260,7 +260,7 @@ struct stm32_i2c_priv_s
 
 #ifdef CONFIG_I2C_TRACE
   int tndx;                    /* Trace array index */
-  uint32_t start_time;         /* Time when the trace was started */
+  systime_t start_time;        /* Time when the trace was started */
 
   /* The actual trace data */
 
@@ -720,7 +720,7 @@ static inline int stm32_i2c_sem_waitdone(FAR struct stm32_i2c_priv_s *priv)
 static inline int stm32_i2c_sem_waitdone(FAR struct stm32_i2c_priv_s *priv)
 {
   uint32_t timeout;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   int ret;
 
@@ -859,7 +859,7 @@ stm32_i2c_disable_autoend(FAR struct stm32_i2c_priv_s *priv)
 
 static inline void stm32_i2c_sem_waitstop(FAR struct stm32_i2c_priv_s *priv)
 {
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   uint32_t timeout;
   uint32_t cr;
@@ -1061,7 +1061,7 @@ static void stm32_i2c_tracedump(FAR struct stm32_i2c_priv_s *priv)
   int i;
 
   syslog(LOG_DEBUG, "Elapsed time: %d\n",
-         clock_systimer() - priv->start_time);
+         (int)(clock_systimer() - priv->start_time));
 
   for (i = 0; i <= priv->tndx; i++)
     {

@@ -60,6 +60,8 @@
  * Definitions
  ****************************************************************************/
 
+#define UBMODEM_EXAMPLE_DEBUG 1
+
 #ifndef CONFIG_EXAMPLES_UBMODEM_DAEMONPRIO
 #  define CONFIG_EXAMPLES_UBMODEM_DAEMONPRIO SCHED_PRIORITY_DEFAULT
 #endif
@@ -204,7 +206,9 @@ static void event_target_level(struct ubmodem_s *modem,
     }
   else if (data->new_level == UBMODEM_LEVEL_GPRS)
     {
-      ubmodem_start_cell_locate(modem);
+      /* Timeout 30 seconds, target accuracy 1000 meters. */
+
+      ubmodem_start_cell_locate(modem, 30, 1000);
     }
 }
 
@@ -249,6 +253,55 @@ static void event_cell_location(struct ubmodem_s *modem,
   printf("%s(): Location: Accuracy: %d meters\n", __func__, data->location.accuracy);
   printf("%s(): Date: %04d-%02d-%02d\n", __func__, data->date.year, data->date.month, data->date.day);
   printf("%s(): Time: %02d:%02d:%02d\n", __func__, data->date.hour, data->date.min, data->date.sec);
+}
+
+static void event_cell_environment(struct ubmodem_s *modem,
+                                   enum ubmodem_event_flags_e event,
+                                   const void *event_data, size_t datalen,
+                                   void *priv)
+{
+  const struct ubmodem_event_cell_environment_s *data = event_data;
+  unsigned int i;
+
+  if (data->have_signal_qual)
+    {
+      int qual = data->signal_qual.qual;
+      int qual_scaled = (7 - data->signal_qual.qual) * 100 / 7;
+
+      if (qual < 0)
+        qual_scaled = -1;
+
+      printf("%s(): Signal quality: RSSI=%d dBm, QUAL=%d (%d %%)\n",
+             __func__, data->signal_qual.rssi, qual, qual_scaled);
+    }
+
+  if (data->have_serving)
+    {
+      printf("%s(): Serving cell: type=%s, MCC=%d, MNC=%d, LAC=%x, CellID=%x, SIGNAL_dBm=%d",
+             __func__, data->serving.rat == UBMODEM_RAT_GSM ? "GSM" : "UMTS",
+             data->serving.mcc, data->serving.mnc, data->serving.lac,
+             data->serving.cell_id, data->serving.signal_dbm);
+
+      printf(data->serving.rat == UBMODEM_RAT_UMTS ? ", SC=%d\n" : "\n", data->serving.sc);
+    }
+
+  printf("%s(): Neighbor cells (num=%d):\n", __func__, data->num_neighbors);
+
+  for (i = 0; i < data->num_neighbors; i++)
+    {
+      printf("%s(): type=%s", __func__, (data->neighbors[i].rat == UBMODEM_RAT_GSM) ? "GSM" : "UMTS");
+      if (data->neighbors[i].have_mcc_mnc_lac)
+        printf(", MCC=%d, MNC=%d, LAC=%x",
+               data->neighbors[i].mcc, data->neighbors[i].mnc,
+               data->neighbors[i].lac);
+      if (data->neighbors[i].have_cellid)
+        printf(", CellID=%x", data->neighbors[i].cell_id);
+      if (data->neighbors[i].have_sc)
+        printf(", SC=%d", data->neighbors[i].sc);
+      if (data->neighbors[i].have_signal_dbm)
+        printf(", SIGNAL_dBm=%d", data->neighbors[i].signal_dbm);
+      printf("\n");
+    }
 }
 
 #ifdef UBMODEM_EXAMPLE_DEBUG
@@ -364,6 +417,7 @@ static int ubmodemd_daemon(int argc, char *argv[])
   int timeout;
   int nfds;
   int ret;
+  int time_cell_info_prev = 0;
 
   g_ubmodemd.in_poweroff = false;
   g_ubmodemd.stop_daemon = false;
@@ -397,6 +451,9 @@ static int ubmodemd_daemon(int argc, char *argv[])
                                   NULL);
   ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_CELL_LOCATION,
                                   event_cell_location,
+                                  NULL);
+  ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_CELL_ENVIRONMENT,
+                                  event_cell_environment,
                                   NULL);
 #ifdef UBMODEM_EXAMPLE_DEBUG
   ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_NEW_LEVEL,
@@ -458,7 +515,7 @@ static int ubmodemd_daemon(int argc, char *argv[])
 
       /* Wait for poll event or timeout. */
 
-      ret = poll(pfds, nfds, timeout);
+      ret = poll(pfds, nfds, timeout < 5000 ? timeout : 5000);
       if (ret < 0)
         {
           printf("ubmodemd_daemon: poll failed, %d\n", ret);
@@ -467,11 +524,24 @@ static int ubmodemd_daemon(int argc, char *argv[])
 
       /* Handle events and/or timeout. */
 
-      ret = ubmodem_pollfds_event(modem, pfds, nfds);
+      ret = ubmodem_pollfds_event(modem, ret ? pfds : NULL, ret ? nfds : 0);
       if (ret < 0)
         {
           printf("ubmodemd_daemon: ubmodem_pollfds_event failed, %d\n", ret);
           continue;
+        }
+
+      /* Trigger cell-environment request */
+
+      if (time(0) - time_cell_info_prev >= 15)
+        {
+          time_cell_info_prev = time(0);
+
+          ret = ubmodem_request_cell_environment(modem);
+          if (ret < 0)
+            {
+              printf("ubmodem_request_cell_environment: %d\n", ret);
+            }
         }
     }
   while (!(g_ubmodemd.stop_daemon && g_ubmodemd.powered_off));

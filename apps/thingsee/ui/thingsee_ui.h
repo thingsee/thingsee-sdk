@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ * Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,11 +35,21 @@
 #ifndef THINGSEE_UI_H_
 #define THINGSEE_UI_H_
 
+#include <nuttx/config.h>
+#include <debug.h>
+
+#ifdef CONFIG_THINGSEE_UI_DEBUG
+# define uidbg dbg
+#else
+# define uidbg(...) ((void)0)
+#endif
+
 void start_thingsee_UI(void (*system_do_shutdown_fn)(const char *reset_type), void *app);
 void thingsee_UI_set_purpose_and_state(const char * const purpose, const char * const state);
 void thingsee_UI_set_state(const char * const state);
 void thingsee_UI_set_charger_state(bool bCharging);
 void thingsee_UI_sense_event(const char *format, ...);
+void thingsee_UI_set_heat_mode(void);
 void thingsee_UI_reset_device(const char *reset_type);
 void thingsee_UI_set_PC_USB_connected(bool state);
 bool thingsee_UI_get_PC_USB_connected(void);
@@ -52,30 +62,33 @@ struct ts_engine_app * thingsee_UI_get_app_instance(void);
 #define CENTER_ALIGN            .alignment=OLED_TBLOCK_CENTER_ALIGNMENT
 #define LEFT_ALIGN              .alignment=OLED_TBLOCK_LEFT_ALIGNMENT
 
-typedef enum {
-    HOME_SCREEN,
-    SENSES_SCREEN,
-    MENU_SCREEN,
-    LAST_SCREEN
+typedef enum
+{
+  HOME_SCREEN,
+  SENSES_SCREEN,
+  MENU_SCREEN,
+  LAST_SCREEN
 } UI_screens_t;
 
-struct thingsee_UI_data_t {
-    int screen_off_timer_id;
-    int shutdown_timer_id;
-    uint8_t shutdown_counter;
-    int buttonfd;
-    int capsensefd;
-    bool bStarting;
-    char *purpose;
-    char *state;
-    bool bLcd_on;
-    bool bCharging;
-    UI_screens_t displayed_screen;
-    void (*system_do_shutdown_fn)(const char *reset_type);
-    char *lines_on_screen[MAX_LINES_PER_SCREEN];
-    struct ts_engine_app *app;
-    int battery_animation_timer_id;
-    bool bPCUSBConnected;
+struct thingsee_UI_data_t
+{
+  int screen_off_timer_id;
+  int shutdown_timer_id;
+  uint8_t shutdown_counter;
+  int buttonfd;
+  int capsensefd;
+  bool bStarting;
+  char *purpose;
+  char *state;
+  bool bLcd_on;
+  bool bCharging;
+  UI_screens_t displayed_screen;
+  void (*system_do_shutdown_fn)(const char *reset_type);
+  char *lines_on_screen[MAX_LINES_PER_SCREEN];
+  bool bInHeatMode;
+  struct ts_engine_app *app;
+  int battery_animation_timer_id;
+  bool bPCUSBConnected;
 };
 
 #endif /* THINGSEE_UI_H_ */

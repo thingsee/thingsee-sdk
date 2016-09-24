@@ -1,0 +1,40 @@
+{
+    "init_puid": 0,
+    "purposes": [
+        {
+            "puid": 0,
+            "init_stid": 0,
+            "states": [
+                {
+                    "stid": 0,
+                    "connector_id": 0,
+                    "events": [
+                        {
+                            "evid": 0,
+                            "event_log": 1,
+                            "actions": {
+                                "send_event": 0,
+                                "goto_stid": 1
+                            },
+                            "senses": [
+                                {
+                                    "sid": 393472,
+                                    "measurement_rate": 500,
+                                    "threshold_count": 3,
+                                    "thresholds": {
+                                        "is_gt": 1.0
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                	"stid": 1,
+                    "connector_id": 0,
+                    "events": [ ]
+                }
+            ]
+        }
+    ]
+}

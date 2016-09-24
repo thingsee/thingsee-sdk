@@ -1,0 +1,34 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig NETUTILS_LIBCOAP
+	bool "CoAP library (Constrained Application Protocol, RFC 7252)"
+	default n
+	depends on NET && NET_UDP
+	select DEV_RANDOM
+	---help---
+		libcoap: C-Implementation of CoAP
+
+		libcoap implements a lightweight application-protocol for devices that
+		are constrained their resources such as computing power, RF range,
+		memory, bandwith, or network packet sizes. This protocol, CoAP was
+		standardized in the IETF as RFC 7252.
+
+if NETUTILS_LIBCOAP
+
+config LIBCOAP_CUSTOM_IO
+	bool "Use application provided I/O layer for libcoap"
+	default n
+	---help---
+		Allow application to implement I/O layer for libcoap. For example,
+		for DTLS support.
+
+config LIBCOAP_DISABLE_DEBUG
+	bool "Disable debug traces and util functions in libcoap"
+	default n
+	---help---
+		Disable debugging
+
+endif # NETUTILS_LIBCOAP

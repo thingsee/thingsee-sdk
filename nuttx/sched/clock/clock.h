@@ -67,16 +67,12 @@
  * Global Variables
  ********************************************************************************/
 
-#if !defined(CONFIG_SCHED_TICKLESS) && !defined(__HAVE_KERNEL_GLOBALS)
+#if !defined(CONFIG_SCHED_TICKLESS)
   /* The system clock exists (CONFIG_SCHED_TICKLESS), but it not prototyped
    * globally in include/nuttx/clock.h.
    */
 
-#  ifdef CONFIG_SYSTEM_TIME64
-extern volatile uint64_t g_system_timer;
-#  else
-extern volatile uint32_t g_system_timer;
-#  endif
+extern volatile systime_t g_system_timer;
 #endif
 
 extern struct timespec   g_basetime;
@@ -96,8 +92,8 @@ void weak_function clock_timer(void);
 
 int    clock_abstime2ticks(clockid_t clockid,
                            FAR const struct timespec *abstime,
-                           FAR int *ticks);
-int    clock_time2ticks(FAR const struct timespec *reltime, FAR int *ticks);
-int    clock_ticks2time(int ticks, FAR struct timespec *reltime);
+                           FAR ssystime_t *ticks);
+int    clock_time2ticks(FAR const struct timespec *reltime, FAR ssystime_t *ticks);
+int    clock_ticks2time(ssystime_t ticks, FAR struct timespec *reltime);
 
 #endif /* __SCHED_CLOCK_CLOCK_H */

@@ -47,6 +47,7 @@
 #include <stdint.h>
 #include <time.h>
 
+#include <nuttx/clock.h>
 #include <nuttx/net/net.h>
 
 /****************************************************************************
@@ -175,7 +176,7 @@ int psock_close(FAR struct socket *psock);
 /* sockopt support ***********************************************************/
 
 #ifdef CONFIG_NET_SOCKOPTS
-int net_timeo(uint32_t start_time, socktimeo_t timeo);
+int net_timeo(systime_t start_time, socktimeo_t timeo);
 #endif
 
 /* send.c ********************************************************************/

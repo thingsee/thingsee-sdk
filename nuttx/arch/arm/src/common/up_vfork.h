@@ -42,6 +42,12 @@
 
 #include <nuttx/config.h>
 
+#ifndef __ASSEMBLY__
+#  include <nuttx/compiler.h>
+#  include <sys/types.h>
+#  include <stdint.h>
+#endif
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -83,6 +89,14 @@ struct vfork_s
 
   /* Floating point registers (not yet) */
 };
+#endif
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+#ifndef __ASSEMBLY__
+pid_t up_vfork(const struct vfork_s *context) externally_visible_function;
 #endif
 
 #endif /* __ARCH_ARM_SRC_ARM_VFORK_H */

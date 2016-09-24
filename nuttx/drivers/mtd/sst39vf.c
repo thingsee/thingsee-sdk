@@ -343,12 +343,12 @@ static void sst39vf_writeseq(FAR const struct sst39vf_wrinfo_s *wrinfo, int nseq
  *
  *   "Toggle Bits (DQ6 and DQ2). During the internal Program or Erase
  *    operation, any consecutive attempts to read DQ6 will produce
- *    alternating “1”s and “0”s, i.e., toggling between 1 and 0. When
+ *    alternating ï¿½1ï¿½s and ï¿½0ï¿½s, i.e., toggling between 1 and 0. When
  *    the internal Program or Erase operation is completed, the DQ6 bit
  *    will stop toggling. The device is then ready for the next operation.
  *    For Sector-, Block-, or Chip-Erase, the toggle bit (DQ6) is valid
  *    after the rising edge of sixth WE# (or CE#) pulse.  DQ6 will be set to
- *    “1” if a Read operation is attempted on an Erase-Suspended
+ *    ï¿½1ï¿½ if a Read operation is attempted on an Erase-Suspended
  *    Sector/Block. If Program operation is initiated in a sector/block not
  *    selected in Erase-Suspend mode, DQ6 will toggle.
  *
@@ -400,7 +400,7 @@ static int sst39vf_waittoggle(FAR const struct sst39vf_wrinfo_s *wrinfo,
  *   Erase the entire chip
  *
  *   "The SST39VF160x/320x provide a Chip-Erase operation, which allows the
- *    user to erase the entire memory array to the “1” state. This is useful
+ *    user to erase the entire memory array to the ï¿½1ï¿½ state. This is useful
  *    when the entire device must be quickly erased.  The Chip-Erase operation
  *    is initiated by executing a six-byte command sequence with Chip-Erase
  *    command (10H) at address 5555H in the last byte sequence. The Erase
@@ -417,7 +417,7 @@ static int sst39vf_chiperase(FAR struct sst39vf_dev_s *priv)
 {
 #if 0
   struct sst39vf_wrinfo_s wrinfo;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
 #endif
 
@@ -488,7 +488,7 @@ static int sst39vf_sectorerase(FAR struct sst39vf_dev_s *priv,
 {
   struct sst39vf_wrinfo_s wrinfo;
 #if 0
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
 #endif
 
@@ -557,7 +557,7 @@ static int sst39vf_sectorerase(FAR struct sst39vf_dev_s *priv,
  *   CE# or WE#, whichever occurs first. The third step is the internal
  *   Program operation which is initiated after the rising edge of the
  *   fourth WE# or CE#, whichever occurs first. The Program operation, once
- *   initiated, will be completed within 10 µs. .... During the Program
+ *   initiated, will be completed within 10 ï¿½s. .... During the Program
  *   operation, the only valid reads are Data# Polling and Toggle Bit.
  *   During the internal Program operation, the host is free to perform
  *   additional tasks. Any commands issued during the internal Program

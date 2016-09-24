@@ -39,9 +39,15 @@ include $(APPDIR)/Make.defs
 
 # Thingsee display
 
+GRPHNDLR_DIR = $(wildcard qr/*.c)
+
 ASRCS  =
 ifeq ($(CONFIG_THINGSEE_DISPLAY_MODULE),y)
   CSRCS  = oled_display.c oled_text_block.c oled_text.c oled_image.c
+endif
+
+ifeq ($(CONFIG_THINGSEE_DISPLAY_QR),y)
+  CSRCS += $(GRPHNDLR_DIR)
 endif
 
 ifeq ($(CONFIG_THINGSEE_DISPLAY_INC_IMG_EXAMPLE),y)

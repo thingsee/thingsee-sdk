@@ -1452,7 +1452,7 @@ static FAR void *usrsocktest_daemon(FAR void *param)
       /* Wait for request from kernel side. */
 
       pthread_mutex_lock(&daemon_mutex);
-      if (!priv->do_not_poll_usrsock)
+      if (!priv->do_not_poll_usrsock && fd >= 0)
         {
           pfd[npfds].fd = fd;
           pfd[npfds].events = POLLIN;
@@ -1518,6 +1518,14 @@ static FAR void *usrsocktest_daemon(FAR void *param)
                   ret = for_each_connection(fd, priv,
                                             &reset_recv_avail);
                   break;
+                case 'K':
+                  /* Kill usrsockdev */
+                  if (fd >= 0)
+                    {
+                      close(fd);
+                      fd = -1;
+                    }
+                  break;
                 case '*':
                   sem_post(&priv->wakewaitsem);
                   break; /* woke thread. */
@@ -1536,7 +1544,10 @@ static FAR void *usrsocktest_daemon(FAR void *param)
 
   ret = OK;
 errout:
-  close(fd);
+  if (fd >= 0)
+    {
+      close(fd);
+    }
 
   dbg("ret: %d\n", ret);
 

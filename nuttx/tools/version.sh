@@ -120,14 +120,14 @@ if [ -z "${BUILD}" ]; then
 		echo "GIT version information is not available"
 		exit 3
 	fi
-	BUILD=`echo ${GITINFO} | cut -d' ' -f2`
+	BUILD=`echo ${GITINFO} | cut -d' ' -f2 | head -c 20`
 	if [ -z "${BUILD}" ]; then
 		echo "GIT build information not found"
 		exit 4
 	fi
 fi
 
-# Write a version file into the NuttX directoy.  The syntax of file is such that it
+# Write a version file into the NuttX directory.  The syntax of file is such that it
 # may be sourced by a bash script or included by a Makefile.
 
 echo "#!/bin/bash" >${OUTFILE}

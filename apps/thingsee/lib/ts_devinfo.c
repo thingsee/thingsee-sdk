@@ -40,6 +40,7 @@
 
 #include <nuttx/config.h>
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -66,15 +67,55 @@
 #ifndef CONFIG_THINGSEE_DISABLE_DEVICE_INFO_TABLE
 static const struct device_information_s device_information[] =
 {
+  /* B1.0 - Macro */
+  { .uid = { 0x10473230, 0x32383737, 0x0031002c }, .sn = "XJ841760323", .hwid = 0x0101 },
+  { .uid = { 0x00000000, 0x00000000, 0x00000000 }, .sn = "XJ841760324", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0037002c }, .sn = "XJ841760325", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0033002b }, .sn = "XJ841760326", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0037002d }, .sn = "XJ841760327", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0018002d }, .sn = "XJ841760328", .hwid = 0x0101 },
+  { .uid = { 0x00000000, 0x00000000, 0x00000000 }, .sn = "XJ841760329", .hwid = 0x0101 },
+  { .uid = { 0x00000000, 0x00000000, 0x00000000 }, .sn = "XJ841760330", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0036001b }, .sn = "XJ841760331", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x002b001d }, .sn = "XJ841760332", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0038001c }, .sn = "XJ841760333", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x002d001d }, .sn = "XJ841760334", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0038002c }, .sn = "XJ841760335", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0018002c }, .sn = "XJ841760336", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0032001c }, .sn = "XJ841760337", .hwid = 0x0101 },
+  { .uid = { 0x00000000, 0x00000000, 0x00000000 }, .sn = "XJ841760338", .hwid = 0x0101 },
+  { .uid = { 0x10473230, 0x32383737, 0x0036001c }, .sn = "XJ941760339", .hwid = 0x0102 },
+  { .uid = { 0x10473230, 0x32383737, 0x002d001b }, .sn = "XJ941760340", .hwid = 0x0102 },
+  { .uid = { 0x10473230, 0x32383737, 0x001c002d }, .sn = "XJ941760341", .hwid = 0x0102 },
+  { .uid = { 0x10473230, 0x32383737, 0x0030002c }, .sn = "XJ941760342", .hwid = 0x0102 },
+  /* B1.2 - Puppet */
+  { .uid = { 0x10333335, 0x30333143, 0x002b0018 }, .sn = "XL544260001", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x002a0017 }, .sn = "XL544260002", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00300017 }, .sn = "XL544260003", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x002e0018 }, .sn = "XL544260004", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x002f0018 }, .sn = "XL544260005", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00300018 }, .sn = "XL544260006", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00350019 }, .sn = "XL544260007", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00310017 }, .sn = "XL544260009", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00380019 }, .sn = "XL544260010", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00370019 }, .sn = "XL544260011", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00360019 }, .sn = "XL544260012", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00310018 }, .sn = "XL544260013", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00320018 }, .sn = "XL544260014", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00360018 }, .sn = "XL544260015", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x00260018 }, .sn = "XL544260016", .hwid = 0x0000 },
+  { .uid = { 0x10333335, 0x30333143, 0x002c0018 }, .sn = "XL544260019", .hwid = 0x0000 },
 };
 #endif
 
-struct {
+static struct {
   const char *eeprom_prod_str;
   const char *eeprom_backup_str;
   cJSON *json_root;
   cJSON *json_prod;
 } prod_data;
+
+static pthread_mutex_t g_prod_data_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /****************************************************************************
  * Private Functions
@@ -179,28 +220,44 @@ static int ts_init_prod_data(void)
 int ts_device_prod_data_get_entry(const char *entry, char *buf, size_t buflen)
 {
   cJSON *item;
+  int ret;
 
-  if (buflen == 0)
-    return 0;
+  if (buflen > 0)
+    {
+      buf[0] = 0;
+    }
 
-  buf[0] = 0;
+  pthread_mutex_lock(&g_prod_data_mutex);
 
   if (ts_init_prod_data() != OK)
-    return 0;
+    {
+      ret = 0;
+      goto out;
+    }
 
   item = cJSON_GetObjectItem(prod_data.json_prod, entry);
   if (!item)
-    return 0;
+    {
+      ret = 0;
+      goto out;
+    }
 
-  switch (item->type)
+  switch (cJSON_type(item))
     {
     case cJSON_Number:
-      return snprintf(buf, buflen, "%d", item->valueint);
+      ret = snprintf(buf, buflen, "%d", cJSON_int(item));
+      break;
     case cJSON_String:
-      return snprintf(buf, buflen, "%s", item->valuestring);
+      ret = snprintf(buf, buflen, "%s", cJSON_string(item));
+      break;
     default:
-      return 0;
+      ret = 0;
+      break;
     }
+
+out:
+  pthread_mutex_unlock(&g_prod_data_mutex);
+  return ret;
 }
 
 /****************************************************************************
@@ -214,9 +271,15 @@ int ts_device_prod_data_set_entry(const char *entry, const char *valuestr)
 {
   cJSON *new_item, *old_item, *item;
   char *json_str;
+  int ret;
+
+  pthread_mutex_lock(&g_prod_data_mutex);
 
   if (ts_init_prod_data() != OK)
-    return ERROR;
+    {
+      ret = ERROR;
+      goto out;
+    }
 
   if (!valuestr)
     valuestr = "";
@@ -225,7 +288,10 @@ int ts_device_prod_data_set_entry(const char *entry, const char *valuestr)
 
   new_item = cJSON_CreateString(valuestr);
   if (!new_item)
-    return ERROR;
+    {
+      ret = ERROR;
+      goto out;
+    }
 
   /* Detach old item from object. */
 
@@ -240,8 +306,8 @@ int ts_device_prod_data_set_entry(const char *entry, const char *valuestr)
   item = cJSON_GetObjectItem(prod_data.json_prod, entry);
   if (!item)
     goto err;
-  if (strcmp(item->valuestring, valuestr) != 0)
-	goto err;
+  if (strcmp(cJSON_string(item), valuestr) != 0)
+    goto err;
 
   /* Save new data object to EEPROM. */
 
@@ -258,7 +324,10 @@ int ts_device_prod_data_set_entry(const char *entry, const char *valuestr)
   free(json_str);
   if (old_item)
     cJSON_Delete(old_item);
-  return OK;
+  ret = OK;
+out:
+  pthread_mutex_unlock(&g_prod_data_mutex);
+  return ret;
 
 err:
 
@@ -270,6 +339,7 @@ err:
   if (old_item)
     cJSON_AddItemToObject(prod_data.json_prod, entry, old_item);
 
+  pthread_mutex_unlock(&g_prod_data_mutex);
   return ERROR;
 }
 
@@ -292,13 +362,20 @@ void ts_fill_missing_prod_data(void)
   if (!board_device_get_uid(&uid))
     return;
 
+  pthread_mutex_lock(&g_prod_data_mutex);
+
   if (ts_init_prod_data() == OK)
     {
       /* Check if production data already has PSN. */
 
       if (ts_device_prod_data_get_entry("psn", buf, sizeof(buf)) > 0)
-        return; /* No need to fill PSN to EEPROM. */
+        {
+          pthread_mutex_unlock(&g_prod_data_mutex);
+          return; /* No need to fill PSN to EEPROM. */
+        }
     }
+
+  pthread_mutex_unlock(&g_prod_data_mutex);
 
   devi = ts_device_identify(&uid);
   if (devi == NULL)

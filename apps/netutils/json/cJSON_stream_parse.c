@@ -81,6 +81,17 @@ struct parse_fd_priv_s
   size_t bufpos;
 };
 
+struct stream_parse_value
+{
+  uint8_t type;
+  union
+  {
+    cJSON *object;
+    double valuedouble;
+    char *valuestring;
+  } u;
+};
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -92,9 +103,12 @@ static const unsigned char firstByteMark[7] =
  * Private Prototypes
  ****************************************************************************/
 
-static cJSON_instream *stream_parse_value(cJSON *item, cJSON_instream *in);
-static cJSON_instream *stream_parse_array(cJSON *item, cJSON_instream *in);
-static cJSON_instream *stream_parse_object(cJSON *item, cJSON_instream *in);
+static cJSON_instream *stream_parse_value(struct stream_parse_value *nvalue,
+                                          cJSON_instream *in);
+static cJSON_instream *stream_parse_array(struct stream_parse_value *nvalue,
+                                          cJSON_instream *in);
+static cJSON_instream *stream_parse_object(struct stream_parse_value *nvalue,
+                                           cJSON_instream *in);
 
 /****************************************************************************
  * Private Functions
@@ -123,12 +137,66 @@ static inline char stream_peek(cJSON_instream *in)
   return in->curr;
 }
 
+static cJSON *stream_parse_create_item(struct stream_parse_value *value,
+                                       const char *name)
+{
+  cJSON *item = NULL;
+
+  switch (value->type)
+    {
+    default:
+      DEBUGASSERT(false);
+      break;
+
+    case cJSON_NULL:
+      item = cJSON_CreateNamedNull(name);
+      break;
+
+    case cJSON_False:
+      item = cJSON_CreateNamedFalse(name);
+      break;
+
+    case cJSON_True:
+      item = cJSON_CreateNamedTrue(name);
+      break;
+
+    case cJSON_Number:
+      item = cJSON_CreateNamedNumber(name, value->u.valuedouble);
+      break;
+
+    case cJSON_String:
+      item = cJSON_CreateNamedString(name, value->u.valuestring);
+
+      free(value->u.valuestring);
+      value->u.valuestring = NULL;
+
+      break;
+
+    case cJSON_Array:
+    case cJSON_Object:
+      item = cJSON_SetItemName(value->u.object, name ? name : "");
+      if (!item)
+        {
+          /* Memory allocation failed. */
+
+          cJSON_Delete(value->u.object);
+        }
+
+      value->u.object = NULL;
+
+      break;
+    }
+
+  return item;
+}
+
 /* Parse the input text to generate a number, and populate the result into item. */
 
-static cJSON_instream *stream_parse_number(cJSON *item, cJSON_instream *in)
+static cJSON_instream *stream_parse_number(struct stream_parse_value *nvalue,
+                                           cJSON_instream *in)
 {
-  double n = 0, sign = 1, scale = 0;
-  int subscale = 0, signsubscale = 1;
+  double n = 0, sign = 1;
+  int scale = 0, subscale = 0, signsubscale = 1;
 
   /* Has sign? */
 
@@ -148,9 +216,8 @@ static cJSON_instream *stream_parse_number(cJSON *item, cJSON_instream *in)
           stream_peek(in) != 'E')
         {
           n = copysign(0.0, sign);
-          item->valuedouble = n;
-          item->valueint = (int)n;
-          item->type = cJSON_Number;
+          nvalue->u.valuedouble = n;
+          nvalue->type = cJSON_Number;
           return in;
         }
     }
@@ -211,10 +278,14 @@ static cJSON_instream *stream_parse_number(cJSON *item, cJSON_instream *in)
 
   /* number = +/- number.fraction * 10^+/-exponent */
 
-  n = copysign(n * pow(10.0, (scale + subscale * signsubscale)), sign);
-  item->valuedouble = n;
-  item->valueint = (int)n;
-  item->type = cJSON_Number;
+  if (n != 0.0)
+    {
+      n *= pow(10.0, scale + subscale * signsubscale);
+    }
+
+  n = copysign(n, sign);
+  nvalue->u.valuedouble = n;
+  nvalue->type = cJSON_Number;
   return in;
 }
 
@@ -300,7 +371,8 @@ static unsigned stream_parse_hex4(cJSON_instream *in)
 
 /* Parse the input text into an unescaped cstring, and populate item. */
 
-static cJSON_instream *stream_parse_string(cJSON *item, cJSON_instream *in)
+static cJSON_instream *stream_parse_string(struct stream_parse_value *nvalue,
+                                           cJSON_instream *in)
 {
   char *ptr2;
   char *out;
@@ -481,8 +553,8 @@ next_escape:
       (void)stream_get(in);
     }
 
-  item->valuestring = out;
-  item->type = cJSON_String;
+  nvalue->u.valuestring = out;
+  nvalue->type = cJSON_String;
   return in;
 }
 
@@ -500,21 +572,23 @@ static cJSON_instream *skip(cJSON_instream *in)
 
 /* Parser core - when encountering text, process appropriately. */
 
-static cJSON_instream *stream_parse_value(cJSON *item, cJSON_instream *in)
+static cJSON_instream *stream_parse_value(struct stream_parse_value *nvalue,
+                                          cJSON_instream *in)
 {
   static const struct
   {
-    const char *name;
+    char name[6];
     char type;
-    char value;
   } match_strings[] =
     {
-      { "null", cJSON_NULL, 0 },
-      { "false", cJSON_False, 0 },
-      { "true", cJSON_True, 1 },
+      { "null", cJSON_NULL },
+      { "false", cJSON_False },
+      { "true", cJSON_True },
       { }
     };
   int midx;
+
+  memset(nvalue, 0, sizeof(*nvalue));
 
   if (!in)
     {
@@ -523,7 +597,7 @@ static cJSON_instream *stream_parse_value(cJSON *item, cJSON_instream *in)
       return NULL;
     }
 
-  for (midx = 0; match_strings[midx].name; midx++)
+  for (midx = 0; match_strings[midx].name[0]; midx++)
     {
       const char *match = match_strings[midx].name;
 
@@ -541,31 +615,30 @@ static cJSON_instream *stream_parse_value(cJSON *item, cJSON_instream *in)
               return NULL;
             }
 
-          item->type = match_strings[midx].type;
-          item->valueint = match_strings[midx].value;
+          nvalue->type = match_strings[midx].type;
           return in;
         }
     }
 
   if (stream_peek(in) == '\"')
     {
-      return stream_parse_string(item, in);
+      return stream_parse_string(nvalue, in);
     }
 
   if (stream_peek(in) == '-' ||
       (stream_peek(in) >= '0' && stream_peek(in) <= '9'))
     {
-      return stream_parse_number(item, in);
+      return stream_parse_number(nvalue, in);
     }
 
   if (stream_peek(in) == '[')
     {
-      return stream_parse_array(item, in);
+      return stream_parse_array(nvalue, in);
     }
 
   if (stream_peek(in) == '{')
     {
-      return stream_parse_object(item, in);
+      return stream_parse_object(nvalue, in);
     }
 
   /* Failure. */
@@ -575,9 +648,11 @@ static cJSON_instream *stream_parse_value(cJSON *item, cJSON_instream *in)
 
 /* Build an array from input text. */
 
-static cJSON_instream *stream_parse_array(cJSON *item, cJSON_instream *in)
+static cJSON_instream *stream_parse_array(struct stream_parse_value *nvalue,
+                                          cJSON_instream *in)
 {
-  cJSON *child;
+  struct stream_parse_value value;
+  cJSON *new_item;
 
   if (stream_peek(in) != '[')
     {
@@ -586,7 +661,13 @@ static cJSON_instream *stream_parse_array(cJSON *item, cJSON_instream *in)
       return NULL;
     }
 
-  item->type = cJSON_Array;
+  nvalue->type = cJSON_Array;
+  nvalue->u.object = cJSON_CreateArray();
+  if (!nvalue->u.object)
+    {
+      return NULL;
+    }
+
   (void)stream_get(in);
   in = skip(in);
   if (stream_peek(in) == ']')
@@ -597,48 +678,56 @@ static cJSON_instream *stream_parse_array(cJSON *item, cJSON_instream *in)
       return in;
     }
 
-  item->child = child = cJSON_New_Item();
-  if (!item->child)
-    {
-      /* Memory fail */
-
-      return NULL;
-    }
-
   /* Skip any spacing, get the value. */
 
-  in = skip(stream_parse_value(child, skip(in)));
+  in = skip(stream_parse_value(&value, skip(in)));
   if (!in)
     {
-      return NULL;
+      goto err_cleanup;
     }
+
+  /* Create cJSON value item. */
+
+  new_item = stream_parse_create_item(&value, NULL);
+  if (!new_item)
+    {
+      /* value cleaned-up by stream_parse_create_item. */
+      goto err_cleanup;
+    }
+
+  /* Add cJSON value to array. */
+
+  cJSON_AddItemToArray(nvalue->u.object, new_item);
 
   while (stream_peek(in) == ',')
     {
-      cJSON *new_item;
-      if (!(new_item = cJSON_New_Item()))
-        {
-          /* memory fail */
-
-          return NULL;
-        }
-
-      child->next = new_item;
-      new_item->prev = child;
-      child = new_item;
       (void)stream_get(in);
-      in = skip(stream_parse_value(child, skip(in)));
+      in = skip(stream_parse_value(&value, skip(in)));
       if (!in)
         {
           /* Memory fail */
-
-          return NULL;
+          goto err_cleanup;
         }
+
+      new_item = stream_parse_create_item(&value, NULL);
+      if (!new_item)
+        {
+          /* value cleaned-up by stream_parse_create_item. */
+          goto err_cleanup;
+        }
+
+      /* Add cJSON value to array. */
+
+      cJSON_AddItemToArray(nvalue->u.object, new_item);
     }
 
   if (stream_peek(in) == ']')
     {
       /* End of array */
+
+      /* Pack object for smaller memory print. */
+
+      cJSON_PackChild(nvalue->u.object);
 
       (void)stream_get(in);
       return in;
@@ -646,14 +735,25 @@ static cJSON_instream *stream_parse_array(cJSON *item, cJSON_instream *in)
 
   /* Malformed */
 
+err_cleanup:
+  if (nvalue->u.object)
+    {
+      cJSON_Delete(nvalue->u.object);
+      nvalue->u.object = NULL;
+    }
+
   return NULL;
 }
 
 /* Build an object from the text. */
 
-static cJSON_instream *stream_parse_object(cJSON *item, cJSON_instream *in)
+static cJSON_instream *stream_parse_object(struct stream_parse_value *nvalue,
+                                           cJSON_instream *in)
 {
-  cJSON *child;
+  struct stream_parse_value value;
+  char *name = NULL;
+  cJSON *new_item;
+
   if (stream_peek(in) != '{')
     {
       /* Not an object! */
@@ -661,7 +761,13 @@ static cJSON_instream *stream_parse_object(cJSON *item, cJSON_instream *in)
       return NULL;
     }
 
-  item->type = cJSON_Object;
+  nvalue->type = cJSON_Object;
+  nvalue->u.object = cJSON_CreateObject();
+  if (!nvalue->u.object)
+    {
+      return NULL;
+    }
+
   (void)stream_get(in);
   in = skip(in);
   if (stream_peek(in) == '}')
@@ -672,80 +778,110 @@ static cJSON_instream *stream_parse_object(cJSON *item, cJSON_instream *in)
       return in;
     }
 
-  item->child = child = cJSON_New_Item();
-  if (!item->child)
-    {
-      return NULL;
-    }
-
-  in = skip(stream_parse_string(child, skip(in)));
+  in = skip(stream_parse_string(&value, skip(in)));
   if (!in)
     {
-      return NULL;
+      goto err_cleanup;
     }
 
-  child->string = child->valuestring;
-  child->valuestring = 0;
+  name = value.u.valuestring;
+  value.u.valuestring = NULL;
+
   if (stream_peek(in) != ':')
     {
-      return NULL;
+      goto err_cleanup;
     }
 
    /* Skip any spacing, get the value. */
 
   (void)stream_get(in);
-  in = skip(stream_parse_value(child, skip(in)));
+  in = skip(stream_parse_value(&value, skip(in)));
   if (!in)
     {
-      return NULL;
+      goto err_cleanup;
     }
+
+  /* Create cJSON value item. */
+
+  new_item = stream_parse_create_item(&value, name);
+  if (!new_item)
+    {
+      /* value cleaned-up by stream_parse_create_item. */
+      goto err_cleanup;
+    }
+
+  free(name);
+  name = NULL;
+
+  /* Add cJSON value to object. */
+
+  cJSON_AddNamedItemToObject(nvalue->u.object, new_item);
 
   while (stream_peek(in) == ',')
     {
-      cJSON *new_item;
-      if (!(new_item = cJSON_New_Item()))
-        {
-          /* Memory fail */
-
-          return NULL;
-        }
-
-      child->next = new_item;
-      new_item->prev = child;
-      child = new_item;
       (void)stream_get(in);
-      in = skip(stream_parse_string(child, skip(in)));
+      in = skip(stream_parse_string(&value, skip(in)));
       if (!in)
         {
-          return NULL;
+          goto err_cleanup;
         }
 
-      child->string = child->valuestring;
-      child->valuestring = 0;
+      name = value.u.valuestring;
+      value.u.valuestring = NULL;
+
       if (stream_peek(in) != ':')
         {
-          return NULL;
+          goto err_cleanup;
         }
 
      /* Skip any spacing, get the value. */
 
       (void)stream_get(in);
-      in = skip(stream_parse_value(child, skip(in)));
+      in = skip(stream_parse_value(&value, skip(in)));
       if (!in)
         {
-          return NULL;
+          goto err_cleanup;
         }
+
+      /* Create cJSON value item. */
+
+      new_item = stream_parse_create_item(&value, name);
+      if (!new_item)
+        {
+          /* value cleaned-up by stream_parse_create_item. */
+          goto err_cleanup;
+        }
+
+      free(name);
+      name = NULL;
+
+      /* Add cJSON value to array. */
+
+      cJSON_AddNamedItemToObject(nvalue->u.object, new_item);
     }
 
   if (stream_peek(in) == '}')
     {
-      /* End of array */
+      /* End of object */
+
+      /* Pack object for smaller memory print. */
+
+      cJSON_PackChild(nvalue->u.object);
 
       (void)stream_get(in);
       return in;
     }
 
   /* Malformed */
+
+err_cleanup:
+  free(name);
+
+  if (nvalue->u.object)
+    {
+      cJSON_Delete(nvalue->u.object);
+      nvalue->u.object = NULL;
+    }
 
   return NULL;
 }
@@ -855,24 +991,23 @@ static char getc_fd(void *priv)
 
 cJSON *cJSON_Parse_Stream(char (*getc_fn)(void *priv), void *priv)
 {
+  struct stream_parse_value value;
   cJSON_instream stream = {};
   cJSON *c;
-
-  c = cJSON_New_Item();
-  if (!c)
-    {
-      /* Memory fail */
-
-      return NULL;
-    }
 
   stream.getc_fn = getc_fn;
   stream.fn_priv = priv;
   stream.curr = -1;
 
-  if (!stream_parse_value(c, skip(&stream)))
+  if (!stream_parse_value(&value, skip(&stream)))
     {
-      cJSON_Delete(c);
+      return NULL;
+    }
+
+  c = stream_parse_create_item(&value, NULL);
+  if (!c)
+    {
+      /* Memory fail */
       return NULL;
     }
 

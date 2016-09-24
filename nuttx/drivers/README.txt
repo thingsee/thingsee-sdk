@@ -99,6 +99,10 @@ mmcsd/
   SPI and SDIO/MCI interfaces are supported.  See include/nuttx/mmcsd.h
   and include/nuttx/sdio.h for further information.
 
+motor/
+  Support for motor control drivers.  This includes such things as
+  stepper motor controllers.
+
 mtd/
   Memory Technology Device (MTD) drivers.  Some simple drivers for
   memory technologies like FLASH, EEPROM, NVRAM, etc.  See

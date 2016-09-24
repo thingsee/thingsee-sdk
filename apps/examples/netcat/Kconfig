@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig EXAMPLES_NETCAT
+	bool "netcat util"
+	default n
+	depends on NET
+	---help---
+		Enable the netcat util

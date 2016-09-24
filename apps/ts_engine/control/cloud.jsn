@@ -1,0 +1,20 @@
+{
+    "wifiConnections": [
+        {
+            "connectionId": 0,
+            "ssid": "MYWLAN",
+            "password": "salasana",
+            "encryption": "WPA2"
+        }
+    ],
+    "cellularConnections": [
+        {
+            "connectionId": 0,
+            "accessPointName": "internet",
+            "accessPointIPAddr": "0.0.0.0",
+            "userName": "",
+            "password": "",
+            "enableRoaming": true
+        }
+    ]
+}

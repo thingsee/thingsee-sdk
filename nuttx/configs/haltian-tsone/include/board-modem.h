@@ -61,6 +61,41 @@ extern "C" {
 #define EXTERN extern
 #endif
 
+/* Board support implements 'board_set_modem_activity()'. */
+
+#define BOARD_HAS_SET_MODEM_ACTIVITY    1
+
+/* Board has TX_BURST on GPIO1? */
+
+#define BOARD_MODEM_HAS_TX_BURST_GPIO1  1
+
+/****************************************************************************
+ * Public Type Definition
+ ****************************************************************************/
+
+enum e_board_modem_activity
+{
+  BOARD_MODEM_ACTIVITY_HIGH = 0,
+  BOARD_MODEM_ACTIVITY_LOW,
+
+  __BOARD_MODEM_ACTIVITY_MAX,
+};
+
+enum e_board_modem_pin_ctrl
+{
+  BOARD_MODEM_PIN_CTRL_ALT_MODE = 0,
+  BOARD_MODEM_PIN_CTRL_LOW,
+  BOARD_MODEM_PIN_CTRL_HIGH,
+  BOARD_MODEM_PIN_CTRL_READ
+};
+
+enum e_board_modem_pin
+{
+  BOARD_MODEM_PIN_RTS = 0,
+  BOARD_MODEM_PIN_CTS,
+  BOARD_MODEM_PIN_TX_BURST,
+};
+
 /****************************************************************************
  * Name: board_modem_reset_pin_set
  *
@@ -137,6 +172,28 @@ EXTERN int board_modem_initialize(bool *is_vcc_off);
  ****************************************************************************/
 
 EXTERN int board_modem_deinitialize(int fd);
+
+/****************************************************************************
+ * Name: board_set_modem_activity
+ *
+ * Description:
+ *   Change activity state, for controlling power-saving/deep-sleep activity
+ *
+ ****************************************************************************/
+
+EXTERN void board_set_modem_activity(enum e_board_modem_activity type,
+                                     bool active);
+
+/****************************************************************************
+ * Name: board_modem_pin_ctrl
+ *
+ * Description:
+ *   Control modem RTS/CTS gpio.
+ *
+ ****************************************************************************/
+
+EXTERN bool board_modem_pin_ctrl(enum e_board_modem_pin pin,
+                                 enum e_board_modem_pin_ctrl ctrl);
 
 #undef EXTERN
 #if defined(__cplusplus)

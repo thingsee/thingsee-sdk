@@ -116,16 +116,24 @@ static int ts_gps_core_reconfigure(void)
 
   /* Reconfigure poll events. */
 
-  if (ts_core_gps.fd >= 0)
-    ts_core_fd_unregister(ts_core_gps.fd);
-  if (pfd.fd >= 0)
+  if (pfd.fd >= 0 && ts_core_gps.fd == pfd.fd)
     {
-      ret = ts_core_fd_register(pfd.fd, pfd.events, ts_gps_poll_callback,
-                                NULL);
+      ret = ts_core_fd_set_poll_events(pfd.fd, pfd.events);
       DEBUGASSERT(ret >= 0);
     }
+  else
+    {
+      if (ts_core_gps.fd >= 0)
+        ts_core_fd_unregister(ts_core_gps.fd);
+      if (pfd.fd >= 0)
+        {
+          ret = ts_core_fd_register(pfd.fd, pfd.events, ts_gps_poll_callback,
+                                    NULL);
+          DEBUGASSERT(ret >= 0);
+        }
 
-  ts_core_gps.fd = pfd.fd;
+      ts_core_gps.fd = pfd.fd;
+    }
 
   /* Reconfigure timers. */
 
@@ -200,6 +208,25 @@ static int ts_gps_poll_callback(const struct pollfd * const inpfd,
   return ts_gps_core_reconfigure();
 }
 
+/*****************************************************************************
+ * Name: ts_gps_new_timer_callback
+ *
+ * Description:
+ *   New timer event handling for GPS. Called from ubgps when new timer is
+ *   registered and upper level needs to reconfigure poll timeout.
+ *****************************************************************************/
+
+static void ts_gps_new_timer_callback(void const * const e, void * const priv)
+{
+  int ret;
+
+  ret = ts_gps_core_reconfigure();
+  if (ret < 0)
+    {
+      dbg("ts_gps_core_reconfigure failed\n");
+    }
+}
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -232,10 +259,18 @@ int ts_gps_initialize(void)
       return ERROR;
     }
 
+  ret = ubgps_callback_register(GPS_EVENT_NEW_TIMER,
+                                ts_gps_new_timer_callback, NULL);
+  if (ret < 0)
+    {
+      dbg("ubgps_callback_register failed\n");
+      return ret;
+    }
+
   ret = ts_gps_core_reconfigure();
   if (ret < 0)
     {
-      dbg("reconfigure failed\n");
+      dbg("ts_gps_core_reconfigure failed\n");
       return ret;
     }
 
@@ -294,6 +329,23 @@ gps_state_t ts_gps_get_state(void)
 {
   return ubgps_get_state();
 }
+
+/****************************************************************************
+ * Name: ts_gps_reset_odometer
+ *
+ * Description:
+ *   Resets the traveled distance computed by the odometer
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+#ifdef CONFIG_UBGPS_ODOMETER_EVENT
+int ts_gps_reset_odometer(void)
+{
+  return ubgps_reset_odometer();
+}
+#endif
 
 /****************************************************************************
  * Name: ts_gps_get_location

@@ -307,7 +307,7 @@ static void SendTimeout(struct usrsocktest_daemon_conf_s *dconf)
   datalen = strlen("abcde");
   ret = sendto(sd, data, datalen, 0, NULL, 0);
   TEST_ASSERT_EQUAL(-1, ret);
-  TEST_ASSERT_EQUAL(ETIMEDOUT, errno);
+  TEST_ASSERT_EQUAL(EAGAIN, errno);
   TEST_ASSERT_EQUAL(1, usrsocktest_daemon_get_num_connected_sockets());
   TEST_ASSERT_EQUAL(1, usrsocktest_daemon_get_num_active_sockets());
   TEST_ASSERT_EQUAL(0, usrsocktest_daemon_get_send_bytes());

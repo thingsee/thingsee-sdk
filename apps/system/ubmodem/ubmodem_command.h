@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_command.h
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -60,18 +60,19 @@
 
 /* Timeouts for different command classes */
 
-#define MODEM_CMD_DEFAULT_TIMEOUT          (2 * 10) /* 2 sec */
-#define MODEM_CMD_NETWORK_TIMEOUT          ((int)(1.5 * 60 + 10) * 10) /* ~1.5 min */
-#define MODEM_CMD_SOCKET_TIMEOUT           (10 * 10) /* 10 sec */
-#define MODEM_CMD_SOCKET_CONNECT_TIMEOUT   (20 * 10) /* 20 sec */
-#define MODEM_CMD_POWEROFF_TIMEOUT         (40 * 10) /* 40 sec */
-#define MODEM_CMD_SIM_MGMT_TIMEOUT         (10 * 10) /* 10 sec */
-#define MODEM_CMD_LOCATION_TIMEOUT         (10 * 10) /* 10 sec */
-#define MODEM_CMD_DELETE_MESSAGE_TIMEOUT   (55 * 10) /* 55 sec */
+#define MODEM_CMD_DEFAULT_TIMEOUT              (5 * 10) /* 5 sec */
+#define MODEM_CMD_NETWORK_TIMEOUT              ((int)(1.5 * 60 + 10) * 10) /* ~1.5 min */
+#define MODEM_CMD_NETWORK_REGISTRATION_TIMEOUT (MODEM_CMD_NETWORK_TIMEOUT + 5 * 10)
+#define MODEM_CMD_SOCKET_TIMEOUT               (10 * 10) /* 10 sec */
+#define MODEM_CMD_SOCKET_CONNECT_TIMEOUT       (20 * 10) /* 20 sec */
+#define MODEM_CMD_POWEROFF_TIMEOUT             (40 * 10) /* 40 sec */
+#define MODEM_CMD_SIM_MGMT_TIMEOUT             (10 * 10) /* 10 sec */
+#define MODEM_CMD_LOCATION_TIMEOUT             (10 * 10) /* 10 sec */
+#define MODEM_CMD_DELETE_MESSAGE_TIMEOUT       (55 * 10) /* 55 sec */
 
-#define MODEM_CMD_NEW_DELAY_MSEC           (5)  /* msec */
-#define MODEM_DATA_PROMPT_DELAY_MSEC       (10) /* msec */
-#define MODEM_TX_BUF_FULL_RECHECK_MSEC     (333) /* msec */
+#define MODEM_CMD_NEW_DELAY_MSEC               (20) /* msec */
+#define MODEM_DATA_PROMPT_DELAY_MSEC           (50) /* msec */
+#define MODEM_TX_BUF_FULL_RECHECK_MSEC         (333) /* msec */
 
 /****************************************************************************
  * Type Declarations

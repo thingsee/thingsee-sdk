@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_substate_cmdprompt.c
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,6 +51,7 @@
 #include <apps/system/ubmodem.h>
 
 #include "ubmodem_internal.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -65,6 +66,10 @@
       CONFIG_UBMODEM_POWERSAVE_GUARD_PERIOD > 65000
 #    error "CONFIG_UBMODEM_POWERSAVE_GUARD_PERIOD not in valid range"
 #  endif
+#endif
+
+#ifndef CONFIG_UBMODEM_FAST_DORMANCY_DELAY_TIMER
+#  define CONFIG_UBMODEM_FAST_DORMANCY_DELAY_TIMER 3
 #endif
 
 /****************************************************************************
@@ -84,6 +89,9 @@ struct modem_read_cb_s
  * Private Function Prototypes.
  ****************************************************************************/
 
+static const ubmodem_send_config_func_t *
+get_common_config_cmds(struct ubmodem_s *modem, size_t *ncmds);
+
 #ifdef CONFIG_UBMODEM_POWERSAVE
 static const ubmodem_send_config_func_t *
 get_powersave_config_cmds(struct ubmodem_s *modem, size_t *ncmds);
@@ -102,6 +110,12 @@ static const struct at_cmd_def_s cmd_initial =
   .resp_format  = NULL,
   .resp_num     = 0,
   .timeout_dsec = 5, /* 500 msec */
+};
+
+static const struct at_cmd_def_s cmd_enable_hw_flowcontrol =
+{
+  .name         = "&K3\\Q3",
+  .resp_num     = 0,
 };
 
 static const struct at_cmd_def_s cmd_ATpCMEE =
@@ -139,6 +153,43 @@ static const struct at_cmd_def_s cmd_ATpCOPS =
   .timeout_dsec = MODEM_CMD_NETWORK_TIMEOUT,
 };
 
+static const struct at_cmd_def_s cmd_ATI0 =
+{
+  .name         = "I0",
+  .resp_format  = (const uint8_t[]){ RESP_FMT_STRING_TO_EOL },
+  .resp_num     = 1,
+  .flag_plain   = true,
+};
+
+static const struct at_cmd_def_s cmd_ATpCGMR =
+{
+  .name         = "+CGMR",
+  .resp_format  = (const uint8_t[]){ RESP_FMT_STRING_TO_EOL },
+  .resp_num     = 1,
+  .flag_plain   = true,
+};
+
+static const struct at_cmd_def_s cmd_ATpUMWI =
+{
+  .name         = "+UMWI",
+  .resp_format  = NULL,
+  .resp_num     = 0
+};
+
+static const struct at_cmd_def_s cmd_ATpUHSDUPA =
+{
+  .name         = "+UHSDUPA",
+  .resp_format  = NULL,
+  .resp_num     = 0
+};
+
+static const struct at_cmd_def_s cmd_ATpUFDAC =
+{
+  .name         = "+UFDAC",
+  .resp_format  = NULL,
+  .resp_num     = 0
+};
+
 #ifdef CONFIG_UBMODEM_POWERSAVE
 static const struct at_cmd_def_s cmd_ATpUPSV =
 {
@@ -150,6 +201,7 @@ static const struct at_cmd_def_s cmd_ATpUPSV =
 
 static const ubmodem_configs_func_t ubmodem_config_groups[] =
 {
+  get_common_config_cmds,
 #ifdef CONFIG_UBMODEM_POWERSAVE
   get_powersave_config_cmds,
 #endif
@@ -157,11 +209,248 @@ static const ubmodem_configs_func_t ubmodem_config_groups[] =
   __ubmodem_voice_get_config_commands,
   __ubmodem_voice_get_audiopath_config_commands,
 #endif
+  __ubmodem_celllocate_get_config_cmds,
 };
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+static void ATI0_handler(struct ubmodem_s *modem,
+                            const struct at_cmd_def_s *cmd,
+                            const struct at_resp_info_s *info,
+                            const uint8_t *resp_stream,
+                            size_t stream_len, void *priv)
+{
+  bool ok;
+  const char *str;
+
+  modem->model = UBMODEM_MODEL_UNKNOWN;
+  modem->order_code[0] = '\0';
+
+  if (info->status == RESP_STATUS_OK)
+    {
+      /* Parse order code. */
+
+      ok = __ubmodem_stream_get_string(&resp_stream, &stream_len, &str, NULL);
+      if (!ok)
+        {
+          str = "UNKNOWN";
+        }
+      else
+        {
+          snprintf(modem->order_code, sizeof(modem->order_code), "%s", str);
+        }
+
+      /* Get model from order code. */
+
+      if (strncmp(str, "SARA-G", 6) == 0)
+        {
+          int sara_g_number = atoi(str + 6);
+
+          /* This is SARA-G series modem. */
+
+          switch (sara_g_number)
+            {
+              case 300:
+                modem->model = UBMODEM_MODEL_SARA_G300;
+                break;
+              case 310:
+                modem->model = UBMODEM_MODEL_SARA_G310;
+                break;
+              case 340:
+                modem->model = UBMODEM_MODEL_SARA_G340;
+                break;
+              case 350:
+                modem->model = UBMODEM_MODEL_SARA_G350;
+                break;
+              default:
+                modem->model = UBMODEM_MODEL_SARA_G_UNKNOWN;
+                break;
+            }
+        }
+      else if (strncmp(str, "SARA-U", 6) == 0)
+        {
+          int sara_u_number = atoi(str + 6);
+
+          /* This is SARA-U series modem. */
+
+          switch (sara_u_number)
+            {
+              case 260:
+                modem->model = UBMODEM_MODEL_SARA_U260;
+                break;
+              case 270:
+                modem->model = UBMODEM_MODEL_SARA_U270;
+                break;
+              case 280:
+                modem->model = UBMODEM_MODEL_SARA_U280;
+                break;
+              default:
+                modem->model = UBMODEM_MODEL_SARA_U_UNKNOWN;
+                break;
+            }
+        }
+
+      dbg("Modem order code: %s\n", str);
+    }
+
+  /* Continue with next configuration. */
+
+  __ubmodem_cmdprompt_generic_config_handler(modem, cmd, info, NULL, 0,
+                                             (void *)cmd);
+}
+
+static void config_get_modem_model(struct ubmodem_s *modem)
+{
+  int err;
+
+  /* ATI0 gives 'order code', has modem model at head. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATI0, ATI0_handler, NULL, "");
+  MODEM_DEBUGASSERT(modem, err == OK);
+}
+
+static void ATpCGMR_handler(struct ubmodem_s *modem,
+                            const struct at_cmd_def_s *cmd,
+                            const struct at_resp_info_s *info,
+                            const uint8_t *resp_stream,
+                            size_t stream_len, void *priv)
+{
+  const char *str = "UNKNOWN";
+
+  if (info->status == RESP_STATUS_OK)
+    {
+      (void)__ubmodem_stream_get_string(&resp_stream, &stream_len, &str, NULL);
+    }
+
+  dbg("Modem FW version: %s\n", str);
+
+  /* Continue with next configuration. */
+
+  __ubmodem_cmdprompt_generic_config_handler(modem, cmd, info, NULL, 0,
+                                             (void *)cmd);
+}
+
+static void config_get_modem_fw_version(struct ubmodem_s *modem)
+{
+  int err;
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCGMR, ATpCGMR_handler, NULL, "");
+  MODEM_DEBUGASSERT(modem, err == OK);
+}
+
+static void config_disable_umwi_urc(struct ubmodem_s *modem)
+{
+  int err;
+
+  if (__ubmodem_is_model_sara_g(modem))
+    {
+      /* +UMWI not available on Sara-G */
+
+      /* Continue with next configuration. */
+
+      struct at_resp_info_s info_ok = {};
+
+      info_ok.status = RESP_STATUS_OK;
+
+      __ubmodem_cmdprompt_generic_config_handler(modem, &cmd_ATpUMWI,
+                                                 &info_ok, NULL, 0,
+                                                 (void *)&cmd_ATpUMWI);
+      return;
+    }
+
+  /* Disable +UMWI URC. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUMWI,
+                           __ubmodem_cmdprompt_generic_config_handler,
+                           (void *)&cmd_ATpUMWI, "=0");
+  MODEM_DEBUGASSERT(modem, err == OK);
+}
+
+static void config_disable_hsdupa(struct ubmodem_s *modem)
+{
+  int err;
+
+  if (__ubmodem_is_model_sara_g(modem))
+    {
+      /* HSDPA/HSUPA not available on Sara-G */
+
+      /* Continue with next configuration. */
+
+      struct at_resp_info_s info_ok = {};
+
+      info_ok.status = RESP_STATUS_OK;
+
+      __ubmodem_cmdprompt_generic_config_handler(modem, &cmd_ATpUHSDUPA,
+                                                 &info_ok, NULL, 0,
+                                                 (void *)&cmd_ATpUHSDUPA);
+      return;
+    }
+
+  /* Disable HSDPA/HSUPA for 3G. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUHSDUPA,
+                           __ubmodem_cmdprompt_generic_config_handler,
+                           (void *)&cmd_ATpUHSDUPA, "=0,8,0,6");
+  MODEM_DEBUGASSERT(modem, err == OK);
+}
+
+static void config_setup_fast_dormancy(struct ubmodem_s *modem)
+{
+  int err;
+
+  if (__ubmodem_is_model_sara_g(modem))
+    {
+      /* Fast Dormancy not available on Sara-G */
+
+      /* Continue with next configuration. */
+
+      struct at_resp_info_s info_ok = {};
+
+      info_ok.status = RESP_STATUS_OK;
+
+      __ubmodem_cmdprompt_generic_config_handler(modem, &cmd_ATpUFDAC,
+                                                 &info_ok, NULL, 0,
+                                                 (void *)&cmd_ATpUFDAC);
+      return;
+    }
+
+#if defined(CONFIG_UBMODEM_FAST_DORMANCY_DELAY_TIMER) && \
+    CONFIG_UBMODEM_FAST_DORMANCY_DELAY_TIMER > 0
+  char setup[16];
+
+  snprintf(setup, sizeof(setup), "2,%d,%d",
+           CONFIG_UBMODEM_FAST_DORMANCY_DELAY_TIMER,
+           CONFIG_UBMODEM_FAST_DORMANCY_DELAY_TIMER);
+#else
+  const char *setup = "3"; /* 3 => disable auto FD. */
+#endif
+
+  /* Setup autonomous Fast Dormancy for 3G. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUFDAC,
+                           __ubmodem_cmdprompt_generic_config_handler,
+                           (void *)&cmd_ATpUFDAC, "=%s", setup);
+  MODEM_DEBUGASSERT(modem, err == OK);
+}
+
+static const ubmodem_send_config_func_t *
+get_common_config_cmds(struct ubmodem_s *modem, size_t *ncmds)
+{
+  static const ubmodem_send_config_func_t commands[] =
+  {
+    config_get_modem_model,
+    config_get_modem_fw_version,
+    config_disable_umwi_urc,
+    config_disable_hsdupa,
+    config_setup_fast_dormancy,
+  };
+
+  *ncmds = ARRAY_SIZE(commands);
+
+  return commands;
+}
 
 #ifdef CONFIG_UBMODEM_POWERSAVE
 
@@ -289,6 +578,7 @@ static void ATpINVALIDCOMMANDTEST_handler(struct ubmodem_s *modem,
 
       /* Retry enabling enabling CMEE error codes. */
 
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
       err = __ubmodem_set_timer(modem, 100, &delay_after_initial_handler, sub);
       if (err == ERROR)
         {
@@ -365,6 +655,56 @@ static void ATpCMEE_handler(struct ubmodem_s *modem,
   MODEM_DEBUGASSERT(modem, err == OK);
 }
 
+static void enable_hw_flowcontrol_handler(struct ubmodem_s *modem,
+                                          const struct at_cmd_def_s *cmd,
+                                          const struct at_resp_info_s *info,
+                                          const uint8_t *resp_stream,
+                                          size_t stream_len, void *priv)
+{
+  struct modem_sub_setup_cmd_prompt_s *sub = priv;
+  int err;
+
+  /*
+   * Response handler for enable HW flowcontrol (AT&K3\Q3)
+   */
+
+  MODEM_DEBUGASSERT(modem, cmd == &cmd_enable_hw_flowcontrol);
+
+  if ((info->status == RESP_STATUS_TIMEOUT ||
+       info->status == RESP_STATUS_ERROR) && ++sub->try_count < 10)
+    {
+      /*
+       * Initial command might have been issued multiple times, with left over
+       * responses in buffer. So lets retry few times.
+       */
+
+      err = __ubmodem_send_cmd(modem, &cmd_enable_hw_flowcontrol,
+                               enable_hw_flowcontrol_handler, sub, "");
+      MODEM_DEBUGASSERT(modem, err == OK);
+      return;
+    }
+
+  if (resp_status_is_error_or_timeout(info->status))
+    {
+      __ubmodem_common_failed_command(modem, cmd, info, "");
+      return;
+    }
+
+  if (info->status != RESP_STATUS_OK)
+    {
+      MODEM_DEBUGASSERT(modem, false); /* Should not get here. */
+      return;
+    }
+
+  /*
+   * Enable CMEE error codes.
+   */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCMEE, ATpCMEE_handler, sub,
+                           "%s", "=1");
+  MODEM_DEBUGASSERT(modem, err == OK);
+}
+
 static int delay_after_initial_handler(struct ubmodem_s *modem,
                                        const int timer_id, void * const arg)
 {
@@ -373,7 +713,9 @@ static int delay_after_initial_handler(struct ubmodem_s *modem,
 
   /* Echo disabled, do next command. */
 
-  err = __ubmodem_send_cmd(modem, &cmd_ATpCMEE, ATpCMEE_handler, sub, "%s", "=1");
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+  err = __ubmodem_send_cmd(modem, &cmd_enable_hw_flowcontrol,
+                           enable_hw_flowcontrol_handler, sub, "");
   MODEM_DEBUGASSERT(modem, err == OK);
   return OK;
 }
@@ -406,9 +748,27 @@ static void initial_handler(struct ubmodem_s *modem,
 
   if (resp_status_is_error_or_timeout(info->status))
     {
+      if (++modem->cmd_prompt_ate0_attempts >= 4)
+        {
+          /* ATE0 has failed repeatedly. Either voltage level is too low
+           * or modem not connected. Report to upper layer about the issue.
+           *
+           * For Sara-G to start-up, battery voltage must be >= 3.30V
+           * For Sara-U to start-up, battery voltage must be >= 3.35V
+           */
+
+          enum ubmodem_error_event_e error =
+              UBMODEM_ERROR_STARTUP_VOLTAGE_TOO_LOW;
+
+          __ubmodem_publish_event(modem, UBMODEM_EVENT_FLAG_ERROR, &error,
+                                  sizeof(error));
+        }
+
       __ubmodem_common_failed_command(modem, cmd, info, "E0");
       return;
     }
+
+  modem->cmd_prompt_ate0_attempts = 0;
 
   if (info->status != RESP_STATUS_OK)
     {
@@ -425,6 +785,7 @@ static void initial_handler(struct ubmodem_s *modem,
   memset(sub, 0, sizeof(*sub));
   sub->try_count = 0;
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
   err = __ubmodem_set_timer(modem, 100, &delay_after_initial_handler, sub);
   if (err == ERROR)
     {
@@ -525,13 +886,28 @@ __ubmodem_cmdprompt_generic_config_handler(struct ubmodem_s *modem,
                                            const uint8_t *resp_stream,
                                            size_t stream_len, void *priv)
 {
+  struct modem_sub_setup_cmd_prompt_s *sub = &modem->sub.setup_cmd_prompt;
+
   MODEM_DEBUGASSERT(modem, cmd == priv);
 
   if (info->status != RESP_STATUS_OK)
     {
-      __ubmodem_common_failed_command(modem, cmd, info, "");
+      if (sub->configure_retries++ >= UBMODEM_CONFIGURE_RETRIES)
+        {
+          __ubmodem_common_failed_command(modem, cmd, info, "");
+        }
+      else
+        {
+          /* Proceed with retry current configuration command */
+
+          sub->configure_cmd_pos--;
+          __ubmodem_cmdprompt_configure_next(modem);
+        }
+
       return;
     }
+
+  sub->configure_retries = 0;
 
   /* Proceed with next configuration commands */
 

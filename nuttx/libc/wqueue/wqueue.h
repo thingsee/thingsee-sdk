@@ -61,7 +61,7 @@
 
 struct usr_wqueue_s
 {
-  uint32_t          delay;  /* Delay between polling cycles (ticks) */
+  systime_t         delay;  /* Delay between polling cycles (ticks) */
   struct dq_queue_s q;      /* The queue of pending work */
   pid_t             pid;    /* The task ID of the worker thread(s) */
 };

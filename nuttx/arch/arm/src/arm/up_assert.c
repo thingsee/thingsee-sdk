@@ -348,9 +348,19 @@ void up_assert(const uint8_t *filename, int lineno)
 #ifdef CONFIG_PRINT_TASKNAME
   lldbg("Assertion failed at file:%s line: %d task: %s\n",
         filename, lineno, rtcb->name);
+  if (!up_interrupt_context())
+    {
+      dbg("Assertion failed at file:%s line: %d task: %s\n",
+          filename, lineno, rtcb->name);
+    }
 #else
   lldbg("Assertion failed at file:%s line: %d\n",
         filename, lineno);
+  if (!up_interrupt_context())
+    {
+      dbg("Assertion failed at file:%s line: %d\n",
+          filename, lineno);
+    }
 #endif
 
   up_dumpstate();

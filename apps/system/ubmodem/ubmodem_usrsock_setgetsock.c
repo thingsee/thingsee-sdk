@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_usrsock_setgetsock.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -256,108 +256,6 @@ static void getsockopt_handler(struct ubmodem_s *modem,
 }
 
 /****************************************************************************
- * Name: modem_setsockopt_socket
- *
- * Description:
- *   Prepare setting socket option.
- ****************************************************************************/
-
-static void modem_setsockopt_socket(struct modem_socket_s *sock)
-{
-  struct ubmodem_s *modem = sock->modem;
-  int err;
-  char buf[sizeof(struct linger)];
-  size_t rlen;
-
-  /* Read value. */
-
-  rlen = read(modem->sockets.usrsockfd, &buf, sock->setgetsock.valuesize);
-  if (rlen < 0)
-    {
-      err = -errno;
-      dbg("Error reading %d bytes of request: ret=%d, errno=%d\n",
-          sock->setgetsock.valuesize, (int)rlen, errno);
-      goto err_out;
-    }
-  if (rlen != sock->setgetsock.valuesize)
-    {
-      err = -EMSGSIZE;
-      goto err_out;
-    }
-
-  /* Inform usrsock link that request was fully read. */
-
-  (void)__ubmodem_usrsock_send_response(modem, &sock->req, true, -EINPROGRESS);
-
-  /* SO_LINGER has different value type than the rest. */
-
-  if (sock->setgetsock.option == MODEM_SO_LINGER)
-    {
-      struct linger *li = (void *)buf;
-      int64_t linger_msec;
-
-      /* Input is integer boolean flag and delay value. */
-
-      linger_msec = li->l_linger * 1000;
-
-      if (linger_msec >= INT16_MAX)
-        linger_msec = INT16_MAX;
-      if (linger_msec < 0)
-        linger_msec = 0;
-
-      if (!li->l_onoff)
-        linger_msec = 0;
-
-      err = __ubmodem_send_cmd(modem, &cmd_ATpUSOSO, setsockopt_handler,
-                               sock, "=%d,%d,%d,%d,%d", sock->modem_sd,
-                               sock->setgetsock.level,
-                               sock->setgetsock.option,
-                               !!li->l_onoff, (int)linger_msec);
-      MODEM_DEBUGASSERT(modem, err == OK);
-      return;
-    }
-  else
-    {
-      int *onoff = (void *)buf;
-      int setting;
-
-      /* Input is integer boolean flag. */
-
-      setting = !!*onoff;
-
-      err = __ubmodem_send_cmd(modem, &cmd_ATpUSOSO, setsockopt_handler,
-                               sock, "=%d,%d,%d,%d", sock->modem_sd,
-                               sock->setgetsock.level,
-                               sock->setgetsock.option,
-                               setting);
-      MODEM_DEBUGASSERT(modem, err == OK);
-      return;
-    }
-
-err_out:
-  (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, err);
-}
-
-/****************************************************************************
- * Name: modem_getsockopt_socket
- *
- * Description:
- *   Prepare getting socket option.
- ****************************************************************************/
-
-static void modem_getsockopt_socket(struct modem_socket_s *sock)
-{
-  struct ubmodem_s *modem = sock->modem;
-  int err;
-
-  err = __ubmodem_send_cmd(modem, &cmd_ATpUSOGO, getsockopt_handler,
-                           sock, "=%d,%d,%d", sock->modem_sd,
-                           sock->setgetsock.level,
-                           sock->setgetsock.option);
-  MODEM_DEBUGASSERT(modem, err == OK);
-}
-
-/****************************************************************************
  * Name: modem_usrsock_handle_setgetsockopt_request
  *
  * Description:
@@ -447,7 +345,7 @@ modem_usrsock_handle_setgetsockopt_request(struct ubmodem_s *modem,
   /* Mark pending getsock/setsock operation. */
 
   sock->req = *head;
-  sock->is_setgetsock_pending = true;
+  sock->is_socket_config_pending = true;
   sock->setgetsock.option = modem_option;
   sock->setgetsock.level = modem_level;
   sock->setgetsock.valuesize = valuesize;
@@ -476,39 +374,105 @@ err_out:
  ****************************************************************************/
 
 /****************************************************************************
- * Name: __ubmodem_do_setgetsock_socket
+ * Name: __ubmodem_setsockopt_socket
  *
  * Description:
- *   Prepare set or get socket option.
+ *   Prepare setting socket option.
  ****************************************************************************/
 
-void __ubmodem_do_setgetsock_socket(struct modem_socket_s *sock)
+void __ubmodem_setsockopt_socket(struct modem_socket_s *sock)
 {
   struct ubmodem_s *modem = sock->modem;
+  int err;
+  char buf[sizeof(struct linger)];
+  size_t rlen;
 
-  if (sock->is_closed)
+  /* Read value. */
+
+  rlen = read(modem->sockets.usrsockfd, &buf, sock->setgetsock.valuesize);
+  if (rlen < 0)
     {
-      /* Socket has been closed, report error. */
+      err = -errno;
+      dbg("Error reading %d bytes of request: ret=%d, errno=%d\n",
+          sock->setgetsock.valuesize, (int)rlen, errno);
+      goto err_out;
+    }
+  if (rlen != sock->setgetsock.valuesize)
+    {
+      err = -EMSGSIZE;
+      goto err_out;
+    }
 
-      (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, -EBADF);
+  /* Inform usrsock link that request was fully read. */
 
-      __ubsocket_work_done(sock);
+  (void)__ubmodem_usrsock_send_response(modem, &sock->req, true, -EINPROGRESS);
+
+  /* SO_LINGER has different value type than the rest. */
+
+  if (sock->setgetsock.option == MODEM_SO_LINGER)
+    {
+      struct linger *li = (void *)buf;
+      int64_t linger_msec;
+
+      /* Input is integer boolean flag and delay value. */
+
+      linger_msec = li->l_linger * 1000;
+
+      if (linger_msec >= INT16_MAX)
+        linger_msec = INT16_MAX;
+      if (linger_msec < 0)
+        linger_msec = 0;
+
+      if (!li->l_onoff)
+        linger_msec = 0;
+
+      err = __ubmodem_send_cmd(modem, &cmd_ATpUSOSO, setsockopt_handler,
+                               sock, "=%d,%d,%d,%d,%d", sock->modem_sd,
+                               sock->setgetsock.level,
+                               sock->setgetsock.option,
+                               !!li->l_onoff, (int)linger_msec);
+      MODEM_DEBUGASSERT(modem, err == OK);
+      return;
+    }
+  else
+    {
+      int *onoff = (void *)buf;
+      int setting;
+
+      /* Input is integer boolean flag. */
+
+      setting = !!*onoff;
+
+      err = __ubmodem_send_cmd(modem, &cmd_ATpUSOSO, setsockopt_handler,
+                               sock, "=%d,%d,%d,%d", sock->modem_sd,
+                               sock->setgetsock.level,
+                               sock->setgetsock.option,
+                               setting);
+      MODEM_DEBUGASSERT(modem, err == OK);
       return;
     }
 
-  if (sock->req.reqid == USRSOCK_REQUEST_SETSOCKOPT)
-    {
-      modem_setsockopt_socket(sock);
-      return;
-    }
-  else if (sock->req.reqid == USRSOCK_REQUEST_GETSOCKOPT)
-    {
-      modem_getsockopt_socket(sock);
-      return;
-    }
+err_out:
+  (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, err);
+}
 
-  (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, -EINVAL);
-  return;
+/****************************************************************************
+ * Name: __ubmodem_getsockopt_socket
+ *
+ * Description:
+ *   Prepare getting socket option.
+ ****************************************************************************/
+
+void __ubmodem_getsockopt_socket(struct modem_socket_s *sock)
+{
+  struct ubmodem_s *modem = sock->modem;
+  int err;
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUSOGO, getsockopt_handler,
+                           sock, "=%d,%d,%d", sock->modem_sd,
+                           sock->setgetsock.level,
+                           sock->setgetsock.option);
+  MODEM_DEBUGASSERT(modem, err == OK);
 }
 
 /****************************************************************************

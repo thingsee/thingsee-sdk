@@ -170,7 +170,7 @@ typedef enum lsm9ds1_xl_bwm_t
 typedef enum lsm9ds1_xl_scale_t
   {
     LSM9DS1_XL_SCALE_2G = 0x0,
-    LSM9DS1_XL_SCALE_NOTAVAILABLE,
+    LSM9DS1_XL_SCALE_16G,      /* Note ordering */
     LSM9DS1_XL_SCALE_4G,
     LSM9DS1_XL_SCALE_8G,
   } lsm9ds1_xl_scale_t;
@@ -179,6 +179,7 @@ static const float lsm9ds1_xl_resolution[4] = {
   [LSM9DS1_XL_SCALE_2G] = 2.0 / 32768.0,
   [LSM9DS1_XL_SCALE_4G] = 4.0 / 32768.0,
   [LSM9DS1_XL_SCALE_8G] = 8.0 / 32768.0,
+  [LSM9DS1_XL_SCALE_16G] = 16.0 / 32768.0,
 };
 
 /* gyro and accelerometer status after interrupt */

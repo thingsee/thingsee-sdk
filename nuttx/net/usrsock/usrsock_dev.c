@@ -1,7 +1,7 @@
 /****************************************************************************
  * net/usrsock/usrsock_dev.c
  *
- *  Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *  Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *  Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -53,6 +53,7 @@
 
 #include <arch/irq.h>
 
+#include <nuttx/random.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/net/net.h>
 #include <nuttx/net/usrsock.h>
@@ -85,6 +86,8 @@ struct usrsockdev_s
                                   * request) */
     sem_t   acksem;              /* Request acknowledgment notification */
     uint8_t ack_xid;             /* Exchange id for which waiting ack */
+    uint16_t nbusy;              /* Number of requests blocked from different
+                                    threads */
   } req;
 
   FAR struct usrsock_conn_s *datain_conn; /* Connection instance to receive
@@ -493,6 +496,12 @@ static ssize_t usrsockdev_handle_event(FAR struct usrsockdev_s *dev,
 
             return -ENOENT;
           }
+
+#ifdef CONFIG_DEV_RANDOM
+        /* Add randomness. */
+
+        add_sw_randomness((hdr->events << 16) - hdr->usockid);
+#endif
 
         /* Handle event. */
 
@@ -931,8 +940,8 @@ static int usrsockdev_close(FAR struct file *filep)
   FAR struct inode *inode = filep->f_inode;
   FAR struct usrsockdev_s *dev;
   FAR struct usrsock_conn_s *conn;
+  struct timespec abstime;
   net_lock_t save;
-  struct timespec tv;
   int ret;
 
   DEBUGASSERT(inode);
@@ -961,43 +970,58 @@ static int usrsockdev_close(FAR struct file *filep)
       conn = usrsock_nextconn(conn);
     }
 
-  /* Check for pending request and clean-up. */
-
   save = net_lock();
-  tv.tv_sec = 0;
-  tv.tv_nsec = 0;
-  do
-    {
-      ret = net_timedwait(&dev->req.sem, &tv);
-      if (ret < 0)
-        {
-          int errcode = *get_errno_ptr();
-
-          if (errcode == ETIMEDOUT)
-            {
-              /* Request pending, need to wake-up client thread. */
-
-              dev->req.iov = NULL;
-              sem_post(&dev->req.acksem);
-
-              break;
-            }
-
-          DEBUGASSERT(errcode == EINTR);
-        }
-      else
-        {
-          usrsockdev_semgive(&dev->req.sem);
-        }
-    }
-  while (ret < 0);
-  net_unlock(save);
 
   /* Decrement the references to the driver. */
 
   dev->ocount--;
   DEBUGASSERT(dev->ocount == 0);
   ret = OK;
+
+  do
+    {
+      /* Give other threads short time window to complete recently completed
+       * requests. */
+
+      DEBUGVERIFY(clock_gettime(CLOCK_REALTIME, &abstime));
+
+      abstime.tv_sec += 0;
+      abstime.tv_nsec += 10 * NSEC_PER_MSEC;
+      if (abstime.tv_nsec >= NSEC_PER_SEC)
+        {
+          abstime.tv_sec++;
+          abstime.tv_nsec -= NSEC_PER_SEC;
+        }
+
+      ret = net_timedwait(&dev->req.sem, &abstime);
+      if (ret < 0)
+        {
+          ret = *get_errno_ptr();
+
+          if (ret != ETIMEDOUT && ret != EINTR)
+            {
+              dbg("net_timedwait errno: %d\n", ret);
+              DEBUGASSERT(false);
+            }
+        }
+      else
+        {
+          usrsockdev_semgive(&dev->req.sem);
+        }
+
+      /* Wake-up pending requests. */
+
+      if (dev->req.nbusy == 0)
+        {
+          break;
+        }
+
+      dev->req.iov = NULL;
+      sem_post(&dev->req.acksem);
+    }
+  while (true);
+
+  net_unlock(save);
 
   /* Check if request line is active */
 
@@ -1152,6 +1176,8 @@ int usrsockdev_do_request(FAR struct usrsock_conn_s *conn,
   conn->resp.xid = req_head->xid;
   conn->resp.result = -EACCES;
 
+  ++dev->req.nbusy; /* net_lock held. */
+
   /* Set outstanding request for daemon to handle. */
 
   while (net_lockedwait(&dev->req.sem) != OK)
@@ -1159,26 +1185,35 @@ int usrsockdev_do_request(FAR struct usrsock_conn_s *conn,
       DEBUGASSERT(*get_errno_ptr() == EINTR);
     }
 
-  DEBUGASSERT(dev->req.iov == NULL);
-  dev->req.ack_xid = req_head->xid;
-  dev->req.iov = iov;
-  dev->req.pos = 0;
-  dev->req.iovcnt = iovcnt;
-
-  /* Notify daemon of new request. */
-
-  usrsockdev_pollnotify(dev, POLLIN);
-
-  /* Wait ack for request. */
-
-  while (net_lockedwait(&dev->req.acksem) != OK)
+  if (usrsockdev_is_opened(dev))
     {
-      DEBUGASSERT(*get_errno_ptr() == EINTR);
+      DEBUGASSERT(dev->req.iov == NULL);
+      dev->req.ack_xid = req_head->xid;
+      dev->req.iov = iov;
+      dev->req.pos = 0;
+      dev->req.iovcnt = iovcnt;
+
+      /* Notify daemon of new request. */
+
+      usrsockdev_pollnotify(dev, POLLIN);
+
+      /* Wait ack for request. */
+
+      while (net_lockedwait(&dev->req.acksem) != OK)
+        {
+          DEBUGASSERT(*get_errno_ptr() == EINTR);
+        }
+    }
+  else
+    {
+      ndbg("usockid=%d; daemon abruptly closed /usr/usrsock.\n", conn->usockid);
     }
 
   /* Free request line for next command. */
 
   usrsockdev_semgive(&dev->req.sem);
+
+  --dev->req.nbusy; /* net_lock held. */
 
   return OK;
 }
@@ -1196,6 +1231,7 @@ void usrsockdev_register(void)
   /* Initialize device private structure. */
 
   g_usrsockdev.ocount = 0;
+  g_usrsockdev.req.nbusy = 0;
   sem_init(&g_usrsockdev.devsem, 0, 1);
   sem_init(&g_usrsockdev.req.sem, 0, 1);
   sem_init(&g_usrsockdev.req.acksem, 0, 0);

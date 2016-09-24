@@ -24,12 +24,13 @@ if [ "$DEFFILE" = "defconfig" ]; then
 			$data .= $_;
 		}
 		print OUT $pdata . "\n";
-        print OUT $data . "\n";
+		print OUT $data . "\n";
 		close(OUT);
 __HERE__
-		# Helps to keep source clean in overlay build by breaking the link
-		# Does not affect to conventional builds
-		mv ${1}.tmp $1
+		echo ${1}.tmp
+	else
+		echo ${1}
 	fi
-
+else
+	echo ${1}
 fi

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_substate_poweron.c
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -76,6 +76,8 @@ static int modem_do_power_on_timer_handler(struct ubmodem_s *modem,
   uint32_t timer_msecs = 0;
   int err;
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+
   switch (sub->step++)
     {
     case 0:
@@ -143,6 +145,7 @@ static int modem_do_power_on_timer_handler(struct ubmodem_s *modem,
       return OK;
     }
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
   err = __ubmodem_set_timer(modem, timer_msecs, &modem_do_power_on_timer_handler,
                           modem);
   if (err == ERROR)
@@ -155,6 +158,19 @@ static int modem_do_power_on_timer_handler(struct ubmodem_s *modem,
     }
 
   return OK;
+}
+
+static int recover_modem_task(struct ubmodem_s *modem, void *privptr)
+{
+  /* Go to stuck hardware level from current and then retry current. */
+
+  __ubmodem_network_cleanup(modem);
+  __ubmodem_retry_current_level(modem, UBMODEM_LEVEL_POWERED_OFF);
+
+  /* Return error to tell task starter that task did not start new work on
+   * state machine. */
+
+  return ERROR;
 }
 
 /****************************************************************************
@@ -201,6 +217,7 @@ void __ubmodem_substate_start_do_power_on(struct ubmodem_s *modem)
   sub->is_reset = false;
   sub->step = 0;
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
   (void)modem_do_power_on_timer_handler(modem, -1, modem);
 }
 
@@ -237,5 +254,24 @@ void __ubmodem_substate_start_do_reset(struct ubmodem_s *modem)
   sub->is_reset = true;
   sub->step = 0;
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
   (void)modem_do_power_on_timer_handler(modem, -1, modem);
+}
+
+/****************************************************************************
+ * Name: __ubmodem_recover_stuck_hardware
+ *
+ * Description:
+ *   Recover/reset stuck modem hardware
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+int __ubmodem_recover_stuck_hardware(struct ubmodem_s *modem)
+{
+  /* Add modem task. */
+
+  return __ubmodem_add_task(modem, recover_modem_task, NULL);
 }

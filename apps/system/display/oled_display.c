@@ -55,6 +55,8 @@
 #include "oled_display.h"
 #include "oled_inverter.h"
 #include "oled_image.h"
+#include "qr/qr_main.h"
+
 
 #ifdef CONFIG_THINGSEE_DISPLAY_TRACES
 #  define lcd_dbg(x, ...)    dbg(x, ##__VA_ARGS__)
@@ -335,6 +337,10 @@ int oled_start_module(void)
         goto errout_with_bckgrnd;
     }
 
+#if CONFIG_THINGSEE_DISPLAY_QR
+    /* Run QR module */
+    qr_main_init(g_nx_oled.hbkgd);
+#endif
 
 #if CONFIG_THINGSEE_DISPLAY_INVERT
     /* Initialize inverter submodule */

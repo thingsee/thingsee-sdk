@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_parser.c
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,6 +56,7 @@
 #include "ubmodem_parser.h"
 #include "ubmodem_command.h"
 #include "ubmodem_internal.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -97,6 +98,28 @@ static struct ubmodem_s *parser_to_ubmodem(struct at_parser_s *parser)
 {
   return container_of(parser, struct ubmodem_s, parser);
 }
+
+#ifdef CONFIG_UBMODEM_PARSER_DEBUG
+static void reverse_charbuf(char *buf, size_t len)
+{
+  size_t pos;
+
+  for (pos = 0; pos < len / 2; pos++)
+    {
+      char swap = buf[pos];
+      buf[pos] = buf[len - pos - 1];
+      buf[len - pos - 1] = swap;
+    }
+}
+
+static void rotate_charbuf(char *buf, size_t len, size_t n)
+{
+  n = len - n;
+  reverse_charbuf(buf, len);
+  reverse_charbuf(buf, n);
+  reverse_charbuf(&buf[n], len - n);
+}
+#endif
 
 /****************************************************************************
  * Name: is_visible_at_ascii
@@ -376,7 +399,7 @@ static bool parser_found_response_name(struct at_parser_s *parser,
     {
       /* Check valid responses for active command */
 
-      if (strcmp(resp_name, active->cmd->name) == 0)
+      if (!active->cmd->flag_plain && strcmp(resp_name, active->cmd->name) == 0)
         {
           parser_resp_trace(parser, active->cmd->name);
 
@@ -519,7 +542,7 @@ static bool parser_found_response_name(struct at_parser_s *parser,
 
       urc = parser_find_response_handler_by_name(parser, resp_name);
 
-      if (urc)
+      if (urc && urc != plain)
         {
           parser_resp_trace(parser, urc->cmd->name);
 
@@ -1465,6 +1488,7 @@ __ubparser_unregister_response_handler(struct at_parser_s *parser,
                                    const char *name)
 {
   struct at_response_handler_s *handler;
+  struct ubmodem_s *modem = parser_to_ubmodem(parser);
 
   /* Find matching command. */
 
@@ -1483,6 +1507,16 @@ __ubparser_unregister_response_handler(struct at_parser_s *parser,
   handler->active = false;
 
   ubdbg("unregistered response handler '%s'.\n", name);
+
+  /* Was this current command handler? */
+
+  if (handler == &parser->commands[0])
+    {
+      /* Non-unsolicited response handler unregistered, library is completed
+       * sending command and waiting result. */
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+    }
 }
 
 /****************************************************************************
@@ -1505,6 +1539,7 @@ void __ubparser_register_response_handler(struct at_parser_s *parser,
                                       const modem_response_callback_t callback,
                                       void *callback_priv, bool unsolicited)
 {
+  struct ubmodem_s *modem = parser_to_ubmodem(parser);
   int i;
 
   ubdbg("registering response handler: '%s'\n", cmd->name);
@@ -1556,6 +1591,14 @@ void __ubparser_register_response_handler(struct at_parser_s *parser,
     .callback      = callback,
     .callback_priv = callback_priv,
   };
+
+  if (!unsolicited)
+    {
+      /* Non-unsolicited response handler registered, library is sending
+       * command and expecting result soon. */
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+    }
 }
 
 /****************************************************************************
@@ -1653,42 +1696,83 @@ size_t __ubmodem_stream_max_readbuf_len(const struct at_cmd_def_s *cmd)
 
 void __ubmodem_assert_debug_print(struct ubmodem_s *modem)
 {
-  dbg("Modem assert!\n");
-  dbg("Modem level: %d, target: %d, state: %d\n",
-      modem->level, modem->target_level, modem->state);
-
 #ifdef CONFIG_UBMODEM_PARSER_DEBUG
   {
-    char buf[sizeof(modem->parser.last_received) + 1];
-    int i, j, k;
+    struct at_parser_s *parser = &modem->parser;
+    char *buf = parser->last_received;
+    size_t len = sizeof(parser->last_received);
+    size_t pos = parser->last_received_pos;
 
-    for (k = 0, j = 0, i = modem->parser.last_received_pos;
-         j < sizeof(modem->parser.last_received); j++, i++)
+    /* Add trailing '\0'. */
+
+    buf[pos++] = '\0';
+    if (pos == len)
+      pos = 0;
+
+    /* Rotate buffer to printable state. */
+
+    rotate_charbuf(buf, len, pos);
+
+    /* Skip leading zeros. */
+
+    for (pos = 0; !buf[pos] && pos < len - 1; pos++);
+
+    if (pos < len - 1 && buf[len - 1] == '\0')
       {
-        if (i == sizeof(modem->parser.last_received))
-          i = 0;
+        size_t i;
+        size_t tmplen;
+        char *tmp;
 
-        /* Skip any leading null chars. */
+        /* Print last characters processed before assert. */
 
-        if (modem->parser.last_received[i] == '\0' && k == 0)
-          continue;
+        for (tmplen = 0, i = 0; pos + i < len - 1; i++)
+          {
+            char c = buf[pos + i];
 
-        /* Stop at trailing null char. */
+            if (c == '\\')
+              tmplen += 2; /*snprintf(NULL, 0, "\\\\");*/
+            else if (c == '\n')
+              tmplen += 2; /*snprintf(NULL, 0, "\\n");*/
+            else if (c == '\r')
+              tmplen += 2; /*snprintf(NULL, 0, "\\r");*/
+            else if (!is_visible_at_ascii(c))
+              tmplen += 4; /*snprintf(NULL, 0, "\\x%02x", c);*/
+            else
+              tmplen += 1; /*snprintf(NULL, 0, "%c", c)*/;
+          }
 
-        if (modem->parser.last_received[i] == '\0' && k != 0)
-          break;
+        tmplen++;
+        tmp = malloc(tmplen + 1);
 
-        buf[k++] = modem->parser.last_received[i];
+        if (tmp)
+          {
+            for (i = 0; pos < len - 1; pos++)
+              {
+                char c = buf[pos];
+
+                if (c == '\\')
+                  i += snprintf(&tmp[i], tmplen - i, "\\\\");
+                else if (c == '\n')
+                  i += snprintf(&tmp[i], tmplen - i, "\\n");
+                else if (c == '\r')
+                  i += snprintf(&tmp[i], tmplen - i, "\\r");
+                else if (!is_visible_at_ascii(c))
+                  i += snprintf(&tmp[i], tmplen - i, "\\x%02x", c);
+                else
+                  i += snprintf(&tmp[i], tmplen - i, "%c", c);
+              }
+
+            syslog(LOG_ERR, "parser: [%s]\n", tmp);
+
+            free(tmp);
+          }
       }
-
-    if (k == 0)
-      return;
-
-    buf[k] = '\0';
-
-    dbg("Last data parsed by modem: [%s]\n", buf);
   }
 #endif
+
+  syslog(LOG_ERR, "Modem assert! level: %d:%d:%d:%d, state: %d\n",
+         modem->level, modem->target_level, modem->force_level,
+         modem->intermediate_level, modem->state);
 }
 
 /****************************************************************************
@@ -2438,13 +2522,20 @@ static const struct parser_selftest_s parser_test_vectors[] = {
         .flag_plain = true,
         .flag_multiple_resp = true,
       },
-    .from_modem = CMD_LINE("123FIRST")
+    .from_modem = CMD_LINE("+TEST11: 1")
+                  CMD_LINE("123FIRST")
                   CMD_LINE("456SECOND")
+                  CMD_LINE("+TEST11: \"1234\"")
                   CMD_LINE("OK"),
-    .expected_count = 3,
+    .expected_count = 5,
     .expected =
       (const struct parser_selftest_expected_s []){
         {
+          .status = RESP_STATUS_LINE,
+          .param_num = 1,
+          .stream = /* string */ "\x0a\x00" "+TEST11: 1" "\x00",
+          .stream_len = 13,
+        }, {
           .status = RESP_STATUS_LINE,
           .param_num = 1,
           .stream = /* string */ "\x08\x00" "123FIRST" "\x00",
@@ -2454,6 +2545,11 @@ static const struct parser_selftest_s parser_test_vectors[] = {
           .param_num = 1,
           .stream = /* string */ "\x09\x00" "456SECOND" "\x00",
           .stream_len = 12,
+        }, {
+          .status = RESP_STATUS_LINE,
+          .param_num = 1,
+          .stream = /* string */ "\x0f\x00" "+TEST11: \"1234\"" "\x00",
+          .stream_len = 18,
         }, {
           .status = RESP_STATUS_OK,
           .param_num = 0,
@@ -2661,17 +2757,36 @@ parser_selftest_callback(struct ubmodem_s *modem,
 
       if (memcmp(expected->stream, resp_stream, stream_len) != 0)
         {
-          dbg("%s(): tv#%d: response stream does not match the expected!\n",
-                 __func__, tv_idx);
-          error = true;
+          char *buf = malloc(stream_len * 4);
+          int pos = 0;
 
-          dbg("-------got: ");
-          for (i = 0; i < stream_len; i++)
-            dbg("%02X%c", resp_stream[i], i + 1 == stream_len ? '\n' : ':');
+          if (buf)
+            {
+              dbg("%s(): tv#%d: response stream does not match the expected!\n",
+                     __func__, tv_idx);
+              error = true;
 
-          dbg("--expected: ");
-          for (i = 0; i < stream_len; i++)
-            dbg("%02X%c", expected->stream[i], i + 1 == stream_len ? '\n' : ':');
+              for (pos = 0, i = 0; i < stream_len; i++)
+                pos += snprintf(&buf[pos], stream_len * 4 - pos, "%02X%c",
+                                resp_stream[i], i + 1 == stream_len ? '\n' : ':');
+
+              dbg("-------got: %s", buf);
+
+              for (pos = 0, i = 0; i < stream_len; i++)
+                pos += snprintf(&buf[pos], stream_len * 4 - pos, "%02X%c",
+                                expected->stream[i], i + 1 == stream_len ? '\n' : ':');
+
+              dbg("--expected: %s", buf);
+
+              for (pos = 0, i = 0; i < stream_len; i++)
+                pos += snprintf(&buf[pos], stream_len * 4 - pos, "%02X%c",
+                                (uint8_t)(expected->stream[i] ^ resp_stream[i]),
+                                i + 1 == stream_len ? '\n' : ':');
+
+              dbg("-------xor: %s", buf);
+
+              free(buf);
+            }
         }
     }
 
@@ -2827,6 +2942,7 @@ static void do_parser_selftest(struct at_parser_s *parser)
 
 void __ubmodem_parser_selftest(void)
 {
+  struct ubmodem_s *modem;
   struct at_parser_s *parser;
   static bool done = false;
 
@@ -2835,12 +2951,13 @@ void __ubmodem_parser_selftest(void)
 
   done = true;
 
-  parser = zalloc(sizeof(*parser));
-  DEBUGASSERT(parser);
+  modem = zalloc(sizeof(*modem));
+  DEBUGASSERT(modem);
+  parser = &modem->parser;
 
   do_parser_selftest(parser);
 
-  free(parser);
+  free(modem);
 }
 
 #else

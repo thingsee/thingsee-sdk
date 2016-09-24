@@ -1,0 +1,113 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "Thingsee SDK example application"
+
+config SDK_EXAMPLE_APP
+	bool "Thingsee SDK example application"
+	default n
+	select THINGSEE_LIB
+	select THINGSEE_CHARGER_MODULE
+	---help---
+		Enable the example application
+
+if SDK_EXAMPLE_APP
+
+config SDK_EXAMPLE_APP_DBG
+	bool "Example application debugging"
+	default n
+	---help---
+		Enable the application debug
+
+config SDK_EXAMPLE_APP_ASSERT_COUNT_RESET_SECS
+	int
+	default 300
+
+config SDK_EXAMPLE_APP_GPS_LOCATION_INTERVAL
+	int "Time between GPS locations"
+	default 300
+	---help---
+		Time interval between GPS location queries in seconds.
+
+config SDK_EXAMPLE_APP_RADIO_ENVIRONMENT_INTERVAL
+	int "Time between radio environment scans (cellular & WiFi)"
+	default 60
+	---help---
+		Time interval between radio environment queries in seconds.
+
+config SDK_EXAMPLE_APP_ACCEL_IMPACT_THRESHOLD
+	int "Accelerometer wake-up impact threshold in milli-G's"
+	default 200
+	---help---
+		Defines threshold of acceleration that will generate interrupt and
+		wake-up device. Low acceleration threshold such as 0.2 g (200 value
+		here), will allow wake-up from even smallest movements.
+
+config SDK_EXAMPLE_APP_ACCEL_RESTART_TIME
+	int "Accelerometer restart time in seconds"
+	default 5
+	---help---
+		If this setting is set to non-zero value, accelerometer is disabled
+		for amount of time set here after waking up. If set to zero,
+		accelerometer is kept on.
+
+choice SDK_EXAMPLE_APP_CONNECTION_TYPE
+	prompt "Make network connection with: "
+
+config SDK_EXAMPLE_APP_CONNECTION_MODEM
+	bool "Modem"
+	default y
+
+config SDK_EXAMPLE_APP_CONNECTION_WIFI
+	bool "WiFi"
+	default n
+
+endchoice #SDK_EXAMPLE_APP_CONNECTION_TYPE
+
+config SDK_EXAMPLE_APP_CONNECTION_SIM_PIN
+	string "Modem PIN"
+	default "0000"
+	---help---
+		Used only if SIM has PIN enabled.
+
+config SDK_EXAMPLE_APP_CONNECTION_SIM_APN_NAME
+	string "Modem APN name"
+	default "internet"
+
+config SDK_EXAMPLE_APP_CONNECTION_SIM_APN_USER
+	string "Modem APN username"
+	default ""
+	---help---
+		Leave empty if not needed.
+
+config SDK_EXAMPLE_APP_CONNECTION_SIM_APN_PASSWD
+	string "Modem APN password
+	default ""
+	---help---
+		Leave empty if not needed.
+
+config SDK_EXAMPLE_APP_CONNECTION_WIFI_SSID
+	string "WiFi SSID"
+	default "AccessPoint"
+
+config SDK_EXAMPLE_APP_CONNECTION_WIFI_PSK
+	string "WiFi WPA2 PSK"
+	default "01234567"
+
+config SDK_EXAMPLE_APP_HTTP_CLOUD_URL
+	string "Cloud URL for radio environment JSON dump (http or https protocol)"
+	default "https://api.thingsee.com/test"
+
+config SDK_EXAMPLE_APP_HTTP_CLOUD_METHOD
+	string "Cloud URL HTTP method"
+	default "POST"
+
+config SDK_EXAMPLE_APP_HTTP_CLOUD_EXTRA_HEADER
+	string "Cloud extra HTTP headers"
+	default "User: test\\r\\nPassword: 1234\\r\\n"
+
+endif #SDK_EXAMPLE_APP
+
+endmenu

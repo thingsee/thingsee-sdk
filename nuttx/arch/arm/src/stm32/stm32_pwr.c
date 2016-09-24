@@ -56,6 +56,14 @@
  ************************************************************************************/
 
 /************************************************************************************
+ * Private Data
+ ************************************************************************************/
+
+/* Reference count for backup domain access. */
+
+static uint8_t bkpreg_crefs;
+
+/************************************************************************************
  * Private Functions
  ************************************************************************************/
 
@@ -100,21 +108,67 @@ void stm32_pwr_enablebkp(bool writable)
 
   flags = irqsave();
 
-  /* Enable or disable the ability to write*/
+  if(writable)
+    {
+      if(bkpreg_crefs == 0)
+        {
+          /* Enable the ability to write */
 
-  regval  = stm32_pwr_getreg(STM32_PWR_CR_OFFSET);
-  regval &= ~PWR_CR_DBP;
-  regval |= writable ? PWR_CR_DBP : 0;
-  stm32_pwr_putreg(STM32_PWR_CR_OFFSET, regval);
+          DEBUGASSERT((getreg32(STM32_PWR_CR) & PWR_CR_DBP) == 0);
+          regval  = stm32_pwr_getreg(STM32_PWR_CR_OFFSET);
+          regval |= PWR_CR_DBP;
+          stm32_pwr_putreg(STM32_PWR_CR_OFFSET, regval);
+
+          /* Enable does not happen right away */
+
+          up_udelay(4);
+        }
+
+      bkpreg_crefs++;
+    }
+  else
+    {
+      DEBUGASSERT((getreg32(STM32_PWR_CR) & PWR_CR_DBP));
+
+      /* Disable the ability to write */
+
+      if(bkpreg_crefs == 1)
+        {
+          regval  = stm32_pwr_getreg(STM32_PWR_CR_OFFSET);
+          regval &= ~PWR_CR_DBP;
+          stm32_pwr_putreg(STM32_PWR_CR_OFFSET, regval);
+        }
+
+      if(bkpreg_crefs)
+        {
+          bkpreg_crefs--;
+        }
+    }
 
   irqrestore(flags);
+}
 
-  if (writable)
-    {
-      /* Enable does not happen right away */
+/************************************************************************************
+ * Name: stm32_pwr_resetbkprefcount
+ *
+ * Description:
+ *   Resets backup domain reference count.
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Values:
+ *   None
+ *
+ ************************************************************************************/
 
-      up_udelay(4);
-    }
+void stm32_pwr_resetbkprefcount(void)
+{
+  irqstate_t flags = irqsave();
+
+  bkpreg_crefs = 0;
+
+  irqrestore(flags);
 }
 
 /************************************************************************************

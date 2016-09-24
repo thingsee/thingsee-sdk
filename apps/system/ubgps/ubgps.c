@@ -87,17 +87,6 @@ static struct ubgps_s g_gps;
 
 static struct gps_assist_hint_s g_gps_hint;
 
-/* GPS state machine names */
-
-static const char * gps_sm_name[__GPS_STATE_MAX] =
-{
-  [GPS_STATE_POWER_OFF]       = "GPS_STATE_POWER_OFF",
-  [GPS_STATE_INITIALIZATION]  = "GPS_STATE_INITIALIZATION",
-  [GPS_STATE_COLD_START]      = "GPS_STATE_COLD_START",
-  [GPS_STATE_SEARCHING_FIX]   = "GPS_STATE_SEARCHING_FIX",
-  [GPS_STATE_FIX_ACQUIRED]    = "GPS_STATE_FIX_ACQUIRED",
-};
-
 /****************************************************************************
  * Public Data
  ****************************************************************************/
@@ -547,10 +536,12 @@ int ubgps_request_state(gps_state_t const state, uint32_t const timeout)
  ****************************************************************************/
 char const * const ubgps_get_statename(gps_state_t const gps_state)
 {
+  struct ubgps_s * const gps = &g_gps;
+
   if (gps_state < 0 || gps_state >= __GPS_STATE_MAX)
     return NULL;
 
-  return gps_sm_name[gps_state];
+  return ubgps_sm(gps, gps_state)->name;
 }
 
 /*****************************************************************************

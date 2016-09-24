@@ -1,0 +1,21 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config STEPPER
+	bool "Enable stepper motor driver"
+	default n
+	---help---
+		Enable support for stepper motor driver.
+
+if STEPPER
+
+config STEPPER_DEBUG
+	bool "Enable trace support for stepper motor driver"
+	default n
+	depends on DEBUG
+	---help---
+		Enable debugging traces for stepper motor driver.
+
+endif

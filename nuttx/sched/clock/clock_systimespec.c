@@ -144,9 +144,9 @@ int clock_systimespec(FAR struct timespec *ts)
       uint64_t secs;
       uint64_t nsecs;
 
-      /* Get the time since power-on in seconds and milliseconds */
+      /* Get the time since power-on in seconds and microseconds */
 
-      usecs = TICK2MSEC(clock_systimer());
+      usecs = TICK2USEC((uint64_t)clock_systimer());
       secs  = usecs / USEC_PER_SEC;
 
       /* Return the elapsed time in seconds and nanoseconds */
@@ -158,15 +158,35 @@ int clock_systimespec(FAR struct timespec *ts)
       return OK;
 
 #else
-      /* 32-bit millisecond calculations should be just fine. */
+      /* We know that the clock rate is in units of milliseconds
+       * so we should be able to do the calculations with less
+       * chance of overflow.
+       *
+       * 32-bit millisecond calculations should be just fine in
+       * most cases.  For a 32-bit system timer and a clock period
+       * of 10 milliseconds, the msecs value will overflow at about
+       * 49.7 days.
+       *
+       * So, we will still use 64-bit calculations if we have them
+       * in order to avoid that limitation.
+       */
 
-      uint32_t msecs;
-      uint32_t secs;
-      uint32_t nsecs;
+#ifdef CONFIG_HAVE_LONG_LONG
+      uint64_t ticks;
+      uint64_t msecs;
+      uint64_t secs;
+      uint64_t nsecs;
+#else
+      systime_t ticks;
+      systime_t msecs;
+      systime_t secs;
+      systime_t nsecs;
+#endif
 
       /* Get the time since power-on in seconds and milliseconds */
 
-      msecs = TICK2MSEC(clock_systimer());
+      ticks = clock_systimer();
+      msecs = TICK2MSEC(ticks);
       secs  = msecs / MSEC_PER_SEC;
 
       /* Return the elapsed time in seconds and nanoseconds */

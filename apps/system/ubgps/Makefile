@@ -37,6 +37,7 @@
 -include $(TOPDIR)/Make.defs
 include $(APPDIR)/Make.defs
 
+# Thingsee tester
 
 ASRCS  =
 CSRCS  = ubgps.c ubgps_internal.c ubgps_state.c ubx.c ubgps_poll.c

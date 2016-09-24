@@ -100,7 +100,15 @@ int mmcsd_slotinitialize(int minor, FAR struct sdio_dev_s *dev);
 struct spi_dev_s; /* See nuttx/spi/spi.h */
 int mmcsd_spislotinitialize(int minor, int slotno, FAR struct spi_dev_s *spi);
 
-EXTERN void mmcsd_check_media(int slotno, uint8_t try_to_reinit);
+/****************************************************************************
+ * Name: mmcsd_check_media
+ ****************************************************************************/
+
+EXTERN void mmcsd_check_media(int slotno, bool try_to_reinit);
+
+/****************************************************************************
+ * Name: mmcsd_get_slot_card_status
+ ****************************************************************************/
 
 EXTERN void mmcsd_get_slot_card_status(int slotno, uint8_t *status);
 
@@ -142,6 +150,19 @@ EXTERN void mmcsd_slot_pm_suspend(int slotno);
  ****************************************************************************/
 
 EXTERN void mmcsd_slot_pm_resume(int slotno);
+
+/****************************************************************************
+ * Name: mmcsd_slot_pm_allowed
+ *
+ * Description:
+ *   Check if MMC/SD device is ready for power-management suspend
+ *
+ * Input Parameters:
+ *   slotno - The slot number to use.
+ *
+ ****************************************************************************/
+
+EXTERN bool mmcsd_slot_pm_allowed(int slotno);
 
 #undef EXTERN
 #if defined(__cplusplus)

@@ -94,7 +94,7 @@ struct recvfrom_s
 {
   FAR struct socket       *rf_sock;      /* The parent socket structure */
 #ifdef CONFIG_NET_SOCKOPTS
-  uint32_t                 rf_starttime; /* rcv start time for determining timeout */
+  systime_t               rf_starttime; /* rcv start time for determining timeout */
 #endif
   FAR struct devif_callback_s *rf_cb;    /* Reference to callback instance */
   sem_t                    rf_sem;       /* Semaphore signals recv completion */

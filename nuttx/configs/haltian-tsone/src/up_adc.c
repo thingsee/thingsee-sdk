@@ -50,12 +50,15 @@
 #include <arch/board/board-pwrctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
+#include <nuttx/random.h>
 
 #include "chip.h"
 #include "up_arch.h"
 
 #include "stm32.h"
 #include "stm32_pwm.h"
+#include "stm32_adc.h"
 
 #include "haltian-tsone.h"
 #include "up_adc.h"
@@ -64,6 +67,11 @@
 /************************************************************************************
  * Definitions
  ************************************************************************************/
+
+#define STM32_VREFINT_CAL (*(uint16_t *)((uint32_t)0x1FF800F8U))
+
+#define ADC1_MEASURE_VREFINT 17
+
 /* Configuration ********************************************************************/
 /* Up to 3 ADC interfaces are supported */
 
@@ -86,7 +94,7 @@
 
 /* The number of ADC channels in the conversion list */
 
-#define ADC1_NCHANNELS 1
+#define ADC1_NCHANNELS 2
 
 /************************************************************************************
  * Private Data
@@ -107,19 +115,25 @@ static struct adc_dev_s *g_adc;
 
 #ifdef CONFIG_STM32_ADC1
 
-static const uint8_t  g_chanlist[ADC1_NCHANNELS] = {ADC1_MEASURE_VBAT_CHANNEL};
+static const uint8_t  g_chanlist[ADC1_NCHANNELS] =
+{
+  ADC1_MEASURE_VBAT_CHANNEL,
+  ADC1_MEASURE_VREFINT,
+};
 
 /* Configurations of pins used by each ADC channel */
 
-static const uint32_t g_pinlist[ADC1_NCHANNELS]  = {GPIO_VBAT_MEASURE_ADC};
+static const uint32_t g_pinlist[ADC1_NCHANNELS] =
+{
+  GPIO_VBAT_MEASURE_ADC,
+  0xffffffffU,
+};
 
 #endif
 
 /************************************************************************************
  * Private Functions
  ************************************************************************************/
-
-
 
 /************************************************************************************
  * Public Functions
@@ -149,6 +163,117 @@ void board_adc_vbat_setctrl(bool on)
 #endif
 }
 
+int board_adc_measure_vbat(uint32_t *value)
+{
+  ssize_t nbytes = 0;
+  uint8_t sample[5] = { 0 };
+  int fd;
+  int ret;
+
+  board_adc_vbat_setctrl(true);
+
+  fd = open("/dev/adc0", O_RDWR);
+  if (fd < 0)
+    {
+      lldbg("Can't open ADC converter\n");
+      goto err_ctrl;
+    }
+
+  ret = ioctl(fd, IO_START_CONV, ADC1_MEASURE_VBAT_CHANNEL + 1);
+  if (ret < 0)
+    {
+      lldbg("cannot select VBAT channel\n");
+      goto err_close;
+    }
+
+  nbytes = read(fd, sample, sizeof(sample));
+  if (nbytes != sizeof(sample))
+    {
+      lldbg("Can't read samples from ADC converter\n");
+      goto err_close;
+    }
+
+  close(fd);
+  board_adc_vbat_setctrl(false);
+
+  *value = sample[1] | (sample[2] << 8) | (sample[3] << 16) | (sample[4] << 24);
+
+  /* Add the raw value to entropy pool. */
+
+  add_sensor_randomness(*value);
+
+  return OK;
+
+err_close:
+  close(fd);
+err_ctrl:
+  board_adc_vbat_setctrl(false);
+  return ERROR;
+}
+
+int board_adc_measure_vrefint(uint32_t *vdda_mvolts)
+{
+  ssize_t nbytes = 0;
+  uint8_t sample[5] = { 0 };
+  int fd;
+  int ret;
+  uint32_t data;
+  uint32_t val;
+
+  fd = open("/dev/adc0", O_RDWR);
+  if (fd < 0)
+    {
+      lldbg("Can't open ADC converter\n");
+      return ERROR;
+    }
+
+  /* Enable VREFINT measurement */
+
+  ret = ioctl(fd, IO_ENABLE_TEMPER_VOLT_CH, true);
+  if (ret < 0)
+    {
+      lldbg("cannot enable VREFINT reading\n");
+      goto err_close;
+    }
+
+  ret = ioctl(fd, IO_START_CONV, ADC1_MEASURE_VREFINT + 1);
+  if (ret < 0)
+    {
+      lldbg("cannot select VREFINT channel\n");
+      goto err_close;
+    }
+
+  nbytes = read(fd, sample, sizeof(sample));
+  if (nbytes != sizeof(sample))
+    {
+      lldbg("Can't read samples from ADC converter\n");
+      goto err_close;
+    }
+
+  close(fd);
+
+  data = sample[1] | (sample[2] << 8) | (sample[3] << 16) | (sample[4] << 24);
+  if (data == 0)
+    {
+      return ERROR;
+    }
+
+  /* Add the raw value to entropy pool. */
+
+  add_sensor_randomness(data);
+
+  /* Calculate corrected Vrefint with factory calibration value. */
+
+  val = 3000 /*mV*/ * STM32_VREFINT_CAL / data;
+  *vdda_mvolts = val;
+
+  return OK;
+
+err_close:
+  close(fd);
+  return ERROR;
+}
+
 /************************************************************************************
  * Name: adc_devinit
  *
@@ -174,7 +299,10 @@ int adc_devinit(void)
 
       for (i = 0; i < ADC1_NCHANNELS; i++)
         {
-          stm32_configgpio(g_pinlist[i]);
+          if (g_pinlist[i] != 0xffffffffU)
+            {
+              stm32_configgpio(g_pinlist[i]);
+            }
         }
 
       /* Call stm32_adcinitialize() to get an instance of the ADC interface */
@@ -212,7 +340,7 @@ int adc_devinit(void)
 
 void adc_set_sample_time(struct adc_sample_time_s *adc_sample_time)
 {
-	stm32_adcchange_sample_time(g_adc, adc_sample_time);
+  stm32_adcchange_sample_time(g_adc, adc_sample_time);
 }
 
 #endif /* CONFIG_STM32_ADC1 || CONFIG_STM32_ADC2 || CONFIG_STM32_ADC3 */

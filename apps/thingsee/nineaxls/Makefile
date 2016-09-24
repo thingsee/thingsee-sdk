@@ -41,6 +41,9 @@ include $(APPDIR)/Make.defs
 
 ASRCS  =
 CSRCS  = ts_nineaxls_main.c
+ifeq ($(CONFIG_GAM9AXEL_SENS),y)
+  CSRCS += lsm9ds0_module.c
+endif
 ifeq ($(CONFIG_LSM9DS1_SENS),y)
   CSRCS += lsm9ds1_module.c
   CSRCS += ts_nineaxls_fusion.c

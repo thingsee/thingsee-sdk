@@ -62,9 +62,16 @@ endif
 CC = $(CROSSDEV)gcc
 CXX = $(CROSSDEV)g++
 CPP = $(CROSSDEV)gcc -E
-LD = $(CROSSDEV)ld
-AR = $(ARCROSSDEV)ar rcs
-NM = $(ARCROSSDEV)nm
+ifeq ($(CONFIG_BUILD_LTO),y)
+  LD = $(CROSSDEV)gcc
+  AR = $(ARCROSSDEV)gcc-ar rcs
+  NM = $(ARCROSSDEV)gcc-nm
+  LD_FLAG_PREFIX = -Wl,
+else
+  LD = $(CROSSDEV)ld
+  AR = $(ARCROSSDEV)ar rcs
+  NM = $(ARCROSSDEV)nm
+endif
 OBJCOPY = $(CROSSDEV)objcopy
 OBJDUMP = $(CROSSDEV)objdump
 
@@ -75,8 +82,13 @@ ifeq ($(CONFIG_DEBUG_SYMBOLS),y)
   ARCHOPTIMIZATION = -ggdb3
 endif
 
+ifeq ($(CONFIG_BUILD_LTO),y)
+  ARCHOPTIMIZATION += -flto=4
+  LDFLAGS += $(ARCHOPTIMIZATION) $(ARCHCPUFLAGS)
+endif
+
 ARCHOPTIMIZATION += -fdata-sections -ffunction-sections
-LDFLAGS += --gc-sections
+LDFLAGS += $(LD_FLAG_PREFIX)--gc-sections
 
 ifneq ($(CONFIG_DEBUG_NOOPT),y)
   ARCHOPTIMIZATION += $(MAXOPTIMIZATION) -fno-strict-aliasing -fno-strength-reduce -fomit-frame-pointer
@@ -88,8 +100,8 @@ endif
 
 ARCHCFLAGS = -fno-builtin
 ARCHCXXFLAGS = -fno-builtin -fno-exceptions -fno-rtti
-ARCHWARNINGS = -Wall -Werror -Wno-error=cpp -Wstrict-prototypes -Wshadow
-ARCHWARNINGSXX = -Wall -Werror -Wno-error=cpp -Wshadow
+ARCHWARNINGS = -Wall -Werror -Wno-error=cpp -Wstrict-prototypes -Wshadow -Wno-unused-function
+ARCHWARNINGSXX = -Wall -Werror -Wno-error=cpp -Wshadow -Wshadow -Wno-unused-function
 ARCHDEFINES =
 ARCHPICFLAGS = -fpic -msingle-pic-base -mpic-register=r10
 

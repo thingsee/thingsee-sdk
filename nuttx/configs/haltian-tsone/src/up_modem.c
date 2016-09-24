@@ -62,6 +62,21 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+/* Maximum deep-sleep time when modem in low-activity mode (note: high activity
+ * level prevents deep-sleep altogether). */
+
+#define MODEM_LOW_ACTIVITY_DEEPSLEEP_SECS 3
+
+/* How recent activity level change to zero prevent deep-sleep completely
+ * (allow faster state changes for modem library). */
+
+#define MODEM_VERY_RECENT_ACTIVITY_OFF_MSECS    100
+
+/* How recent activity level change to zero are translated to low-activity
+ * level. */
+
+#define MODEM_QUITE_RECENT_ACTIVITY_OFF_MSECS   500
+
 /* Configuration ************************************************************/
 
 /* Debug ********************************************************************/
@@ -80,6 +95,12 @@
 #  endif
 #endif
 
+#ifndef MODEM_PM_DEBUG
+#  define modem_pm_lldbg(...) ((void)0)
+#else
+#  define modem_pm_lldbg(...) lldbg(__VA_ARGS__)
+#endif
+
 /****************************************************************************
  * Private Type Definition
  ****************************************************************************/
@@ -91,6 +112,12 @@
 /****************************************************************************
  * Private Data
  ****************************************************************************/
+
+static struct
+{
+  unsigned int    count;
+  struct timespec last_mod_time;
+} g_modem_activity[__BOARD_MODEM_ACTIVITY_MAX];
 
 /****************************************************************************
  * Private Functions
@@ -148,11 +175,10 @@ static void board_modem_toogle_poweron(void)
 
 static void board_modem_setup_gpios(bool poweredoff)
 {
-#ifdef BOARD_HAS_MODEM_POWER_SWITCH
+  uint32_t gpio_off_mask = ~(GPIO_PUPD_MASK | GPIO_MODE_MASK | GPIO_OUTPUT_SET);
+
   if (poweredoff)
     {
-      uint32_t gpio_off_mask = ~(GPIO_PUPD_MASK | GPIO_MODE_MASK | GPIO_OUTPUT_SET);
-
       /* We need to pull modem GPIOs down, as otherwise level-shifters between
        * MCU and modem can start oscillate and cause power-usage to jump up
        * to 0.5 mA.
@@ -167,19 +193,123 @@ static void board_modem_setup_gpios(bool poweredoff)
                        (GPIO_OUTPUT_CLEAR | GPIO_OUTPUT));
       stm32_configgpio((GPIO_USART3_CTS & gpio_off_mask) |
                        (GPIO_OUTPUT_CLEAR | GPIO_OUTPUT));
+
+      stm32_configgpio((GPIO_MODEM_TX_BURST & gpio_off_mask) |
+                       (GPIO_OUTPUT_CLEAR | GPIO_OUTPUT));
+
+      /* We need to configure POWER_ON and RESET_N as analog input for lower
+       * power consumption. */
+
+      stm32_configgpio((GPIO_MODEM_RESET_N & gpio_off_mask) | GPIO_ANALOG);
+      stm32_configgpio((GPIO_MODEM_POWER_ON & gpio_off_mask) | GPIO_ANALOG);
     }
   else
-#endif /* BOARD_HAS_MODEM_POWER_SWITCH */
     {
-      /* Configure modem GPIOs for serial-port AF. */
+      /* Configure modem GPIOs for serial-port AltFunc. */
 
       stm32_configgpio(GPIO_USART3_TX);
       stm32_configgpio(GPIO_USART3_RTS);
       stm32_configgpio(GPIO_USART3_RX);
       stm32_configgpio(GPIO_USART3_CTS);
+
+      /* TX_BURST currently unused, configure as analog input for low-power. */
+
+      stm32_configgpio((GPIO_MODEM_TX_BURST & gpio_off_mask) | GPIO_ANALOG);
+
+      /* Setup control GPIOs for modem. */
+
+      stm32_configgpio(GPIO_MODEM_POWER_ON);
+      stm32_configgpio(GPIO_MODEM_RESET_N);
+    }
+}
+
+/****************************************************************************
+ * Name: board_modem_setup_suspend_gpios
+ ****************************************************************************/
+
+static void board_modem_setup_suspend_gpios(bool suspend)
+{
+  uint32_t gpio_off_mask = ~(GPIO_PUPD_MASK | GPIO_MODE_MASK | GPIO_OUTPUT_SET);
+  bool poweredoff = stm32_gpioread(GPIO_PWR_SWITCH_MODEM);
+
+  if (poweredoff)
+    {
+      /* No need to change configuration for suspend when modem has been
+       * powered off. */
+
+      return;
     }
 
-  stm32_configgpio(GPIO_MODEM_TX_BURST);
+  if (suspend)
+    {
+      /* Set inputs as floating analog input. Ring-int line is configured for
+       * EXTI interrupt and is left as is. */
+
+      stm32_configgpio((GPIO_USART3_RX & gpio_off_mask) | GPIO_ANALOG);
+      stm32_configgpio((GPIO_USART3_CTS & gpio_off_mask) | GPIO_ANALOG);
+      stm32_configgpio((GPIO_MODEM_TX_BURST & gpio_off_mask) | GPIO_ANALOG);
+
+      /* These lines have external pull-up and can be switched to analog input
+       * mode. */
+
+      stm32_configgpio((GPIO_MODEM_POWER_ON & gpio_off_mask) | GPIO_ANALOG);
+      stm32_configgpio((GPIO_MODEM_RESET_N & gpio_off_mask) | GPIO_ANALOG);
+    }
+  else
+    {
+      /* Restore inputs. */
+
+      stm32_configgpio(GPIO_USART3_RX);
+      stm32_configgpio(GPIO_USART3_CTS);
+      stm32_configgpio((GPIO_MODEM_TX_BURST & gpio_off_mask) | GPIO_ANALOG);
+
+      /* Restore outputs. */
+
+      stm32_configgpio(GPIO_MODEM_POWER_ON);
+      stm32_configgpio(GPIO_MODEM_RESET_N);
+    }
+}
+
+/****************************************************************************
+ * Name: modem_msecs_from_recent_activity
+ ****************************************************************************/
+
+static int64_t modem_msecs_from_recent_activity(void)
+{
+  struct timespec currts;
+  const struct timespec *lastoff;
+  int64_t diff_msecs;
+  int i;
+  int64_t min_msecs = INT64_MAX;
+
+  clock_gettime(CLOCK_MONOTONIC, &currts);
+
+  /* Check if activity reached zero recently. */
+
+  for (i = 0; i < __BOARD_MODEM_ACTIVITY_MAX; i++)
+    {
+      lastoff = &g_modem_activity[i].last_mod_time;
+
+      if (g_modem_activity[i].count > 0)
+        {
+          continue;
+        }
+
+      diff_msecs = currts.tv_sec - lastoff->tv_sec;
+      diff_msecs *= MSEC_PER_SEC;
+      diff_msecs += (currts.tv_nsec - lastoff->tv_nsec) / NSEC_PER_MSEC;
+
+      if (diff_msecs < min_msecs)
+        {
+          min_msecs = diff_msecs;
+          if (min_msecs <= 0)
+            {
+              break;
+            }
+        }
+    }
+
+  return min_msecs;
 }
 
 /****************************************************************************
@@ -260,6 +390,63 @@ uint32_t board_modem_poweron_pin_set(bool set)
 }
 
 /****************************************************************************
+ * Name: board_modem_rts_pin_ctrl
+ *
+ * Description:
+ *   Control MODEM RTS/CTS gpio.
+ *
+ * Input Parameters:
+ *   ctrl: set pin LOW/HIGH or restore RTS mode or read RTS pin.
+ *
+ ****************************************************************************/
+
+bool board_modem_pin_ctrl(enum e_board_modem_pin pin,
+                          enum e_board_modem_pin_ctrl ctrl)
+{
+  uint32_t pinset;
+
+  switch (pin)
+    {
+      case BOARD_MODEM_PIN_RTS:
+        pinset = GPIO_USART3_RTS;
+        break;
+      case BOARD_MODEM_PIN_CTS:
+        pinset = GPIO_USART3_CTS;
+        break;
+      case BOARD_MODEM_PIN_TX_BURST:
+        pinset = GPIO_MODEM_TX_BURST;
+        break;
+      default:
+        DEBUGASSERT(false);
+        return false;
+    }
+
+  switch (ctrl)
+    {
+      case BOARD_MODEM_PIN_CTRL_ALT_MODE:
+        stm32_configgpio(pinset);
+        return false;
+
+      case BOARD_MODEM_PIN_CTRL_LOW:
+        stm32_configgpio((pinset & ~GPIO_MODE_MASK) |
+                         (GPIO_OUTPUT | GPIO_OUTPUT_CLEAR));
+        return false;
+
+      case BOARD_MODEM_PIN_CTRL_HIGH:
+        stm32_configgpio((pinset & ~GPIO_MODE_MASK) |
+                         (GPIO_OUTPUT | GPIO_OUTPUT_SET));
+        return false;
+
+      case BOARD_MODEM_PIN_CTRL_READ:
+        return stm32_gpioread(pinset & ~GPIO_MODE_MASK);
+
+      default:
+        DEBUGASSERT(false);
+        return false;
+    }
+}
+
+/****************************************************************************
  * Name: board_modem_initialize
  *
  * Description:
@@ -277,6 +464,8 @@ uint32_t board_modem_poweron_pin_set(bool set)
 int board_modem_initialize(bool *is_vcc_off)
 {
   DEBUGASSERT(is_vcc_off);
+
+  memset(&g_modem_activity, 0, sizeof(g_modem_activity));
 
   /* Setup control GPIOs for modem. */
 
@@ -369,6 +558,62 @@ bool board_modem_vcc_set(bool on)
 }
 
 /****************************************************************************
+ * Name: board_set_modem_activity
+ *
+ * Description:
+ *   Change activity state, for controlling power-saving/deep-sleep activity
+ *
+ ****************************************************************************/
+
+void board_set_modem_activity(enum e_board_modem_activity type, bool active)
+{
+  irqstate_t flags;
+  unsigned int new_count;
+
+  flags = irqsave();
+
+  if (active)
+    {
+      new_count = g_modem_activity[type].count + 1;
+
+      modem_pm_lldbg("%s activity count increase: %d => %d\n",
+                     type == BOARD_MODEM_ACTIVITY_HIGH ? "high" : "low",
+                     g_modem_activity[type].count, new_count);
+      DEBUGASSERT(new_count > g_modem_activity[type].count);
+
+      g_modem_activity[type].count = new_count;
+    }
+  else
+    {
+      new_count = g_modem_activity[type].count - 1;
+
+      modem_pm_lldbg("%s activity count decrease: %d => %d\n",
+                     type == BOARD_MODEM_ACTIVITY_HIGH ? "high" : "low",
+                     g_modem_activity[type].count, new_count);
+      DEBUGASSERT(new_count < g_modem_activity[type].count);
+
+      g_modem_activity[type].count = new_count;
+    }
+
+  clock_gettime(CLOCK_MONOTONIC, &g_modem_activity[type].last_mod_time);
+
+  irqrestore(flags);
+}
+
+/****************************************************************************
+ * Name: up_modem_gpio_suspend
+ *
+ * Description:
+ *   Set modem GPIOs to suspended state
+ *
+ ****************************************************************************/
+
+void up_modem_gpio_suspend(bool suspend)
+{
+  board_modem_setup_suspend_gpios(suspend);
+}
+
+/****************************************************************************
  * Name: up_modem_initialize_gpios
  *
  * Description:
@@ -382,3 +627,141 @@ void up_modem_initialize_gpios(void)
 
   board_modem_setup_gpios(true);
 }
+
+/****************************************************************************
+ * Name: up_modem_deep_sleep_readiness
+ *
+ * Description:
+ *   Check current modem activity and adjust deep-sleep accordingly.
+ *
+ * Input Parameters:
+ *   deepsleep_msecs:   Pointer to deep-sleep wake-up interval
+ *
+ * Return:
+ *   Return true if deep-sleep allowed.
+ *
+ ****************************************************************************/
+
+bool up_modem_deep_sleep_readiness(uint32_t *deepsleep_msecs)
+{
+  uart_dev_t *serdev;
+  irqstate_t flags;
+  bool ret;
+  int64_t recent_activity_msecs = -1;
+
+  flags = irqsave();
+
+  if (!stm32_gpioread(GPIO_PWR_SWITCH_MODEM))
+    {
+      /* Modem powered off, allow deep-sleep. */
+
+      ret = true;
+      goto check_low_activity;
+    }
+
+#ifdef SERIAL_HAVE_DMA
+  /* Trigger serial Rx DMA poll to fetch data from DMA buffer. */
+
+  stm32_serial_dma_poll();
+#endif
+
+  /* Get modem serial port (USART3) instance. */
+
+  serdev = stm32_serial_get_uart(MODEM_USART_NUM);
+  if (!serdev)
+    {
+      /* Port uninitialized? */
+
+      ret = true;
+      goto check_low_activity;
+    }
+
+  /* Check if modem serial (USART3) has data pending (Rx & Tx). */
+
+  if (serdev->xmit.head != serdev->xmit.tail)
+    {
+      modem_pm_lldbg("modem USART Tx busy\n");
+
+      ret = false;
+      goto out;
+    }
+  if (serdev->recv.head != serdev->recv.tail)
+    {
+      modem_pm_lldbg("modem USART Rx busy\n");
+
+      ret = false;
+      goto out;
+    }
+
+  /* Check modem activity levels (reported from modem library to board
+   * level). */
+
+  if (g_modem_activity[BOARD_MODEM_ACTIVITY_HIGH].count > 0)
+    {
+      /* High activity level, prevents deep-sleep. */
+
+      modem_pm_lldbg("modem high activity, busy\n");
+
+      ret = false;
+      goto out;
+    }
+
+  /* Let very recent activity change to zero to prevent deep-sleep. */
+
+  recent_activity_msecs = modem_msecs_from_recent_activity();
+  if (recent_activity_msecs <= MODEM_VERY_RECENT_ACTIVITY_OFF_MSECS)
+    {
+      modem_pm_lldbg("modem very recent activity, busy\n");
+
+      ret = false;
+      goto out;
+    }
+
+check_low_activity:
+
+  ret = true;
+
+  /* Check if deep-sleep seconds should be reduced based on low activity. */
+
+  if (*deepsleep_msecs < MODEM_LOW_ACTIVITY_DEEPSLEEP_SECS * 1000 &&
+      *deepsleep_msecs != 0)
+    {
+      /* Deep-sleep seconds already below threshold. */
+
+      goto out;
+    }
+
+  if (g_modem_activity[BOARD_MODEM_ACTIVITY_LOW].count > 0)
+    {
+      /* Low activity level, reduce deep-sleep interval. */
+
+      modem_pm_lldbg("modem low activity, deep-sleep secs %d=>%d\n",
+                     *deepsleep_secs, MODEM_LOW_ACTIVITY_DEEPSLEEP_SECS);
+
+      *deepsleep_msecs = MODEM_LOW_ACTIVITY_DEEPSLEEP_SECS * 1000;
+    }
+  else
+    {
+      if (recent_activity_msecs == -1)
+        {
+          recent_activity_msecs = modem_msecs_from_recent_activity();
+        }
+
+      if (recent_activity_msecs <= MODEM_QUITE_RECENT_ACTIVITY_OFF_MSECS)
+        {
+          /* Recent activity, reduce deep-sleep interval. */
+
+          modem_pm_lldbg("modem recent activity (%lld), "
+                         "deep-sleep secs %d=>%d\n",
+                         recent_activity_msecs, *deepsleep_secs,
+                         MODEM_LOW_ACTIVITY_DEEPSLEEP_SECS);
+
+          *deepsleep_msecs = MODEM_LOW_ACTIVITY_DEEPSLEEP_SECS * 1000;
+        }
+    }
+
+out:
+  irqrestore(flags);
+  return ret;
+}
+

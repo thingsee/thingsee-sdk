@@ -30,6 +30,23 @@ config THINGSEE_DISPLAY_FOREGND_COLOR
     ---help---
         Foreground color used in apps
 
+config THINGSEE_DISPLAY_QR
+    bool "Thingsee support for qr code"
+    default n
+    ---help---
+        Enable test-algorithm for qr code. At the moment the version of this algorithm is not even alpha
+
+if THINGSEE_DISPLAY_QR
+    config THINGSEE_MASKING_OFF
+        bool "Turns off masking calculating"
+        default n
+        ---help---
+            Turns off masking calculation. Every single mask is intend to remove noise and depricated features
+            from the symbol. BUT it is significatly slowing down the symbol generating process. Most of the vendors
+            just hardcode a random mask that might be a problem in a very noisy environment while the one trying to
+            decode a symbol
+endif
+
 # This definition is not about image module. But in future it must be placed under IMAGE_MODULE macro definition
 config THINGSEE_DISPLAY_INC_IMG_EXAMPLE
     bool "Image example to play with"

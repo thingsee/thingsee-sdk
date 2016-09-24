@@ -353,7 +353,7 @@ void up_reconfigure_gpios_for_pmstop(void)
   gpio_add_excluded(excluded_gpios, GPIO_USART1_RX & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_USART1_TX & ppmask);
 
-  /* Modem GPIOs need to be left as is, as otherwise
+  /* These modem GPIOs need to be left as is, as otherwise
    * modem level-shifters might start oscillate.
    */
 
@@ -361,6 +361,15 @@ void up_reconfigure_gpios_for_pmstop(void)
   gpio_add_excluded(excluded_gpios, GPIO_USART3_RTS & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_USART3_RX & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_USART3_CTS & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_MODEM_TX_BURST & ppmask);
+
+  /* These modem GPIOs need to be left as is, as otherwise
+   * modem will reset/power-off unexpectedly.
+   */
+
+  gpio_add_excluded(excluded_gpios, GPIO_MODEM_POWER_ON & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_MODEM_RESET_N & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_PWR_SWITCH_MODEM & ppmask);
 
   /* Sensor middleware wants to keep this powered on around deepsleep. */
 
@@ -368,11 +377,18 @@ void up_reconfigure_gpios_for_pmstop(void)
 
   /* Skip display pins. */
 
+#ifdef CONFIG_LCD_SSD1306
   gpio_add_excluded(excluded_gpios, GPIO_SPI2_MOSI & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_SPI2_SCK & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_CHIP_SELECT_DISPLAY & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_LCD_SSD1309_RESET & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_LCD_SSD1309_CMDDATA & ppmask);
+#else
+  /* Display regulator used for <custom HW modification external
+   * power-supply purposes>, needs to stay on over deepsleep. */
+
+  gpio_add_excluded(excluded_gpios, GPIO_REGULATOR_DISPLAY);
+#endif
 
   /* Skip SDcard pins. */
 

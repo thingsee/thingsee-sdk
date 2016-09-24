@@ -383,7 +383,7 @@ ssize_t usrsock_recvfrom(FAR struct socket *psock, FAR void *buf, size_t len,
                 {
                   ndbg("recvfrom timedout\n");
 
-                  ret = -ETIMEDOUT;
+                  ret = -EAGAIN;
                 }
               else if (ret == EINTR)
                 {
@@ -393,6 +393,7 @@ ssize_t usrsock_recvfrom(FAR struct socket *psock, FAR void *buf, size_t len,
                 }
               else
                 {
+                  dbg("net_timedwait errno: %d\n", ret);
                   DEBUGASSERT(false);
                 }
             }

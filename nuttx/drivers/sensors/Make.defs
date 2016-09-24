@@ -97,6 +97,10 @@ ifeq ($(CONFIG_MAX44009_SENSOR),y)
   CSRCS += max44009.c
 endif
 
+ifeq ($(CONFIG_GAM9AXEL_SENS),y)
+  CSRCS += lsm9ds0.c
+endif
+
 ifeq ($(CONFIG_LSM9DS1_SENS),y)
   CSRCS += lsm9ds1.c
 endif

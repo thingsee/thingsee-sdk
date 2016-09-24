@@ -55,6 +55,10 @@
 
 #define BOARD_DEEPSLEEP_MAX_SECS (0xffff)
 
+/* Does board have deep-sleep with subsecond accuracy */
+
+#define BOARD_HAS_SUBSECOND_DEEPSLEEP 1
+
 /************************************************************************************
  * Public function prototypes
  ************************************************************************************/
@@ -70,13 +74,22 @@ extern "C" {
 #endif
 
 /************************************************************************************
+* Name: board_deepsleep_with_stopmode_msecs
+*
+* Description:
+*   Drive MCU to STOP mode for 'msecs' milliseconds. Wake-up is performed either by RTC
+*   or by external interrupt on EXTI line.
+*
+************************************************************************************/
+
+EXTERN void board_deepsleep_with_stopmode_msecs(uint32_t msecs);
+
+/************************************************************************************
 * Name: board_deepsleep_with_stopmode
 *
 * Description:
 *   Drive MCU to STOP mode for 'secs' seconds. Wake-up is performed either by RTC
 *   or by external interrupt on EXTI line.
-*
-*   NOTE: TODO: Wake-up by RTC not implemented yet.
 *
 ************************************************************************************/
 

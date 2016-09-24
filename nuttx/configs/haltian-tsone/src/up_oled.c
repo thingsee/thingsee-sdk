@@ -163,6 +163,7 @@ static bool oled_set_regulator(bool on)
   oled_set_power(on);
   return true;
 }
+#endif
 
 /**************************************************************************************
  * Public Functions
@@ -188,6 +189,7 @@ static bool oled_set_regulator(bool on)
 
 int board_lcd_initialize(void)
 {
+#ifdef CONFIG_LCD_SSD1306
   FAR struct spi_dev_s *spi_oled = NULL;
   int ret;
 
@@ -212,31 +214,39 @@ int board_lcd_initialize(void)
     }
 
   priv_oled.initialized = true;
+#endif
 
   return OK;
 }
 
 FAR struct lcd_dev_s *board_lcd_getdev(int lcddev)
 {
+#ifdef CONFIG_LCD_SSD1306
   lcdvdbg("Requested oled-device.\n");
 
   return priv_oled.lcd;
+#else
+  return NULL;
+#endif
 }
 
 void board_lcd_uninitialize(void)
 {
+#ifdef CONFIG_LCD_SSD1306
   if (!priv_oled.initialized)
     return;
 
   priv_oled.lcd->setpower(priv_oled.lcd, false);
 
   priv_oled.initialized = false;
+#endif
 }
 
 /* Board specific additions to NuttX LCD API */
 
 void board_lcdoff(void)
 {
+#ifdef CONFIG_LCD_SSD1306
   struct lcd_dev_s *lcd;
 
   lcd = priv_oled.lcd;
@@ -247,10 +257,12 @@ void board_lcdoff(void)
       if (lcd->getpower(lcd) > 0)
         lcd->setpower(lcd, 0);
     }
+#endif
 }
 
 void board_lcdon(void)
 {
+#ifdef CONFIG_LCD_SSD1306
   struct lcd_dev_s *lcd;
 
   lcd = priv_oled.lcd;
@@ -261,6 +273,5 @@ void board_lcdon(void)
       if (lcd->getpower(lcd) <= 0)
         lcd->setpower(lcd, 1);
     }
-}
-
 #endif
+}

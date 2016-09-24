@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_voice_audio.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -75,6 +75,7 @@ static const struct at_cmd_def_s cmd_ATpUGPIOW =
   .name         = "+UGPIOW",
   .resp_format  = NULL,
   .resp_num     = 0,
+  .timeout_dsec = 10 * 10,
 };
 
 static const struct at_cmd_def_s cmd_ATpCMUT =
@@ -82,6 +83,7 @@ static const struct at_cmd_def_s cmd_ATpCMUT =
   .name         = "+CMUT",
   .resp_format  = NULL,
   .resp_num     = 0,
+  .timeout_dsec = 10 * 10,
 };
 
 /****************************************************************************
@@ -195,15 +197,47 @@ void ubmodem_audio_setup(struct ubmodem_s *modem, bool out_on, bool in_on)
       return;
     }
 
+  __ubmodem_audio_presetup(modem, out_on, in_on);
+
+  if (modem->audio.out_enabled != out_on)
+    {
+      modem->audio.out_enabled = out_on;
+
 #ifdef CONFIG_UBMODEM_AUDIO_OUT_CTRL_GPIO_1
-  (void)__ubmodem_add_task(modem, start_task_audio_setup_out_gpio1,
-                           (void *)(uintptr_t)out_on);
+      (void)__ubmodem_add_task(modem, start_task_audio_setup_out_gpio1,
+                               (void *)(uintptr_t)out_on);
 #endif
 #ifdef CONFIG_UBMODEM_AUDIO_OUT_CTRL_GPIO_2
-  (void)__ubmodem_add_task(modem, start_task_audio_setup_out_gpio2,
-                           (void *)(uintptr_t)out_on);
+      (void)__ubmodem_add_task(modem, start_task_audio_setup_out_gpio2,
+                               (void *)(uintptr_t)out_on);
 #endif
+    }
 
-  (void)__ubmodem_add_task(modem, start_task_audio_setup_in_mic,
-                           (void *)(uintptr_t)in_on);
+  if (modem->audio.in_enabled != in_on)
+    {
+      modem->audio.in_enabled = in_on;
+
+      (void)__ubmodem_add_task(modem, start_task_audio_setup_in_mic,
+                               (void *)(uintptr_t)in_on);
+    }
+
+  __ubmodem_audio_postsetup(modem, out_on, in_on);
+}
+
+/****************************************************************************
+ * Name: __ubmodem_audio_cleanup
+ *
+ * Description:
+ *  Audio setup cleanup
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+void ubmodem_audio_cleanup(struct ubmodem_s *modem)
+{
+  modem->audio.in_enabled = false;
+  modem->audio.out_enabled = false;
+  __ubmodem_audio_cleanup_additional(modem);
 }

@@ -1,8 +1,9 @@
 /****************************************************************************
  * apps/include/system/conman.h
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
+ *   Author: Sila Kayo <sila.kayo@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,6 +46,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <netinet/in.h>
+#include <time.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -81,9 +83,21 @@ enum conman_status_type_e
 
 enum conman_event_type_e
 {
-  CONMAN_EVENT_CALL_INCOMING = 1,
+  /* Common events: */
+  CONMAN_EVENT_LOST_CONNECTION = 1,
+  CONMAN_EVENT_CONNECTION_REQUEST_FAILED,
+  CONMAN_EVENT_CONNECTION_ESTABLISHED,
+  CONMAN_EVENT_HW_ERROR_TOO_LOW_VOLTAGE,
+  /* Modem events: */
+  CONMAN_EVENT_CELL_ENVIRONMENT,
+  CONMAN_EVENT_CALL_INCOMING,
   CONMAN_EVENT_CALL_ACTIVE,
   CONMAN_EVENT_CALL_DISCONNECTED,
+  /* u-blox modem specific events: */
+  CONMAN_EVENT_CELLLOCATE,
+  CONMAN_EVENT_FTP_DOWNLOAD_STATUS,
+  /* Wifi events: */
+  CONMAN_EVENT_WIFI_SCAN,
 };
 
 enum conman_resp_value
@@ -124,11 +138,98 @@ struct conman_event_call_incoming_info
 {
   char number[20];
   uint8_t numbertype;
+} packed_struct;
+
+struct conman_event_celllocate_info
+{
+  bool have_time:1;         /* Got GPS time. */
+  bool have_location:1;     /* Got location. */
+  unsigned int accuracy:30; /* Accuracy estimate in meters. */
+  int altitude;             /* Height above mean sea level in meters. */
+  double latitude;          /* Latitude as degrees. */
+  double longitude;         /* Longitude as degrees. */
+  time_t gps_time;          /* GPS time. */
+} packed_struct;
+
+struct conman_event_ftp_download_status
+{
+  bool file_downloaded;
+} packed_struct;
+
+enum conman_event_cell_environment_type
+{
+  CONMAN_CELL_ENVIRONMENT_TYPE_UNKNOWN = 0,
+  CONMAN_CELL_ENVIRONMENT_TYPE_GSM,
+  CONMAN_CELL_ENVIRONMENT_TYPE_UMTS,
 };
+
+struct conman_event_cell_environment_signal_qual_s
+{
+  int16_t rssi; /* dBm */
+  int8_t qual;  /* range: 0..7 */
+} packed_struct;
+
+struct conman_event_cell_environment_serving_s
+{
+  enum conman_event_cell_environment_type type;
+  uint32_t cell_id;   /* UMTS 28-bit, GSM 16-bit */
+  uint16_t mcc;
+  uint16_t mnc;
+  uint16_t lac;
+  uint8_t bsic;
+  uint16_t arfcn;
+  uint16_t sc;        /* UMTS only */
+  int16_t signal_dbm; /* UMTS: "-115 + <rscp_lev>", GSM: "-110 + <rxlev>" */
+} packed_struct;
+
+struct conman_event_cell_environment_neighbor_s
+{
+  enum conman_event_cell_environment_type type:3;
+  bool have_mcc_mnc_lac:1;
+  bool have_cellid:1;
+  bool have_sc:1;
+  bool have_signal_dbm:1;
+  bool have_bsic:1;
+  bool have_arfcn:1;
+  uint16_t mcc;
+  uint16_t mnc;
+  uint16_t lac;
+  uint32_t cell_id;
+  uint8_t bsic;
+  uint16_t arfcn;
+  uint16_t sc;        /* UMTS only */
+  int16_t signal_dbm; /* UMTS: "-115 + <rscp_lev>", GSM: "-110 + <rxlev>" */
+} packed_struct;
+
+struct conman_event_cell_environment_s
+{
+  bool have_signal_qual:1;
+  bool have_serving:1;
+  uint8_t num_neighbors;
+
+  struct conman_event_cell_environment_signal_qual_s signal_qual;
+  struct conman_event_cell_environment_serving_s serving;
+  struct conman_event_cell_environment_neighbor_s neighbors[];
+} packed_struct;
+
+struct conman_event_wifi_scan_entry_s
+{
+  uint8_t ssid_len;
+  int8_t rssi;
+  char ssid[32];
+  uint8_t bssid[6];
+} packed_struct;
+
+struct conman_event_wifi_scan_results_s
+{
+  uint8_t num_results;
+  struct conman_event_wifi_scan_entry_s results[];
+} packed_struct;
 
 struct conman_status_cellu_info
 {
   char oper_name[32 + 1];
+  char mcc_mnc[7 + 1];
   char imei[15 + 1];
   char imsi[15 + 1];
   struct in_addr ipaddr;
@@ -325,6 +426,50 @@ int conman_client_send_sms(struct conman_client_s *client,
                            const char *phonenumber, const char *message);
 
 /****************************************************************************
+ * Name: conman_client_filesystem_delete
+ *
+ * Description:
+ *   Delete file from modem filesystem.
+ *
+ * Input Parameters:
+ *   client       : client handle
+ *   filename     : name of file to be removed
+ *
+ * Returned Value:
+ *   ERROR if failed, OK on success.
+ *
+ ****************************************************************************/
+
+int conman_client_filesystem_delete(struct conman_client_s *client,
+                                    char *filename);
+
+/****************************************************************************
+ * Name: conman_client_ftp_download
+ *
+ * Description:
+ *   Retrieve a file from FTP server.
+ *
+ * Input Parameters:
+ *   client       : client handle
+ *   hostname     : FTP server hostname
+ *   username     : FTP username
+ *   password     : FTP password
+ *   filepath_src : Remote file path to retrieve
+ *   filepath_dst : Local file path to be stored
+ *
+ * Returned Value:
+ *   ERROR if failed, OK on success.
+ *
+ ****************************************************************************/
+
+int conman_client_ftp_download(struct conman_client_s *client,
+                               char *hostname,
+                               char *username,
+                               char *password,
+                               char *filepath_src,
+                               char *filepath_dst);
+
+/****************************************************************************
  * Name: conman_client_call_answer
  *
  * Description:
@@ -379,5 +524,105 @@ int conman_client_call_hangup(struct conman_client_s *client);
 
 int conman_client_call_audio_control(struct conman_client_s *client,
                                      bool audio_out_on);
+
+/****************************************************************************
+ * Name: conman_client_start_celllocate
+ *
+ * Description:
+ *   Initiate u-blox modem based CellLocate®
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *   timeout        : timeout for CellLocate® (in seconds)
+ *   target_accuracy: target accuracy (in seconds)
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_start_celllocate(struct conman_client_s *client,
+                                   int timeout, int target_accuracy);
+
+/****************************************************************************
+ * Name: conman_client_aid_celllocate
+ *
+ * Description:
+ *   Give modem current location for aiding u-blox CellLocate®
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *   time           : UTC timestamp of aided location
+ *   latitude       : Estimated latitude in degrees
+ *   longitude      : Estimated longitude in degrees
+ *   altitude       : Estimated altitude in meters
+ *   accuracy       : Estimated accuracy in meters
+ *   speed          : Estimated speed in meters per second
+ *   direction      : Estimated direction of speed in degrees
+ *                    (north zero, clockwise)
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_aid_celllocate(struct conman_client_s *client,
+                                 time_t time, double latitude, double longitude,
+                                 int altitude, unsigned int accuracy,
+                                 unsigned int speed, unsigned int direction);
+
+/****************************************************************************
+ * Name: conman_client_request_cell_environment
+ *
+ * Description:
+ *   Request cell environment information from u-blox modem,
+ *   results are returned with CONMAN_EVENT_CELL_ENVIRONMENT
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_request_cell_environment(struct conman_client_s *client);
+
+/****************************************************************************
+ * Name: conman_client_ping
+ *
+ * Description:
+ *   Ping/wake conman server.
+ *
+ * Input Parameters:
+ *   client : client handle
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_ping(struct conman_client_s *client);
+
+/****************************************************************************
+ * Name: conman_client_wifi_scan
+ *
+ * Description:
+ *   Initiate WiFi scanning
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_wifi_scan(struct conman_client_s *client);
 
 #endif /* __APPS_INCLUDE_SYSTEM_CONMAN_H */

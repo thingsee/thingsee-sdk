@@ -530,6 +530,8 @@ static void stm32_stdclockconfig(void)
 #if defined(CONFIG_RTC_HSECLOCK) || defined(CONFIG_LCD_HSECLOCK)
   uint16_t pwrcr;
 #endif
+  uint32_t pwr_vos;
+  bool flash_1ws;
 
 #if defined(CONFIG_STM32_ENERGYLITE)
 
@@ -546,11 +548,36 @@ static void stm32_stdclockconfig(void)
    * Range 1: PLLVCO up to 96MHz in range 1 (1.8V)
    * Range 2: PLLVCO up to 48MHz in range 2 (1.5V) (default)
    * Range 3: PLLVCO up to 24MHz in range 3 (1.2V)
+   *
+   * Range 1: SYSCLK up to 32Mhz
+   * Range 2: SYSCLK up to 16Mhz
+   * Range 3: SYSCLK up to 4.2Mhz
+   *
+   * Range 1: Flash 1WS if SYSCLK > 16Mhz
+   * Range 2: Flash 1WS if SYSCLK > 8Mhz
+   * Range 3: Flash 1WS if SYSCLK > 2.1Mhz
    */
 
-#if STM32_PLL_FREQUENCY > 48000000
-  stm32_pwr_setvos(PWR_CR_VOS_SCALE_1);
+  pwr_vos = PWR_CR_VOS_SCALE_2;
+  flash_1ws = false;
+
+#ifdef STM32_PLL_FREQUENCY
+  if (STM32_PLL_FREQUENCY > 48000000)
+    {
+      pwr_vos = PWR_CR_VOS_SCALE_1;
+    }
 #endif
+  if (STM32_SYSCLK_FREQUENCY > 16000000)
+    {
+      pwr_vos = PWR_CR_VOS_SCALE_1;
+    }
+  if ((pwr_vos == PWR_CR_VOS_SCALE_1 && STM32_SYSCLK_FREQUENCY > 16000000) ||
+      (pwr_vos == PWR_CR_VOS_SCALE_2 && STM32_SYSCLK_FREQUENCY > 8000000))
+    {
+      flash_1ws = true;
+    }
+
+  stm32_pwr_setvos(pwr_vos);
 
 #if defined(CONFIG_RTC_HSECLOCK) || defined(CONFIG_LCD_HSECLOCK)
   /* If RTC / LCD selects HSE as clock source, the RTC prescaler
@@ -656,7 +683,14 @@ static void stm32_stdclockconfig(void)
   regval |= FLASH_ACR_ACC64;          /* 64-bit access mode */
   putreg32(regval, STM32_FLASH_ACR);
 
-  regval |= FLASH_ACR_LATENCY;        /* One wait state */
+  if (flash_1ws)
+    {
+      regval |= FLASH_ACR_LATENCY;    /* One wait state */
+    }
+  else
+    {
+      regval &= ~FLASH_ACR_LATENCY;   /* Zero wait state */
+    }
   putreg32(regval, STM32_FLASH_ACR);
 
   /* Enable FLASH prefetch */

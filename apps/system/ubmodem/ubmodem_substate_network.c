@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_substate_network.c
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,10 +51,13 @@
 #include <apps/system/ubmodem.h>
 
 #include "ubmodem_internal.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+#define NETWORK_REGISTRATION_CHECK_SECS 4
 
 /****************************************************************************
  * Type Declarations
@@ -117,111 +120,10 @@ static const char *creg_strings[] =
  * Private Functions
  ****************************************************************************/
 
-static bool handle_cops_cme_error(struct ubmodem_s *modem,
-                                  const struct at_resp_info_s *info)
-{
-  /* Ignore CME error 15 and 3, as without network COPS=0 will eventually
-   * report error and also give +CREG URC messages with the correct indication
-   * of the issue.
-   */
+/*** Network +CREG URC monitor **********************************************/
 
-  if (info->errorcode == 15 || info->errorcode == 3)
-    return false;
-
-  if (info->errorcode == 30)
-    {
-      /* No network service. */
-
-      __ubmodem_level_transition_failed(modem, "NETWORK: No network service.");
-      return true;
-    }
-  else
-    {
-      __ubmodem_level_transition_failed(modem, "NETWORK: Could not connect, error %d",
-                                        info->errorcode);
-      return true;
-    }
-}
-
-static void retry_ATpCOPS_handler(struct ubmodem_s *modem,
-                                  const struct at_cmd_def_s *cmd,
-                                  const struct at_resp_info_s *info,
-                                  const uint8_t *resp_stream,
-                                  size_t stream_len, void *priv)
-{
-  struct modem_sub_setup_network_s *sub = priv;
-  int status = info->status;
-
-  /*
-   * Response handler for retried AT+COPS=0
-   */
-
-  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpCOPS);
-
-  if (status == RESP_STATUS_CME_ERROR)
-    {
-      if (handle_cops_cme_error(modem, info))
-        return;
-    }
-  else if (resp_status_is_error_or_timeout(status))
-    {
-      __ubmodem_common_failed_command(modem, cmd, info, "=0");
-      return;
-    }
-  else if (info->status != RESP_STATUS_OK)
-    {
-      MODEM_DEBUGASSERT(modem, false); /* Should not get here. */
-      return;
-    }
-
-  DEBUGASSERT(
-      sub->network_state == NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION);
-  sub->network_state = NETWORK_SETUP_WAITING_NETWORK_REGISTRATION;
-
-  if (sub->received_creg_while_retrying > 0)
-    {
-      ubdbg("Handling deferred +CREG: %d\n", sub->received_creg_while_retrying);
-
-      /* Report successful cellular network connection. */
-
-      sub->keep_creg_urc = true;
-      __ubmodem_reached_level(modem, UBMODEM_LEVEL_NETWORK);
-    }
-}
-
-static int network_register_timer_handler(struct ubmodem_s *modem,
-                                          const int timer_id, void * const arg)
-{
-  const char *reason;
-
-  if (timer_id != -1)
-    {
-      /* One-shot timer, not registered anymore. */
-
-      modem->creg_timer_id = -1;
-    }
-
-  /* Could not register in time. Disable RF. */
-
-  if (timer_id == -1)
-    reason = "NETWORK: Denied.";
-  else
-    reason = "NETWORK: Timeout.";
-
-  /* Mark for retry, 'level transition failed' can modify the actual target
-   * level. */
-
-  __ubmodem_network_cleanup(modem);
-  __ubmodem_retry_current_level(modem, UBMODEM_LEVEL_SIM_ENABLED);
-
-  /* Failed to connect network. */
-
-  __ubmodem_level_transition_failed(modem, "%s", reason);
-
-  return OK;
-}
-
-int reregister_network_failed(struct ubmodem_s *modem, void *priv)
+#ifdef CONFIG_UBMODEM_CREG_WAIT_NETWORK_TO_RESTORE
+static int reregister_network_failed(struct ubmodem_s *modem, void *priv)
 {
   ubdbg("\n");
 
@@ -245,6 +147,8 @@ static int network_reregister_timer_handler(struct ubmodem_s *modem,
                                             const int timer_id,
                                             void * const arg)
 {
+  MODEM_DEBUGASSERT(modem, modem->creg_timer_id == timer_id);
+
   /* One-shot timer, not registered anymore. */
 
   if (timer_id != -1)
@@ -252,6 +156,8 @@ static int network_reregister_timer_handler(struct ubmodem_s *modem,
       /* One-shot timer, not registered anymore. */
 
       modem->creg_timer_id = -1;
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
     }
 
   /* Issue new task. We cannot issue new state machine work from
@@ -263,8 +169,9 @@ static int network_reregister_timer_handler(struct ubmodem_s *modem,
 
   return OK;
 }
+#endif
 
-int retry_network_through_sim(struct ubmodem_s *modem, void *priv)
+static int retry_network_through_sim(struct ubmodem_s *modem, void *priv)
 {
   ubdbg("\n");
 
@@ -279,15 +186,16 @@ int retry_network_through_sim(struct ubmodem_s *modem, void *priv)
   return ERROR;
 }
 
-static void urc_pCREG_handler(struct ubmodem_s *modem,
-                              const struct at_cmd_def_s *cmd,
-                              const struct at_resp_info_s *info,
-                              const uint8_t *resp_stream,
-                              size_t stream_len, void *priv)
+static void monitor_urc_pCREG_handler(struct ubmodem_s *modem,
+                                      const struct at_cmd_def_s *cmd,
+                                      const struct at_resp_info_s *info,
+                                      const uint8_t *resp_stream,
+                                      size_t stream_len, void *priv)
 {
   int8_t val;
-  int err;
   int ret;
+
+  (void)ret;
 
   /*
    * Response handler for +CREG URC.
@@ -322,167 +230,464 @@ static void urc_pCREG_handler(struct ubmodem_s *modem,
       dbg("Unknown +CREG status: %d\n", val);
     }
 
-  if (modem->level < UBMODEM_LEVEL_NETWORK)
+  if (modem->creg_timer_id >= 0)
     {
-      struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
+      __ubmodem_remove_timer(modem, modem->creg_timer_id);
 
-      DEBUGASSERT(modem->state == MODEM_STATE_IN_SUBSTATE);
+      modem->creg_timer_id = -1;
 
-      if (sub->network_state < NETWORK_SETUP_WAITING_NETWORK_REGISTRATION)
-        {
-          /* Not ready yet, spurious +CREG URC? */
-
-          ubdbg("Ignored spurious +CREG URC.\n");
-
-          return;
-        }
-
-      switch (val)
-      {
-        case 1:
-        case 5:
-          /*
-           * If 'val' is 1, registered: home network.
-           * If 'val' is 5, registered: roamed.
-           */
-
-          if (sub->network_state == NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION)
-            {
-              /* Cannot do state transition to UBMODEM_LEVEL_NETWORK right now
-               * as still retrying AT+COPS=0. Defer handling to
-               * retry_ATpCOPS_handler. */
-
-              sub->received_creg_while_retrying = val;
-            }
-          else
-            {
-              /* Report successful cellular network connection. */
-
-              sub->keep_creg_urc = true;
-              __ubmodem_reached_level(modem, UBMODEM_LEVEL_NETWORK);
-            }
-
-          return;
-
-        case 0:
-          /*
-           * MT not searching for connection.
-           */
-
-          if (sub->network_state == NETWORK_SETUP_WAITING_NETWORK_REGISTRATION)
-            {
-              /* Keep retrying automatic network registration until timeout. */
-
-              sub->network_state = NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION;
-              sub->received_creg_while_retrying = -1;
-
-              err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS,
-                                       retry_ATpCOPS_handler, sub, "%s", "=0");
-              MODEM_DEBUGASSERT(modem, err == OK);
-            }
-
-          return;
-
-        case 4:
-          /*
-           * If 'val' is 4, unknown registration error.
-           */
-
-          /* no break */
-
-        case 3:
-          /*
-           * If 'val' is 3, registration was denied.
-           */
-
-          /* Perform fail-over code from timeout handler. */
-
-          network_register_timer_handler(modem, -1, sub);
-
-          return;
-
-        case 2:
-          /*
-           * If 'val' is 2, modem is trying to register.
-           */
-
-          return;
-
-        default:
-          /*
-           * Unknown.
-           */
-
-          return;
-      }
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
     }
-  else
+
+  switch (val)
     {
-      /* Current level is UBMODEM_LEVEL_NETWORK or higher. */
+      default: /* Unknown? */
+      case 1: /* Switched to home network? */
+      case 5: /* Switched to roaming? */
+        return;
 
-      switch (val)
-        {
-          default: /* Unknown? */
-          case 1: /* Switched to home network? */
-          case 5: /* Switched to roaming? */
+      case 2: /* Looking for connection. */
+#ifdef CONFIG_UBMODEM_CREG_WAIT_NETWORK_TO_RESTORE
+        /* Start connection search timeout timer. */
 
-            if (modem->creg_timer_id >= 0)
-              {
-                __ubmodem_remove_timer(modem, modem->creg_timer_id);
-                modem->creg_timer_id = -1;
-              }
+        ret = __ubmodem_set_timer(modem, MODEM_CMD_NETWORK_TIMEOUT * 100,
+                                  &network_reregister_timer_handler, modem);
+        MODEM_DEBUGASSERT(modem, ret != ERROR);
 
-            return;
+        modem->creg_timer_id = ret;
 
-          case 2: /* Looking for connection. */
+        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
 
-            /* Start connection search timeout timer. */
+        return;
+#else
+        /* Reset network through SIM reinitialization. Appears to work
+         * better in roaming conditions. TODO: Study why, do we understand
+         * function of modem in low-signal environments properly? */
+#endif
 
-            ret = __ubmodem_set_timer(modem, MODEM_CMD_NETWORK_TIMEOUT * 100,
-                                      &network_reregister_timer_handler, modem);
-            if (ret == ERROR)
-              {
-                /* Error here? Add assert? Or just try bailout? */
+      case 3: /* Registration failed? */
+      case 4: /* Unknown registration error? */
+      case 0: /* MT not searching for connection. */
 
-                MODEM_DEBUGASSERT(modem, false);
+        /* Unregister +CREG URC */
 
-                (void)network_reregister_timer_handler(modem, -1, modem);
-                return;
-              }
+        __ubparser_unregister_response_handler(&modem->parser,
+                                               urc_ATpCREG.name);
+        modem->creg_urc_registered = false;
 
-            modem->creg_timer_id = ret;
+        /* Issue new task. We cannot issue new state machine work from
+         * URC 'context' as other work might be active in main state
+         * machine. Task will be run with main state machine in proper
+         * state. */
 
-            return;
+        __ubmodem_add_task(modem, retry_network_through_sim, NULL);
 
-          case 3: /* Registration failed? */
-          case 4: /* Unknown registration error? */
-          case 0: /* MT not searching for connection. */
-
-            /* Unregister +CREG URC */
-
-            __ubparser_unregister_response_handler(&modem->parser,
-                                                   urc_ATpCREG.name);
-            modem->creg_urc_registered = false;
-
-            /* Issue new task. We cannot issue new state machine work from
-             * URC 'context' as other work might be active in main state
-             * machine. Task will be run with main state machine in proper
-             * state. */
-
-            __ubmodem_add_task(modem, retry_network_through_sim, NULL);
-
-            return;
-        }
+        return;
     }
 }
 
-static void set_ATpCOPS_handler(struct ubmodem_s *modem,
-                                const struct at_cmd_def_s *cmd,
-                                const struct at_resp_info_s *info,
-                                const uint8_t *resp_stream,
-                                size_t stream_len, void *priv)
+/*** Network registration ****************************************************/
+
+static bool handle_cops_cme_error(struct ubmodem_s *modem,
+                                  const struct at_resp_info_s *info)
 {
-  struct modem_sub_setup_network_s *sub = priv;
+  /* Ignore CME error 15 and 3, as without network COPS=0 will eventually
+   * report error and also give +CREG URC messages with the correct indication
+   * of the issue.
+   */
+
+  if (info->errorcode == 15 || info->errorcode == 3)
+    return false;
+
+  if (info->errorcode == 30)
+    {
+      /* No network service. */
+
+      __ubmodem_level_transition_failed(modem, "NETWORK: No network service.");
+      return true;
+    }
+  else
+    {
+      __ubmodem_level_transition_failed(modem, "NETWORK: Could not connect, error %d",
+                                        info->errorcode);
+      return true;
+    }
+}
+
+static int network_register_timeout_handler(struct ubmodem_s *modem,
+                                            const int timer_id,
+                                            void * const arg)
+{
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
+  struct timespec curr_ts;
+  const char *reason;
+  int ret;
+
+  MODEM_DEBUGASSERT(modem, modem->creg_timer_id == timer_id);
+
+  if (timer_id != -1)
+    {
+      /* One-shot timer, not registered anymore. */
+
+      modem->creg_timer_id = -1;
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+    }
+
+  (void)clock_gettime(CLOCK_MONOTONIC, &curr_ts);
+
+  if (curr_ts.tv_sec - sub->net_reg_start_ts.tv_sec <=
+      MODEM_CMD_NETWORK_REGISTRATION_TIMEOUT / 10)
+    {
+      /* Too soon, reregister timer. */
+
+      ret = __ubmodem_set_timer(modem, NETWORK_REGISTRATION_CHECK_SECS * 1000,
+                                &network_register_timeout_handler, sub);
+      MODEM_DEBUGASSERT(modem, ret != ERROR);
+
+      modem->creg_timer_id = ret;
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+
+      return OK;
+    }
+
+  /* Could not register in time. Disable RF. */
+
+  if (timer_id == -1)
+    reason = "NETWORK: Denied.";
+  else
+    reason = "NETWORK: Timeout.";
+
+  /* Mark for retry, 'level transition failed' can modify the actual target
+   * level. */
+
+  __ubmodem_network_cleanup(modem);
+  __ubmodem_retry_current_level(modem, UBMODEM_LEVEL_SIM_ENABLED);
+
+  /* Failed to connect network. */
+
+  __ubmodem_level_transition_failed(modem, "%s", reason);
+
+  return OK;
+}
+
+static void network_registration_successed(struct ubmodem_s *modem,
+                                           struct modem_sub_setup_network_s *sub)
+{
+  /* Switch +CREG URC handler to monitor variant. */
+
+  __ubparser_unregister_response_handler(&modem->parser, urc_ATpCREG.name);
+  __ubparser_register_response_handler(&modem->parser, &urc_ATpCREG,
+                                       monitor_urc_pCREG_handler, modem, true);
+  DEBUGASSERT(modem->creg_urc_registered);
+
+  /* Report successful cellular network connection. */
+
+  sub->keep_creg_urc = true;
+  __ubmodem_reached_level(modem, UBMODEM_LEVEL_NETWORK);
+}
+
+static void retry_ATpCOPS_handler(struct ubmodem_s *modem,
+                                  const struct at_cmd_def_s *cmd,
+                                  const struct at_resp_info_s *info,
+                                  const uint8_t *resp_stream,
+                                  size_t stream_len, void *priv)
+{
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
+  int status = info->status;
+  int ret;
+
+  /*
+   * Response handler for retried AT+COPS=0
+   */
+
+  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpCOPS);
+
+  if (status == RESP_STATUS_CME_ERROR)
+    {
+      if (handle_cops_cme_error(modem, info))
+        return;
+    }
+  else if (resp_status_is_error_or_timeout(status))
+    {
+      __ubmodem_common_failed_command(modem, cmd, info, "=0");
+      return;
+    }
+  else if (info->status != RESP_STATUS_OK)
+    {
+      MODEM_DEBUGASSERT(modem, false); /* Should not get here. */
+      return;
+    }
+
+  DEBUGASSERT(
+      sub->network_state == NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION);
+  sub->network_state = NETWORK_SETUP_WAITING_NETWORK_REGISTRATION;
+
+  /*
+   * Now waiting for +CREG URC.
+   *
+   * Register timer for timeout.
+   */
+
+  ret = __ubmodem_set_timer(modem, NETWORK_REGISTRATION_CHECK_SECS * 1000,
+                            &network_register_timeout_handler, sub);
+  MODEM_DEBUGASSERT(modem, ret != ERROR);
+
+  modem->creg_timer_id = ret;
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+}
+
+static int network_retry_registration_timer_handler(struct ubmodem_s *modem,
+                                                    const int timer_id,
+                                                    void * const arg)
+{
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
+  int err;
+
+  MODEM_DEBUGASSERT(modem, modem->creg_timer_id == timer_id);
+
+  if (timer_id != -1)
+    {
+      /* One-shot timer, not registered anymore. */
+
+      modem->creg_timer_id = -1;
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+    }
+
+  DEBUGASSERT(
+      sub->network_state == NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION);
+
+  if (sub->received_creg_while_retrying > 0)
+    {
+      ubdbg("Handling deferred +CREG: %d\n", sub->received_creg_while_retrying);
+
+      network_registration_successed(modem, sub);
+    }
+  else
+    {
+      err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS,
+                               retry_ATpCOPS_handler, sub, "%s", "=0");
+      MODEM_DEBUGASSERT(modem, err == OK);
+    }
+
+  return OK;
+}
+
+static void registration_urc_pCREG_handler(struct ubmodem_s *modem,
+                                           const struct at_cmd_def_s *cmd,
+                                           const struct at_resp_info_s *info,
+                                           const uint8_t *resp_stream,
+                                           size_t stream_len, void *priv)
+{
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
+  int8_t val;
+  int ret;
+
+  DEBUGASSERT(modem->state == MODEM_STATE_IN_SUBSTATE);
+
+  /*
+   * Response handler for +CREG URC.
+   */
+
+  MODEM_DEBUGASSERT(modem, cmd == &urc_ATpCREG);
+
+  if (info->status != RESP_STATUS_URC)
+    {
+      /* Should not happen. */
+
+      MODEM_DEBUGASSERT(modem, false);
+      return;
+    }
+
+  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &val))
+    {
+      /* Should not happen. */
+
+      MODEM_DEBUGASSERT(modem, false);
+      return;
+    }
+
+  dbg("Network registration URC, +CREG=%d.\n", val);
+
+  if (val >= 0 && val < ARRAY_SIZE(creg_strings))
+    {
+      dbg("%s\n", creg_strings[val]);
+    }
+  else
+    {
+      dbg("Unknown +CREG status: %d\n", val);
+    }
+
+  if (sub->network_state < NETWORK_SETUP_WAITING_NETWORK_REGISTRATION)
+    {
+      /* Not ready yet, spurious +CREG URC? */
+
+      ubdbg("Ignored spurious +CREG URC.\n");
+
+      return;
+    }
+
+  switch (val)
+  {
+    case 1:
+    case 5:
+      /*
+       * If 'val' is 1, registered: home network.
+       * If 'val' is 5, registered: roamed.
+       */
+
+      if (sub->network_state == NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION)
+        {
+          /* Cannot do state transition to UBMODEM_LEVEL_NETWORK right now
+           * as still retrying AT+COPS=0. Defer handling to
+           * retry_ATpCOPS_handler. */
+
+          sub->received_creg_while_retrying = val;
+        }
+      else
+        {
+          network_registration_successed(modem, sub);
+        }
+
+      return;
+
+    case 0:
+      /*
+       * MT not searching for connection.
+       */
+
+      if (sub->network_state == NETWORK_SETUP_WAITING_NETWORK_REGISTRATION)
+        {
+          /* Stop timer before issuing command. */
+
+          if (modem->creg_timer_id >= 0)
+            {
+              __ubmodem_remove_timer(modem, modem->creg_timer_id);
+
+              modem->creg_timer_id = -1;
+
+              ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+            }
+
+          /* Keep retrying automatic network registration until timeout. */
+
+          sub->network_state = NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION;
+          sub->received_creg_while_retrying = -1;
+
+          ret = __ubmodem_set_timer(modem, 1000,
+                                    &network_retry_registration_timer_handler,
+                                    sub);
+          MODEM_DEBUGASSERT(modem, ret != ERROR);
+
+          modem->creg_timer_id = ret;
+
+          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+        }
+
+      return;
+
+    case 4:
+      /*
+       * If 'val' is 4, unknown registration error.
+       *
+       * Network registration flow-chart in "AT Commands Examples"
+       * (UBX-13001820, R09, p.24) tells that proper action for this
+       * event is to 'Wait'.
+       */
+
+      return;
+
+    case 3:
+      /*
+       * If 'val' is 3, registration was denied.
+       *
+       * Network registration flow-chart in "AT Commands Examples"
+       * (UBX-13001820, R09, p.24) tells that proper action for this
+       * event is 'DTE intervention may be required'. Further information
+       * on event type '3':
+       *
+       * "3: the registration fails after a Location Update Reject;
+       *     possible causes are:
+       *     - Illegal MS
+       *     - Illegal ME
+       *     - IMSI unknown at HLR
+       *     - PLMN not allowed
+       *     - Location area not allowed
+       *     - Roaming not allowed in this location area
+       *     - Network failure
+       *     - Network congestion
+       *
+       *   If the registration type is manual, then no further attempt is
+       *   made to search for a new PLMN or register with it. If the
+       *   registration type is automatic, the MS may look for an allowed
+       *   PLMN if the rejection cause was roaming restriction. In case of
+       *   illegal MS / ME, there could be possible problems with either
+       *   the SIM card or with the MT's identity (IMEI): user intervention
+       *   may be required."
+       *
+       * Modem can still be continuing connection effort after this event
+       * especially in roaming conditions. Thus, we do not react on this
+       * message but keep waiting for timeout or other indication of
+       * network error.
+       */
+
+      return;
+
+    case 2:
+      /*
+       * If 'val' is 2, modem is trying to register.
+       */
+
+      return;
+
+    default:
+      /*
+       * Unknown.
+       */
+
+      return;
+  }
+}
+
+static int network_start_register_handler(struct ubmodem_s *modem,
+                                          const int timer_id,
+                                          void * const arg)
+{
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
+  int err;
+
+  MODEM_DEBUGASSERT(modem, modem->creg_timer_id == timer_id);
+
+  if (timer_id != -1)
+    {
+      /* One-shot timer, not registered anymore. */
+
+      modem->creg_timer_id = -1;
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+    }
+
+  /* Keep retrying automatic network registration until timeout. */
+
+  sub->network_state = NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION;
+  sub->received_creg_while_retrying = -1;
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS,
+                           retry_ATpCOPS_handler, sub, "%s", "=0");
+  MODEM_DEBUGASSERT(modem, err == OK);
+  return OK;
+}
+
+static void disable_ATpCOPS_handler(struct ubmodem_s *modem,
+                                    const struct at_cmd_def_s *cmd,
+                                    const struct at_resp_info_s *info,
+                                    const uint8_t *resp_stream,
+                                    size_t stream_len, void *priv)
+{
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
   int ret;
   int status = info->status;
 
@@ -499,7 +704,7 @@ static void set_ATpCOPS_handler(struct ubmodem_s *modem,
     }
   else if (resp_status_is_error_or_timeout(status))
     {
-      __ubmodem_common_failed_command(modem, cmd, info, "=0");
+      __ubmodem_common_failed_command(modem, cmd, info, "=2");
       return;
     }
   else if (status != RESP_STATUS_OK)
@@ -511,24 +716,17 @@ static void set_ATpCOPS_handler(struct ubmodem_s *modem,
   /*
    * Now waiting for +CREG URC.
    *
-   * Register timer for timeout.
+   * Register timer for +COPS=0.
    */
 
   sub->network_state = NETWORK_SETUP_WAITING_NETWORK_REGISTRATION;
 
-  ret = __ubmodem_set_timer(modem, MODEM_CMD_NETWORK_TIMEOUT * 100,
-                            &network_register_timer_handler, sub);
-  if (ret == ERROR)
-    {
-      /* Error here? Add assert? Or just try bailout? */
-
-      MODEM_DEBUGASSERT(modem, false);
-
-      (void)network_register_timer_handler(modem, -1, sub);
-      return;
-    }
+  ret = __ubmodem_set_timer(modem, 1000, &network_start_register_handler, sub);
+  MODEM_DEBUGASSERT(modem, ret != ERROR);
 
   modem->creg_timer_id = ret;
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
 }
 
 static void ATpCFUN_handler(struct ubmodem_s *modem,
@@ -537,7 +735,7 @@ static void ATpCFUN_handler(struct ubmodem_s *modem,
                             const uint8_t *resp_stream,
                             size_t stream_len, void *priv)
 {
-  struct modem_sub_setup_network_s *sub = priv;
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
   int err;
 
   /*
@@ -559,13 +757,16 @@ static void ATpCFUN_handler(struct ubmodem_s *modem,
     }
 
   /*
-   *  Modem RF enabled, now start automatic network registration.
+   * Modem RF enabled, now disable previous automatic network registration.
+   * +CREG:0 will be received and +COPS=0 will be issued to start new automatic
+   * network registration.
    */
 
   sub->network_state = NETWORK_SETUP_STARTING_NETWORK_REGISTRATION;
+  (void)clock_gettime(CLOCK_MONOTONIC, &sub->net_reg_start_ts);
 
-  err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS, set_ATpCOPS_handler, sub,
-                       "%s", "=0");
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS, disable_ATpCOPS_handler, sub,
+                           "%s", "=2");
   MODEM_DEBUGASSERT(modem, err == OK);
 }
 
@@ -575,7 +776,7 @@ static void ATpCREG_handler(struct ubmodem_s *modem,
                             const uint8_t *resp_stream,
                             size_t stream_len, void *priv)
 {
-  struct modem_sub_setup_network_s *sub = priv;
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
   int err;
 
   /*
@@ -599,7 +800,8 @@ static void ATpCREG_handler(struct ubmodem_s *modem,
   /* Register "+CREG" URC handler. */
 
   __ubparser_register_response_handler(&modem->parser, &urc_ATpCREG,
-                                       urc_pCREG_handler, modem, true);
+                                       registration_urc_pCREG_handler,
+                                       sub, true);
   modem->creg_urc_registered = true;
   sub->network_state = NETWORK_SETUP_ENABLING_RF;
 
@@ -620,6 +822,8 @@ static void setup_network_cleanup(struct ubmodem_s *modem)
       __ubmodem_remove_timer(modem, modem->creg_timer_id);
 
       modem->creg_timer_id = -1;
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
     }
 
   if (modem->creg_urc_registered && !sub->keep_creg_urc)
@@ -631,6 +835,8 @@ static void setup_network_cleanup(struct ubmodem_s *modem)
       modem->creg_urc_registered = false;
     }
 }
+
+/*** Network disconnection ***************************************************/
 
 static void set_ATpCFUN_off_handler(struct ubmodem_s *modem,
                                     const struct at_cmd_def_s *cmd,
@@ -664,11 +870,12 @@ static int network_unregister_timer_handler(struct ubmodem_s *modem,
                                             const int timer_id,
                                             void * const arg)
 {
-  struct modem_sub_setup_network_s *sub = arg;
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
   int err;
 
   /* Send +CFUN=0 */
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
   err = __ubmodem_send_cmd(modem, &cmd_ATpCFUN, set_ATpCFUN_off_handler, sub,
                            "%s", "=0");
   MODEM_DEBUGASSERT(modem, err == OK);
@@ -682,7 +889,7 @@ static void set_ATpCOPS_off_handler(struct ubmodem_s *modem,
                                     const uint8_t *resp_stream,
                                     size_t stream_len, void *priv)
 {
-  struct modem_sub_setup_network_s *sub = priv;
+  struct modem_sub_setup_network_s *sub = &modem->sub.setup_network;
   int ret;
 
   /*
@@ -704,6 +911,7 @@ static void set_ATpCOPS_off_handler(struct ubmodem_s *modem,
 
   /* Wait for sometime so modem can complete unregistering from network. */
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
   ret = __ubmodem_set_timer(modem, 1500, &network_unregister_timer_handler,
                             sub);
   if (ret == ERROR)
@@ -797,6 +1005,8 @@ void __ubmodem_network_cleanup(struct ubmodem_s *modem)
           __ubmodem_remove_timer(modem, modem->creg_timer_id);
 
           modem->creg_timer_id = -1;
+
+          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
         }
 
       if (modem->creg_urc_registered)

@@ -129,6 +129,17 @@ void board_lcdoff(void);
 void board_lcdon(void);
 
 /****************************************************************************
+ * Name: board_pwr_get_charger_connected
+ *
+ * Description:
+ *  This can be called from user code whenever she wants to know
+ *  charger connection status.
+ *
+ ****************************************************************************/
+
+bool board_pwr_get_charger_connected(void);
+
+/****************************************************************************
  * Name: board_pwr_charger_connected
  *
  * Description:

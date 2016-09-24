@@ -1,0 +1,82 @@
+/****************************************************************************
+ * apps/ts_engine/engine/eng_error.h
+ *
+ * Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ * 3. Neither the name NuttX nor the names of its contributors may be
+ *    used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+ * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+ * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Authors:
+ *   Pekka Ervasti <pekka.ervasti@haltian.com>
+ *
+ ****************************************************************************/
+
+#ifndef __APPS_TS_ENGINE_ENGINE_ENG_ERROR_H__
+#define __APPS_TS_ENGINE_ENGINE_ENG_ERROR_H__
+
+enum {
+  TS_ENGINE_ERROR_NONE = OK,
+  TS_ENGINE_ERROR,
+  TS_ENGINE_ERROR_INIT,
+  TS_ENGINE_ERROR_OOM,
+  TS_ENGINE_ERROR_READ,
+  TS_ENGINE_ERROR_NO_CLOUD_PROPERTIES,
+  TS_ENGINE_ERROR_STORAGE,
+  TS_ENGINE_ERROR_STOP_FAILED,
+  TS_ENGINE_ERROR_NOT_STARTED,
+  TS_ENGINE_ERROR_NOT_RUNNING,
+  TS_ENGINE_ERROR_ALREADY_RUNNING,
+  TS_ENGINE_ERROR_NOT_PAUSED,
+  TS_ENGINE_ERROR_SYSTEM,
+  TS_ENGINE_ERROR_EEPROM,
+  TS_ENGINE_ERROR_NO_PROFILE,
+  TS_ENGINE_ERROR_RUNTIME,
+
+  PROFILE_ERROR_INVALID_JSON,
+  PROFILE_ERROR_API_VERSION_NOT_SET,
+  PROFILE_ERROR_INIT_PURPOSE_ID_NOT_SET,
+  PROFILE_ERROR_PURPOSES_NOT_SET,
+  PROFILE_ERROR_ACTIONS_NOT_SET,
+  PROFILE_ERROR_EVENT_ID_NOT_SET,
+  PROFILE_ERROR_SMS_TEXT_NOT_SET,
+  PROFILE_ERROR_SMS_PHONE_NUMBER_NOT_SET,
+  PROFILE_ERROR_SHOW_TEXT_NOT_SET,
+  PROFILE_ERROR_GOTO_STATE_ID_NOT_SET,
+  PROFILE_ERROR_INIT_STATE_ID_NOT_SET,
+  PROFILE_ERROR_NO_CAUSES,
+  PROFILE_ERROR_NO_EVENTS,
+  PROFILE_ERROR_NO_STATES,
+  PROFILE_ERROR_OUT_OF_MEMORY,
+  PROFILE_ERROR_INVALID_THRESHOLD,
+  PROFILE_ERROR_PURPOSE_ID_NOT_SET,
+  PROFILE_ERROR_NO_INTERVAL_NO_IRQ,
+  PROFILE_ERROR_SENSE_ID_NOT_SET,
+  PROFILE_ERROR_INVALID_SENSE_ID,
+  PROFILE_ERROR_STATE_ID_NOT_SET,
+};
+
+#endif

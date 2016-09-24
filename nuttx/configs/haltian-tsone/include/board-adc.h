@@ -47,9 +47,17 @@
 #include <arch/chip/chip.h>
 
 /************************************************************************************
+ * Definitions
+ ************************************************************************************/
+
+/************************************************************************************
  * Public functions
  ************************************************************************************/
 
 void board_adc_vbat_setctrl(bool on);
+
+int board_adc_measure_vbat(uint32_t *value);
+
+int board_adc_measure_vrefint(uint32_t *vdda_mvolts);
 
 #endif /* __CONFIG_HALTIAN_TSONE_INCLUDE_BOARD_GPIO_H */

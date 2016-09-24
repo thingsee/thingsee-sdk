@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_voice.h
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -88,5 +88,46 @@
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: __ubmodem_audio_presetup
+ *
+ * Description:
+  *  Additional audio setup, enable/disable OUT/IN before main setup routine
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+void __ubmodem_audio_presetup(struct ubmodem_s *modem, bool out_on,
+                              bool in_on);
+
+/****************************************************************************
+ * Name: __ubmodem_audio_postsetup
+ *
+ * Description:
+ *  Additional audio setup, enable/disable OUT/IN after main setup routine
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+void __ubmodem_audio_postsetup(struct ubmodem_s *modem, bool out_on,
+                               bool in_on);
+
+/****************************************************************************
+ * Name: __ubmodem_audio_cleanup_additional
+ *
+ * Description:
+ *  Additional audio setup cleanup
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+void __ubmodem_audio_cleanup_additional(struct ubmodem_s *modem);
 
 #endif /* __SYSTEM_UBMODEM_UBMODEM_VOICE_H_ */

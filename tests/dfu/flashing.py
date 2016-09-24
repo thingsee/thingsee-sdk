@@ -3,19 +3,34 @@ import sys
 import subprocess
 import time
 from syslog import syslog
+from gdbsupport import *
 
-def gdb_execute(command):
-    syslog("Executing gdb command: " + command)
-    return gdb.execute(command, False, False)
+MAX_BOOT_TIME_SEC = 15
+
+timeout = None
+
+def setup_function(function):
+    global timeout
+    timeout = None
+
+def teardown_function(function):
+    global timeout
+    cancel_timeout(timeout)
 
 def go_dfu():
-    symbol = gdb.lookup_global_symbol('up_reset_to_system_bootloader').value().address
-    assert(symbol != None)
-    address = str(symbol).split()[0]
-    syslog("up_reset_to_system_bootloader address is " + address)
-    gdb_execute('mon reset init')
-    gdb_execute('mon reg pc ' + address)
-    gdb_execute('mon resume')
+    entrypoint_symbol = get_user_entrypoint()
+    cancel_timeout(gdb_execute('mon reset init'))
+    cancel_timeout(gdb_execute('tbreak ' + entrypoint_symbol))
+    timeout = gdb_execute('continue', MAX_BOOT_TIME_SEC)
+    assert timeout is not None
+    cancel_timeout(timeout)
+
+    cancel_timeout(gdb_execute('tbreak up_reset_to_system_bootloader'))
+    timeout = gdb_execute('jump up_reset_to_system_bootloader', 2)
+    assert timeout is not None
+    cancel_timeout(timeout)
+
+    cancel_timeout(gdb_execute('mon resume'))
     return True
 
 def has_dfu_device():

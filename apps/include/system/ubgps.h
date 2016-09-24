@@ -104,6 +104,10 @@ enum gps_event_id_e
   /* GPS location data event (gps_event_location_s) */
 
   GPS_EVENT_LOCATION =                  (1 << 6),
+
+  /* GPS new timer registered event (gps_event_new_timer_s) */
+
+  GPS_EVENT_NEW_TIMER =                 (1 << 7),
 };
 typedef enum gps_event_id_e gps_event_id_t;
 
@@ -246,7 +250,6 @@ struct gps_location_s
   uint32_t heading_accuracy;
 };
 
-
 /* GPS public event base */
 
 struct gps_event_s
@@ -260,7 +263,6 @@ struct gps_event_s
  * GPS public events
  */
 
-
 /* GPS state change event */
 
 struct gps_event_state_change_s
@@ -273,7 +275,6 @@ struct gps_event_state_change_s
 
   gps_state_t state;
 };
-
 
 /* GPS target state event */
 
@@ -292,7 +293,6 @@ struct gps_event_target_state_s
   gps_state_t current_state;
 };
 
-
 /* GPS NMEA event */
 
 struct gps_event_nmea_data_s
@@ -306,7 +306,6 @@ struct gps_event_nmea_data_s
   char * line;
 };
 
-
 /* GPS time event */
 
 struct gps_event_time_s
@@ -319,7 +318,6 @@ struct gps_event_time_s
 
   struct gps_time_s * time;
 };
-
 
 /* GPS location event */
 
@@ -336,6 +334,15 @@ struct gps_event_location_s
   /* Location */
 
   struct gps_location_s * location;
+};
+
+/* GPS new timer event */
+
+struct gps_event_new_timer_s
+{
+  /* Event base class */
+
+  struct gps_event_s super;
 };
 
 /****************************************************************************

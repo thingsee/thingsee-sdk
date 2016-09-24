@@ -117,18 +117,46 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
 
 /* GPS state machine states */
 
-const gps_sm_t gps_sm[__GPS_STATE_MAX] =
+const struct ubgps_sm_s ubgps_state_machines[__GPS_STATE_MAX] =
 {
-  [GPS_STATE_POWER_OFF] = ubgps_sm_poweroff,
-  [GPS_STATE_INITIALIZATION] = ubgps_sm_initialization,
-  [GPS_STATE_COLD_START] = ubgps_sm_cold_start,
-  [GPS_STATE_SEARCHING_FIX] = ubgps_sm_global,
-  [GPS_STATE_FIX_ACQUIRED] = ubgps_sm_global,
+#define SM(x, fn) [x] = { .func = fn, .name = #x }
+  SM(GPS_STATE_POWER_OFF, ubgps_sm_poweroff),
+  SM(GPS_STATE_INITIALIZATION, ubgps_sm_initialization),
+  SM(GPS_STATE_COLD_START, ubgps_sm_cold_start),
+  SM(GPS_STATE_SEARCHING_FIX, ubgps_sm_global),
+  SM(GPS_STATE_FIX_ACQUIRED, ubgps_sm_global),
+#undef SM
 };
 
 /****************************************************************************
- * Public Data
+ * Public Internal Functions
  ****************************************************************************/
+
+/* Return current state-machine for given 'state'. */
+
+const struct ubgps_sm_s *ubgps_sm(struct ubgps_s * const gps, gps_state_t state)
+{
+  if (gps->override_sm)
+    {
+      return gps->override_sm;
+    }
+
+  return &ubgps_state_machines[state];
+}
+
+/* Interface for overriding internal state-machine, useful for low-level access
+ * for ie. production testing. */
+
+void ubgps_set_override_sm(struct ubgps_s * const gps,
+                           const struct ubgps_sm_s *override_sm)
+{
+  gps->override_sm = override_sm;
+}
+
+void ubgps_clear_override_sm(struct ubgps_s * const gps)
+{
+  ubgps_set_override_sm(gps, NULL);
+}
 
 /****************************************************************************
  * Private Functions

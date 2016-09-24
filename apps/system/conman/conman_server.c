@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/conman/conman_server.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without

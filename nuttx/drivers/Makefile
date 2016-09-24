@@ -56,6 +56,7 @@ include input$(DELIM)Make.defs
 include led$(DELIM)Make.defs
 include lcd$(DELIM)Make.defs
 include mmcsd$(DELIM)Make.defs
+include motor$(DELIM)Make.defs
 include mtd$(DELIM)Make.defs
 include eeprom$(DELIM)Make.defs
 include net$(DELIM)Make.defs
@@ -69,6 +70,7 @@ include syslog$(DELIM)Make.defs
 include timers$(DELIM)Make.defs
 include usbdev$(DELIM)Make.defs
 include usbhost$(DELIM)Make.defs
+include usbmisc$(DELIM)Make.defs
 include video$(DELIM)Make.defs
 include wireless$(DELIM)Make.defs
 

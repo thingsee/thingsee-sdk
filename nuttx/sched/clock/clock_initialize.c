@@ -45,9 +45,7 @@
 #include <errno.h>
 #include <debug.h>
 
-#ifdef CONFIG_RTC
-#  include <arch/irq.h>
-#endif
+#include <arch/irq.h>
 
 #include <nuttx/arch.h>
 #include <nuttx/clock.h>
@@ -63,6 +61,12 @@
 #define SEC_PER_MIN  ((time_t)60)
 #define SEC_PER_HOUR ((time_t)60 * SEC_PER_MIN)
 #define SEC_PER_DAY  ((time_t)24 * SEC_PER_HOUR)
+
+#if defined(CONFIG_DEBUG) && defined(CONFIG_SYSTEM_TIME64)
+/* Initial system timer ticks value close to maximum 32-bit value, to test
+ * 64-bit system-timer after going over 32-bit value. */
+#  define INITIAL_SYSTEM_TIMER_TICKS ((systime_t)(0xffffffffUL - (TICK_PER_SEC * 5)))
+#endif
 
 /****************************************************************************
  * Private Type Declarations
@@ -81,11 +85,7 @@
  ****************************************************************************/
 
 #ifndef CONFIG_SCHED_TICKLESS
-#ifdef CONFIG_SYSTEM_TIME64
-volatile uint64_t g_system_timer;
-#else
-volatile uint32_t g_system_timer;
-#endif
+volatile systime_t g_system_timer;
 #endif
 
 struct timespec   g_basetime;
@@ -117,15 +117,16 @@ struct timespec   g_monotonic_offset_time;
 static inline void clock_basetime(FAR struct timespec *tp)
 {
   struct tm rtctime;
+  long nsecs = 0;
 
   /* Get the broken-out time from the date/time RTC. */
 
-  (void)up_rtc_getdatetime(&rtctime);
+  (void)up_rtc_getdatetime_with_subseconds(&rtctime, &nsecs);
 
   /* And use the broken-out time to initialize the system time */
 
   tp->tv_sec  = mktime(&rtctime);
-  tp->tv_nsec = 0;
+  tp->tv_nsec = nsecs;
 }
 
 #elif defined(CONFIG_RTC_HIRES)
@@ -186,8 +187,41 @@ static void clock_inittime(void)
   /* (Re-)initialize the time value to match the RTC */
 
   clock_basetime(&g_basetime);
+
 #ifndef CONFIG_SCHED_TICKLESS
+#ifdef INITIAL_SYSTEM_TIMER_TICKS
+  g_system_timer = INITIAL_SYSTEM_TIMER_TICKS;
+  if (g_system_timer > 0)
+    {
+      struct timespec ts;
+
+      (void)clock_ticks2time(g_system_timer, &ts);
+
+      /* Adjust base time to hide initial timer ticks. */
+
+      g_basetime.tv_sec  -= ts.tv_sec;
+      g_basetime.tv_nsec -= ts.tv_nsec;
+      while (g_basetime.tv_nsec < 0)
+        {
+          g_basetime.tv_nsec += NSEC_PER_SEC;
+          g_basetime.tv_sec--;
+        }
+
+#if defined(CONFIG_CLOCK_MONOTONIC) && defined(CONFIG_CLOCK_MONOTONIC_OFFSET_TIME)
+      /* Adjust monotonic clock offset to hide initial timer ticks. */
+
+      g_monotonic_offset_time.tv_sec  -= ts.tv_sec;
+      g_monotonic_offset_time.tv_nsec -= ts.tv_nsec;
+      while (g_monotonic_offset_time.tv_nsec < 0)
+        {
+          g_monotonic_offset_time.tv_nsec += NSEC_PER_SEC;
+          g_monotonic_offset_time.tv_sec--;
+        }
+#endif
+    }
+#else
   g_system_timer = 0;
+#endif
 #endif
 }
 
@@ -296,6 +330,141 @@ void clock_synchronize(void)
 #endif
 
 /****************************************************************************
+ * Name: clock_resynchronize
+ *
+ * Description:
+ *   Resynchronize the system timer to a hardware RTC.  The user can
+ *   explicitly re-synchronize the system timer to the RTC under certain
+ *   conditions where the system timer is known to be in error.  For example,
+ *   in certain low-power states, the system timer may be stopped but the
+ *   RTC will continue keep correct time.  After recovering from such
+ *   low-power state, this function should be called to restore the correct
+ *   system time.
+ *
+ *   Calling this function will not result in system time going "backward" in
+ *   time. If setting system time with RTC would result time going "backward"
+ *   then resynchronization is not performed.
+ *
+ * Parameters:
+ *   rtc_diff:  amount of time system-time is adjusted forward with RTC
+ *
+ * Return Value:
+ *   None
+ *
+ * Assumptions:
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_RTC
+void clock_resynchronize(struct timespec *rtc_diff)
+{
+  struct timespec rtc_time, bias, curr_ts;
+  irqstate_t flags;
+  int32_t carry;
+
+  /* Set the time value to match the RTC */
+
+  flags = irqsave();
+
+  /* Get RTC time */
+
+  clock_basetime(&rtc_time);
+
+  /* Get the elapsed time since power up (in milliseconds).  This is a
+   * bias value that we need to use to correct the base time.
+   */
+
+  (void)clock_systimespec(&bias);
+
+  /* Add the base time to this.  The base time is the time-of-day
+   * setting.  When added to the elapsed time since the time-of-day
+   * was last set, this gives us the current time.
+   */
+
+  curr_ts.tv_sec  = bias.tv_sec + g_basetime.tv_sec;
+  curr_ts.tv_nsec = bias.tv_nsec + g_basetime.tv_nsec;
+
+  /* Handle carry to seconds. */
+
+  if (curr_ts.tv_nsec >= NSEC_PER_SEC)
+    {
+      carry            = curr_ts.tv_nsec / NSEC_PER_SEC;
+      curr_ts.tv_sec  += carry;
+      curr_ts.tv_nsec -= (carry * NSEC_PER_SEC);
+    }
+
+  /* Check if RTC has advanced past system time. */
+
+  if (curr_ts.tv_sec > rtc_time.tv_sec ||
+      (curr_ts.tv_sec == rtc_time.tv_sec && curr_ts.tv_nsec >= rtc_time.tv_nsec))
+    {
+      /* Setting system time with RTC now would result time going
+       * backwards. Skip resynchronization. */
+
+      sdbg("skip resync\n");
+
+      rtc_diff->tv_sec = 0;
+      rtc_diff->tv_nsec = 0;
+    }
+  else
+    {
+      /* Save RTC time as the new base time. */
+
+      g_basetime.tv_sec  = rtc_time.tv_sec;
+      g_basetime.tv_nsec = rtc_time.tv_nsec;
+
+      /* Subtract that bias from the basetime so that when the system
+       * timer is again added to the base time, the result is the current
+       * time relative to basetime.
+       */
+
+      if (g_basetime.tv_nsec < bias.tv_nsec)
+        {
+          g_basetime.tv_nsec += NSEC_PER_SEC;
+          g_basetime.tv_sec--;
+        }
+
+      /* Result could be negative seconds */
+
+      g_basetime.tv_nsec -= bias.tv_nsec;
+      g_basetime.tv_sec  -= bias.tv_sec;
+
+      sdbg("basetime=(%ld,%lu) bias=(%ld,%lu)\n",
+          (long)g_basetime.tv_sec, (unsigned long)g_basetime.tv_nsec,
+          (long)bias.tv_sec, (unsigned long)bias.tv_nsec);
+
+      /* Output difference between time at entry and new current time. */
+
+      rtc_diff->tv_sec = (bias.tv_sec + g_basetime.tv_sec) - curr_ts.tv_sec;
+      rtc_diff->tv_nsec = (bias.tv_nsec + g_basetime.tv_nsec) - curr_ts.tv_nsec;
+
+      /* Handle carry to seconds. */
+
+      if (rtc_diff->tv_nsec < 0)
+        {
+          carry = -((-(rtc_diff->tv_nsec + 1)) / NSEC_PER_SEC + 1);
+        }
+      else if (rtc_diff->tv_nsec >= NSEC_PER_SEC)
+        {
+          carry = rtc_diff->tv_nsec / NSEC_PER_SEC;
+        }
+      else
+        {
+          carry = 0;
+        }
+
+      if (carry)
+        {
+          rtc_diff->tv_sec  += carry;
+          rtc_diff->tv_nsec -= (carry * NSEC_PER_SEC);
+        }
+    }
+
+  irqrestore(flags);
+}
+#endif
+
+/****************************************************************************
  * Name: clock_timer
  *
  * Description:
@@ -310,6 +479,29 @@ void clock_timer(void)
 {
   /* Increment the per-tick system counter */
 
+#if defined(CONFIG_SYSTEM_TIME64)
+  irqstate_t flags = irqsave();
   g_system_timer++;
+  irqrestore(flags);
+#else
+  g_system_timer++;
+#endif
+}
+#endif
+
+/****************************************************************************
+ * Name: up_rtc_getdatetime_with_subseconds
+ *
+ * Description:
+ *  Weak function provided as default up_rtc_getdatetime_with_subseconds
+ *  implementation. Maybe overridden by arch function.
+ ****************************************************************************/
+
+#if defined(CONFIG_RTC) && defined(CONFIG_RTC_DATETIME)
+int __attribute__((weak)) up_rtc_getdatetime_with_subseconds(FAR struct tm *tp,
+                                                             FAR long *nsec)
+{
+  *nsec = 0;
+  return up_rtc_getdatetime(tp);
 }
 #endif

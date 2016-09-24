@@ -371,7 +371,17 @@ struct lis2dh_config_s
   int  (*irq_attach)(FAR struct lis2dh_config_s *state, xcpt_t isr);
   void (*irq_enable)(FAR struct lis2dh_config_s *state, bool enable);
   void (*irq_clear)(FAR struct lis2dh_config_s *state);
+  bool (*read_int1_pin)(void);
+  bool (*read_int2_pin)(void);
 };
+
+struct lis2dh_raw_data_t
+  {
+    uint16_t out_x;
+    uint16_t out_y;
+    uint16_t out_z;
+  } packed_struct;
+typedef struct lis2dh_raw_data_t lis2dh_raw_data_t;
 
 /* IOCTL Commands ***********************************************************/
 

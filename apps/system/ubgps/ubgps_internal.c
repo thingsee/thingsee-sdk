@@ -194,7 +194,7 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
   /* Inject event to state machine */
 
   state = gps->state.current_state;
-  status = gps_sm[state](gps, event);
+  status = ubgps_sm(gps, state)->func(gps, event);
 
   /* Check status */
 
@@ -214,7 +214,7 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
       /* Construct and send exit event to old state */
 
       sevent.id = SM_EVENT_EXIT;
-      (void)gps_sm[state](gps, &sevent);
+      (void)ubgps_sm(gps, state)->func(gps, &sevent);
 
       /* Change to new state */
 
@@ -224,7 +224,7 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
       /* Construct and send entry event to new state */
 
       sevent.id = SM_EVENT_ENTRY;
-      (void)gps_sm[state](gps, &sevent);
+      (void)ubgps_sm(gps, state)->func(gps, &sevent);
 
       /* Publish state change event */
 

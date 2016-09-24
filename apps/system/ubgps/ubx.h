@@ -237,7 +237,7 @@ typedef enum ubx_state_e ubx_state_t;
 
 /* Maximum UBX message payload length */
 
-#define UBX_MSG_MAX_PAYLOAD_LENGTH    256
+#define UBX_MSG_MAX_PAYLOAD_LENGTH    1024
 
 /****************************************************************************
  * Public Types

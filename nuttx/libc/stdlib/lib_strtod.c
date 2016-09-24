@@ -237,5 +237,13 @@ double_t strtod(const char *str, char **endptr)
   return number;
 }
 
-#endif /* CONFIG_HAVE_DOUBLE */
+/* Provide 'atof' so that external binary libraries can be linked with NuttX
+ * libc. */
 
+#undef atof
+double_t atof(const char *nptr)
+{
+  return strtod(nptr, NULL);
+}
+
+#endif /* CONFIG_HAVE_DOUBLE */

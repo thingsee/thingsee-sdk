@@ -42,6 +42,7 @@
 
 #include <nuttx/config.h>
 
+#include <nuttx/bits.h>
 #include <stddef.h>
 
 /****************************************************************************
@@ -100,6 +101,54 @@ FAR void  *memmove(FAR void *dest, FAR const void *src, size_t count);
 FAR void  *memset(FAR void *s, int c, size_t n);
 
 FAR void explicit_bzero(void *s, size_t n);
+
+/****************************************************************************
+ * Name: ffs/ffsl/ffsll
+ *
+ * Description:
+ *   ffs finds the first bit set of integer.
+ ****************************************************************************/
+
+static inline int ffs(int n)
+{
+  return n ? ctz(n) + 1 : n;
+}
+
+static inline int ffsl(long n)
+{
+  return n ? ctzl(n) + 1 : n;
+}
+
+#ifdef CONFIG_HAVE_LONG_LONG
+static inline int ffsll(long long n)
+{
+  return n ? ctzll(n) + 1 : n;
+}
+#endif
+
+/****************************************************************************
+ * Name: fls/flsl/flsll
+ *
+ * Description:
+ *   ffs finds the last bit set of integer.
+ ****************************************************************************/
+
+static inline int fls(int n)
+{
+  return n ? sizeof(n) * 8 - clz(n) : n;
+}
+
+static inline int flsl(long n)
+{
+  return n ? sizeof(n) * 8 - clzl(n) : n;
+}
+
+#ifdef CONFIG_HAVE_LONG_LONG
+static inline int flsll(long long n)
+{
+  return n ? sizeof(n) * 8 - clzll(n) : n;
+}
+#endif
 
 #undef EXTERN
 #if defined(__cplusplus)

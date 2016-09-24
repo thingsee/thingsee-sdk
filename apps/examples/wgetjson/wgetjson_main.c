@@ -207,32 +207,32 @@ static int wgetjson_json_item_callback(const char *name,int type,cJSON *item)
 
   if (!strcmp(name, "name"))
     {
-      printf("name:\t\t\t%s \n", item->valuestring);
+      printf("name:\t\t\t%s \n", cJSON_string(item));
       // todo something....
     }
   else if (strcmp(name, "format/type")==0)
     {
-      printf("format/type:\t\t%s \n", item->valuestring);
+      printf("format/type:\t\t%s \n", cJSON_string(item));
       // todo something....
     }
   else if (!strcmp(name, "format/width"))
     {
-      printf("format/width:\t\t%d \n", item->valueint);
+      printf("format/width:\t\t%d \n", cJSON_int(item));
       // todo something....
     }
   else if (!strcmp(name, "format/height"))
     {
-      printf("format/height:\t\t%d \n", item->valueint);
+      printf("format/height:\t\t%d \n", cJSON_int(item));
       // todo something....
     }
   else if (!strcmp(name, "format/interlace"))
     {
-      printf("format/interlace:\t%s \n", (item->valueint) ? "true" : "false");
+      printf("format/interlace:\t%s \n", cJSON_boolean(item) ? "true" : "false");
       // todo something....
     }
   else if (!strcmp(name, "format/frame rate"))
     {
-      printf("format/frame rate:\t%d \n", item->valueint);
+      printf("format/frame rate:\t%d \n", cJSON_int(item));
       // todo something....
     }
 
@@ -250,16 +250,16 @@ static void wgetjson_json_item_scan(cJSON *item, const char *prefix)
 
   while (item)
     {
-      newprefix = malloc(strlen(prefix) + strlen(item->string) + 2);
-      sprintf(newprefix, "%s/%s", prefix, item->string);
+      newprefix = malloc(strlen(prefix) + strlen(cJSON_name(item)) + 2);
+      sprintf(newprefix, "%s/%s", prefix, cJSON_name(item));
 
-      dorecurse = wgetjson_json_item_callback(newprefix, item->type, item);
-      if (item->child && dorecurse)
+      dorecurse = wgetjson_json_item_callback(newprefix, cJSON_type(item), item);
+      if (cJSON_child(item) && dorecurse)
         {
-          wgetjson_json_item_scan(item->child, newprefix);
+          wgetjson_json_item_scan(cJSON_child(item), newprefix);
         }
 
-      item = item->next;
+      item = cJSON_next(item);
       free(newprefix);
     }
 }

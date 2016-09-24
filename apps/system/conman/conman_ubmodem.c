@@ -1,8 +1,10 @@
 /****************************************************************************
  * apps/system/conman/conman_ubmodem.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
- *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
+ *   Authors: Pekka Ervasti <pekka.ervasti@haltian.com>
+ *            Sila Kayo <sila.kayo@haltian.com>
+ *            Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -89,12 +91,12 @@ struct sms_queue_entry_s
  ****************************************************************************/
 
 static int process_sms_queue(struct conman_s *conman);
-static void send_sms_cb(struct ubmodem_s *modem, bool sms_sent, void *priv);
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
 
+#ifdef CONFIG_UBMODEM_SMS_ENABLED
 static void send_sms_cb(struct ubmodem_s *modem, bool sms_sent, void *priv)
 {
   struct conman_s *conman = priv;
@@ -160,6 +162,13 @@ static int process_sms_queue(struct conman_s *conman)
 
   return OK;
 }
+#else
+static int process_sms_queue(struct conman_s *conman)
+{
+  (void)conman;
+  return OK;
+}
+#endif
 
 static void event_ip_address(struct ubmodem_s *modem,
     enum ubmodem_event_flags_e event, const void *event_data, size_t datalen,
@@ -170,7 +179,6 @@ static void event_ip_address(struct ubmodem_s *modem,
   uint32_t addr = ntohl(ipcfg->ipaddr.s_addr);
   uint32_t dns1 = ntohl(ipcfg->dns1.s_addr);
   uint32_t dns2 = ntohl(ipcfg->dns2.s_addr);
-  const struct in_addr *dns;
 
   dbg("GPRS IP address: %d.%d.%d.%d\n", (addr >> 24) & 0xff,
       (addr >> 16) & 0xff, (addr >> 8) & 0xff, (addr >> 0) & 0xff);
@@ -183,18 +191,46 @@ static void event_ip_address(struct ubmodem_s *modem,
 
   if (dns1 != 0 && dns2 != 0)
     {
+      const struct in_addr *pdns1;
+      const struct in_addr *pdns2;
       uint8_t b;
+
       speckrandom_buf(&b, 1);
-      dns = (b & 1) ? &ipcfg->dns1 : &ipcfg->dns2;
+
+      pdns1 = (b & 1) ? &ipcfg->dns1 : &ipcfg->dns2;
+      pdns2 = (b & 1) ? &ipcfg->dns2 : &ipcfg->dns1;
+
+      dns_setservers(pdns1, pdns2, NULL);
+    }
+  else if (dns1 != 0)
+    {
+      dns_setservers(&ipcfg->dns1, NULL, NULL);
+    }
+  else if (dns2 != 0)
+    {
+      dns_setservers(&ipcfg->dns2, NULL, NULL);
     }
   else
     {
-      dns = (dns1 != 0) ? &ipcfg->dns1 : &ipcfg->dns2;
+      const struct in_addr *pdns1;
+      const struct in_addr *pdns2;
+      struct in_addr gdns1;
+      struct in_addr gdns2;
+      uint8_t b;
 
-      /* TODO: What if both DNS addresses are invalid? */
+      /* No valid IP address? Try Google's DNS.
+       * Should we try offer these also above, as third DNS server? */
+
+      gdns1.s_addr = inet_addr("8.8.8.8");
+      gdns2.s_addr = inet_addr("8.8.4.4");
+
+      speckrandom_buf(&b, 1);
+
+      pdns1 = (b & 1) ? &gdns1 : &gdns2;
+      pdns2 = (b & 1) ? &gdns2 : &gdns1;
+
+      dns_setservers(pdns1, pdns2, NULL);
     }
-
-  dns_setserver(dns);
 
   conman->ub.ipaddr = ipcfg->ipaddr;
 }
@@ -212,6 +248,28 @@ static void event_failed_target_level(struct ubmodem_s *modem,
   conman_dbg("failed target level, powering off (status: %d => %d)\n",
              conman->ub.status, CONMAN_STATUS_DESTROYING);
 
+  /* Generate event if lost established connection or failed to open. */
+
+  if (conman->ub.target_level != UBMODEM_LEVEL_POWERED_OFF)
+    {
+      if ((conman->ub.establishing_lost &&
+           conman->ub.status == CONMAN_STATUS_ESTABLISHING) ||
+          conman->ub.status == CONMAN_STATUS_ESTABLISHED)
+        {
+          __conman_send_boardcast_event(conman,
+                                        CONMAN_EVENT_LOST_CONNECTION,
+                                        NULL, 0);
+        }
+      else if (conman->ub.status == CONMAN_STATUS_ESTABLISHING)
+        {
+          __conman_send_boardcast_event(conman,
+                                        CONMAN_EVENT_CONNECTION_REQUEST_FAILED,
+                                        NULL, 0);
+        }
+    }
+
+  conman->ub.info_requested = false;
+  conman->ub.establishing_lost = false;
   conman->ub.status = CONMAN_STATUS_DESTROYING;
   conman->ub.target_level = UBMODEM_LEVEL_POWERED_OFF;
   ubmodem_request_level(modem, UBMODEM_LEVEL_POWERED_OFF);
@@ -234,6 +292,9 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
       {
         snprintf(conman->ub.imei, sizeof(conman->ub.imei), "%s", data);
         conman_dbg("IMEI received: %s\n", conman->ub.imei);
+
+        up_rngaddentropy((const uint32_t *)conman->ub.imei,
+                         sizeof(conman->ub.imei) / sizeof(uint32_t));
       }
     break;
   case UB_INFO_IMSI:
@@ -247,6 +308,9 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
       {
         snprintf(conman->ub.imsi, sizeof(conman->ub.imsi), "%s", data);
         conman_dbg("IMSI received: %s\n", conman->ub.imsi);
+
+        up_rngaddentropy((const uint32_t *)conman->ub.imsi,
+                         sizeof(conman->ub.imsi) / sizeof(uint32_t));
       }
     break;
   case UB_INFO_UDOPN:
@@ -260,6 +324,25 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
       {
         snprintf(conman->ub.udopn, sizeof(conman->ub.udopn), "%s", data);
         conman_dbg("UDOPN received: %s\n", conman->ub.udopn);
+
+        up_rngaddentropy((const uint32_t *)conman->ub.udopn,
+                         sizeof(conman->ub.udopn) / sizeof(uint32_t));
+      }
+    break;
+  case UB_INFO_MCC_MNC:
+    conman->ub.mcc_mnc_requested = false;
+    if (!status)
+      {
+        memset(conman->ub.udopn, 0, sizeof(conman->ub.mcc_mnc));
+        conman_dbg("Received failed status for MCC_MNC\n");
+      }
+    else
+      {
+        snprintf(conman->ub.mcc_mnc, sizeof(conman->ub.mcc_mnc), "%s", data);
+        conman_dbg("MCC_MNC received: %s\n", conman->ub.mcc_mnc);
+
+        up_rngaddentropy((const uint32_t *)conman->ub.mcc_mnc,
+                         sizeof(conman->ub.mcc_mnc) / sizeof(uint32_t));
       }
     break;
   default:
@@ -267,7 +350,7 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
   }
 
   if (conman->ub.imei_requested || conman->ub.imsi_requested ||
-      conman->ub.udopn_requested)
+      conman->ub.udopn_requested || conman->ub.mcc_mnc_requested)
     {
       return;
     }
@@ -275,8 +358,12 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
   conman_dbg("reached target level (status: %d => %d)\n",
              conman->ub.status, CONMAN_STATUS_ESTABLISHED);
 
+  conman->ub.establishing_lost = false;
   conman->ub.status = CONMAN_STATUS_ESTABLISHED;
   process_sms_queue(conman);
+
+  __conman_send_boardcast_event(conman, CONMAN_EVENT_CONNECTION_ESTABLISHED,
+                                NULL, 0);
 }
 
 static void event_target_level(struct ubmodem_s *modem,
@@ -319,6 +406,15 @@ static void event_target_level(struct ubmodem_s *modem,
           else
             conman_dbg("UDOPN request failed!\n");
         }
+
+      if (!conman->ub.mcc_mnc_requested)
+        {
+          conman_dbg("Requesting MCC_MNC\n");
+          if (ubmodem_get_info(conman->ub.modem, ubmodem_info_callback, priv, UB_INFO_MCC_MNC) == OK)
+            conman->ub.mcc_mnc_requested = true;
+          else
+            conman_dbg("MCC_MNC request failed!\n");
+        }
     }
 
   switch (conman->ub.status)
@@ -331,6 +427,7 @@ static void event_target_level(struct ubmodem_s *modem,
             conman_dbg("not at target level, retry... (status: %d)\n",
                        conman->ub.status);
 
+            conman->ub.establishing_lost = false;
             conman->ub.status = CONMAN_STATUS_DESTROYING;
             conman->ub.target_level = UBMODEM_LEVEL_POWERED_OFF;
             ubmodem_request_level(modem, conman->ub.target_level);
@@ -340,6 +437,7 @@ static void event_target_level(struct ubmodem_s *modem,
             conman_dbg("reached target level (status: %d => %d)\n",
                        conman->ub.status, CONMAN_STATUS_OFF);
 
+            conman->ub.establishing_lost = false;
             conman->ub.status = CONMAN_STATUS_OFF;
             conman->ub.info_requested = false;
           }
@@ -354,11 +452,14 @@ static void event_target_level(struct ubmodem_s *modem,
             conman_dbg("not at target level, retry... (status: %d)\n",
                        conman->ub.status);
 
+            conman->ub.establishing_lost =
+                (conman->ub.status == CONMAN_STATUS_ESTABLISHED);
             conman->ub.status = CONMAN_STATUS_ESTABLISHING;
             ubmodem_request_level(modem, conman->ub.target_level);
           }
         else if (!conman->ub.info_requested || conman->ub.imei_requested ||
-                 conman->ub.imsi_requested || conman->ub.udopn_requested)
+                  conman->ub.imsi_requested || conman->ub.udopn_requested ||
+                  conman->ub.mcc_mnc_requested)
           {
             conman_dbg("info not yet requested, retry... (status: %d)\n",
                        conman->ub.status);
@@ -370,6 +471,7 @@ static void event_target_level(struct ubmodem_s *modem,
             conman_dbg("reached target level (status: %d => %d)\n",
                        conman->ub.status, CONMAN_STATUS_ESTABLISHED);
 
+            conman->ub.establishing_lost = false;
             conman->ub.status = CONMAN_STATUS_ESTABLISHED;
             process_sms_queue(conman);
           }
@@ -383,6 +485,7 @@ static void event_target_level(struct ubmodem_s *modem,
             conman_dbg("not at target level, retry... (status: %d)\n",
                        conman->ub.status);
 
+            conman->ub.establishing_lost = false;
             conman->ub.status = CONMAN_STATUS_DESTROYING;
             conman->ub.target_level = UBMODEM_LEVEL_POWERED_OFF;
             ubmodem_request_level(modem, conman->ub.target_level);
@@ -392,6 +495,7 @@ static void event_target_level(struct ubmodem_s *modem,
             conman_dbg("reached target level (status: %d => %d)\n",
                        conman->ub.status, CONMAN_STATUS_OFF);
 
+            conman->ub.establishing_lost = false;
             conman->ub.status = CONMAN_STATUS_OFF;
             conman->ub.info_requested = false;
           }
@@ -400,6 +504,7 @@ static void event_target_level(struct ubmodem_s *modem,
     }
 }
 
+#ifdef CONFIG_UBMODEM_VOICE
 static void event_call_status_change(struct ubmodem_s *modem,
                                      enum ubmodem_event_flags_e event,
                                      const void *event_data, size_t datalen,
@@ -444,6 +549,256 @@ static void event_call_status_change(struct ubmodem_s *modem,
 
       default:
         DEBUGASSERT(false);
+        break;
+    }
+}
+#endif
+
+#ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
+static void event_celllocate(struct ubmodem_s *modem,
+                             enum ubmodem_event_flags_e event,
+                             const void *event_data, size_t datalen,
+                             void *priv)
+{
+  struct conman_s *conman = priv;
+  const struct ubmodem_event_cell_location_s *cloc;
+  struct conman_event_celllocate_info clinfo = {};
+  struct tm t;
+
+  conman_dbg("Got CellLocate event!\n");
+
+  DEBUGASSERT(datalen == sizeof(*cloc));
+  cloc = event_data;
+
+  /* Fill location info. */
+
+  if (cloc->location.valid)
+    {
+      clinfo.have_location = true;
+      clinfo.altitude = cloc->location.altitude;
+      clinfo.accuracy = cloc->location.accuracy;
+      clinfo.latitude = cloc->location.latitude;
+      clinfo.longitude = cloc->location.longitude;
+    }
+
+  if (cloc->date.valid)
+    {
+      clinfo.have_time = true;
+
+      /* Prepare time structure. */
+
+      t.tm_year = cloc->date.year - 1900;
+      t.tm_mon = cloc->date.month - 1;
+      t.tm_mday = cloc->date.day;
+      t.tm_hour = cloc->date.hour;
+      t.tm_min = cloc->date.min;
+      t.tm_sec = cloc->date.sec;
+
+      /* Store GPS time. */
+
+      clinfo.gps_time = mktime(&t);
+    }
+
+  __conman_send_boardcast_event(conman, CONMAN_EVENT_CELLLOCATE,
+                                &clinfo, sizeof(clinfo));
+}
+#endif
+
+#ifndef CONFIG_UBMODEM_DISABLE_CELL_ENVIRONMENT
+static void event_cell_environment(struct ubmodem_s *modem,
+                             enum ubmodem_event_flags_e event,
+                             const void *event_data, size_t datalen,
+                             void *priv)
+{
+  struct conman_s *conman = priv;
+  const struct ubmodem_event_cell_environment_s *ubenv;
+  struct conman_event_cell_environment_s *cenv;
+  size_t cenv_len;
+  unsigned int i;
+
+  conman_dbg("Got cell environment event!\n");
+
+  DEBUGASSERT(datalen >= sizeof(*ubenv));
+  ubenv = event_data;
+  DEBUGASSERT(datalen ==
+      sizeof(*ubenv) + ubenv->num_neighbors * sizeof(ubenv->neighbors[0]));
+
+  cenv_len = sizeof(*cenv) + ubenv->num_neighbors * sizeof(cenv->neighbors[0]);
+  cenv = calloc(1, cenv_len);
+  if (!cenv)
+    {
+      return;
+    }
+
+  cenv->have_signal_qual = ubenv->have_signal_qual;
+  cenv->have_serving = ubenv->have_serving;
+  cenv->num_neighbors = ubenv->num_neighbors;
+
+  if (cenv->have_signal_qual)
+    {
+      cenv->signal_qual.qual = ubenv->signal_qual.qual;
+      cenv->signal_qual.rssi = ubenv->signal_qual.rssi;
+    }
+
+  if (cenv->have_serving)
+    {
+      cenv->serving.cell_id = ubenv->serving.cell_id;
+      cenv->serving.mcc = ubenv->serving.mcc;
+      cenv->serving.mnc = ubenv->serving.mnc;
+      cenv->serving.lac = ubenv->serving.lac;
+      cenv->serving.bsic = ubenv->serving.bsic;
+      cenv->serving.arfcn = ubenv->serving.arfcn;
+      cenv->serving.signal_dbm = ubenv->serving.signal_dbm;
+      switch (ubenv->serving.rat)
+        {
+        case UBMODEM_RAT_GSM:
+          cenv->serving.type = CONMAN_CELL_ENVIRONMENT_TYPE_GSM;
+          cenv->serving.sc = 0xffff;
+          break;
+        case UBMODEM_RAT_UMTS:
+          cenv->serving.type = CONMAN_CELL_ENVIRONMENT_TYPE_UMTS;
+          cenv->serving.sc = ubenv->serving.sc;
+          break;
+        default:
+          break;
+        }
+    }
+
+  for (i = 0; i < cenv->num_neighbors; i++)
+    {
+      cenv->neighbors[i].have_mcc_mnc_lac = ubenv->neighbors[i].have_mcc_mnc_lac;
+      cenv->neighbors[i].have_cellid = ubenv->neighbors[i].have_cellid;
+      cenv->neighbors[i].have_bsic = ubenv->neighbors[i].have_bsic;
+      cenv->neighbors[i].have_arfcn = ubenv->neighbors[i].have_arfcn;
+      cenv->neighbors[i].have_signal_dbm = ubenv->neighbors[i].have_signal_dbm;
+
+      switch (ubenv->neighbors[i].rat)
+        {
+        case UBMODEM_RAT_GSM:
+          cenv->neighbors[i].type = CONMAN_CELL_ENVIRONMENT_TYPE_GSM;
+          cenv->neighbors[i].have_sc = false;
+          break;
+        case UBMODEM_RAT_UMTS:
+          cenv->neighbors[i].type = CONMAN_CELL_ENVIRONMENT_TYPE_UMTS;
+          cenv->neighbors[i].have_sc = ubenv->neighbors[i].have_sc;
+          break;
+        default:
+          break;
+        }
+
+      if (cenv->neighbors[i].have_mcc_mnc_lac)
+        {
+          cenv->neighbors[i].mcc = ubenv->neighbors[i].mcc;
+          cenv->neighbors[i].mnc = ubenv->neighbors[i].mnc;
+          cenv->neighbors[i].lac = ubenv->neighbors[i].lac;
+        }
+      else
+        {
+          cenv->neighbors[i].mcc = 0xffff;
+          cenv->neighbors[i].mnc = 0xffff;
+          cenv->neighbors[i].lac = 0xffff;
+        }
+
+      if (cenv->neighbors[i].have_cellid)
+        {
+          cenv->neighbors[i].cell_id = ubenv->neighbors[i].cell_id;
+        }
+      else
+        {
+          cenv->neighbors[i].cell_id = 0xffffffff;
+        }
+
+      if (cenv->neighbors[i].have_bsic)
+        {
+          cenv->neighbors[i].bsic = ubenv->neighbors[i].bsic;
+        }
+      else
+        {
+          cenv->neighbors[i].bsic = 0xff;
+        }
+
+      if (cenv->neighbors[i].have_arfcn)
+        {
+          cenv->neighbors[i].arfcn = ubenv->neighbors[i].arfcn;
+        }
+      else
+        {
+          cenv->neighbors[i].arfcn = 0xffff;
+        }
+
+      if (cenv->neighbors[i].have_signal_dbm)
+        {
+          cenv->neighbors[i].signal_dbm = ubenv->neighbors[i].signal_dbm;
+        }
+      else
+        {
+          cenv->neighbors[i].signal_dbm = INT16_MIN;
+        }
+
+      if (cenv->neighbors[i].have_sc)
+        {
+          cenv->neighbors[i].sc = ubenv->neighbors[i].sc;
+        }
+      else
+        {
+          cenv->neighbors[i].sc = 0xffff;
+        }
+    }
+
+  __conman_send_boardcast_event(conman, CONMAN_EVENT_CELL_ENVIRONMENT,
+                                cenv, cenv_len);
+
+  free(cenv);
+}
+#endif
+
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+static void event_ftp_download_status(struct ubmodem_s *modem,
+                             enum ubmodem_event_flags_e event,
+                             const void *event_data, size_t datalen,
+                             void *priv)
+{
+  struct conman_s *conman = priv;
+  const struct ubmodem_event_ftp_download_status_s *uftpds;
+  struct conman_event_ftp_download_status cftpds = {};
+
+  conman_dbg("Got FTP download status event!\n");
+
+  DEBUGASSERT(datalen == sizeof(*uftpds));
+  uftpds = event_data;
+
+  cftpds.file_downloaded = uftpds->file_downloaded;
+
+  __conman_send_boardcast_event(conman, CONMAN_EVENT_FTP_DOWNLOAD_STATUS,
+                                &cftpds, sizeof(cftpds));
+}
+#endif
+
+static void event_error(struct ubmodem_s *modem,
+                        enum ubmodem_event_flags_e event,
+                        const void *event_data, size_t datalen,
+                        void *priv)
+{
+  const enum ubmodem_error_event_e *error;
+  struct conman_s *conman = priv;
+
+  DEBUGASSERT(datalen >= sizeof(*error));
+  error = event_data;
+
+  switch (*error)
+    {
+      case UBMODEM_ERROR_STARTUP_VOLTAGE_TOO_LOW:
+        conman_dbg("Got %s error event!\n",
+                   "UBMODEM_ERROR_STARTUP_VOLTAGE_TOO_LOW");
+
+        __conman_send_boardcast_event(conman,
+                                      CONMAN_EVENT_HW_ERROR_TOO_LOW_VOLTAGE,
+                                      NULL, 0);
+
+        break;
+
+      default:
+        conman_dbg("Got <%d> error event!\n", *error);
         break;
     }
 }
@@ -565,6 +920,92 @@ static void event_data_from_modem(struct ubmodem_s *modem,
 #endif /* CONFIG_SYSTEM_CONMAN_VERBOSE */
 #endif /* CONFIG_SYSTEM_CONMAN_DEBUG */
 
+static void ubmodem_event_cb(struct ubmodem_s *modem,
+                             enum ubmodem_event_flags_e event,
+                             const void *event_data, size_t datalen,
+                             void *priv)
+{
+  switch (event)
+    {
+      default:
+        return;
+
+      case UBMODEM_EVENT_FLAG_IP_ADDRESS:
+        event_ip_address(modem, event, event_data, datalen, priv);
+        return;
+
+      case UBMODEM_EVENT_FLAG_FAILED_LEVEL_TRANSITION:
+        event_failed_target_level(modem, event, event_data, datalen, priv);
+        return;
+
+      case UBMODEM_EVENT_FLAG_TARGET_LEVEL_REACHED:
+        event_target_level(modem, event, event_data, datalen, priv);
+        return;
+
+#ifdef CONFIG_UBMODEM_VOICE
+      case UBMODEM_EVENT_FLAG_CALL_RINGING:
+      case UBMODEM_EVENT_FLAG_CALL_ACTIVE:
+      case UBMODEM_EVENT_FLAG_CALL_DISCONNECTED:
+        event_call_status_change(modem, event, event_data, datalen, priv);
+        return;
+#endif
+
+#ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
+      case UBMODEM_EVENT_FLAG_CELL_LOCATION:
+        event_celllocate(modem, event, event_data, datalen, priv);
+        return;
+#endif
+
+#ifndef CONFIG_UBMODEM_DISABLE_CELL_ENVIRONMENT
+      case UBMODEM_EVENT_FLAG_CELL_ENVIRONMENT:
+        event_cell_environment(modem, event, event_data, datalen, priv);
+        return;
+#endif
+
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+      case UBMODEM_EVENT_FLAG_FTP_DOWNLOAD_STATUS:
+        event_ftp_download_status(modem, event, event_data, datalen, priv);
+        return;
+#endif
+
+      case UBMODEM_EVENT_FLAG_ERROR:
+        event_error(modem, event, event_data, datalen, priv);
+        return;
+
+#ifdef CONFIG_SYSTEM_CONMAN_DEBUG
+      case UBMODEM_EVENT_FLAG_NEW_LEVEL:
+        event_new_level(modem, event, event_data, datalen, priv);
+        return;
+
+      case UBMODEM_EVENT_FLAG_TRACE_USRSOCK:
+        event_trace_usrsock(modem, event, event_data, datalen, priv);
+        return;
+
+      case UBMODEM_EVENT_FLAG_TRACE_CMD_TO_MODEM:
+        event_cmd_to_modem(modem, event, event_data, datalen, priv);
+        return;
+
+      case UBMODEM_EVENT_FLAG_TRACE_RESP_FROM_MODEM:
+        event_resp_from_modem(modem, event, event_data, datalen, priv);
+        return;
+
+      case UBMODEM_EVENT_FLAG_TRACE_STATE_CHANGE:
+        event_state_change(modem, event, event_data, datalen, priv);
+        return;
+
+#ifdef CONFIG_SYSTEM_CONMAN_VERBOSE
+      case UBMODEM_EVENT_FLAG_TRACE_DATA_TO_MODEM:
+        event_data_to_modem(modem, event, event_data, datalen, priv);
+        return;
+
+      case UBMODEM_EVENT_FLAG_TRACE_DATA_FROM_MODEM:
+        event_data_from_modem(modem, event, event_data, datalen, priv);
+        return;
+#endif
+#endif
+    }
+}
+
 static int ubmodem_hw_init(void *priv, bool *is_vcc_off)
 {
   return board_modem_initialize(is_vcc_off);
@@ -590,13 +1031,36 @@ static uint32_t ubmodem_hw_reset_pin_set(void *priv, bool on)
   return board_modem_reset_pin_set(on);
 }
 
+static void ubmodem_hw_pm_set_activity(void *priv,
+                                       enum ubmodem_hw_pm_activity_e type,
+                                       bool set)
+{
+#ifdef BOARD_HAS_SET_MODEM_ACTIVITY
+  enum e_board_modem_activity btype;
+
+  switch (type)
+    {
+    default:
+    case UBMODEM_PM_ACTIVITY_LOW:
+      btype = BOARD_MODEM_ACTIVITY_LOW;
+      break;
+    case UBMODEM_PM_ACTIVITY_HIGH:
+      btype = BOARD_MODEM_ACTIVITY_HIGH;
+      break;
+    }
+
+  board_set_modem_activity(btype, set);
+#endif
+}
+
 static const struct ubmodem_hw_ops_s modem_hw_ops =
   {
       .initialize = ubmodem_hw_init,
       .deinitialize = ubmodem_hw_deinit,
       .vcc_set = ubmodem_hw_vcc_set,
       .reset_pin_set = ubmodem_hw_reset_pin_set,
-      .poweron_pin_set = ubmodem_hw_poweron_pin_set
+      .poweron_pin_set = ubmodem_hw_poweron_pin_set,
+      .pm_set_activity = ubmodem_hw_pm_set_activity
   };
 
 /****************************************************************************
@@ -637,44 +1101,36 @@ int __conman_ubmodem_initialize(struct conman_s *conman, int *maxfds)
       conman);
 
   ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_IP_ADDRESS, event_ip_address, conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_FAILED_LEVEL_TRANSITION, event_failed_target_level,
-      conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_TARGET_LEVEL_REACHED, event_target_level, conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
+#ifdef CONFIG_SYSTEM_CONMAN_DEBUG
+      UBMODEM_EVENT_FLAG_NEW_LEVEL |
+      UBMODEM_EVENT_FLAG_TRACE_USRSOCK |
+      UBMODEM_EVENT_FLAG_TRACE_CMD_TO_MODEM |
+      UBMODEM_EVENT_FLAG_TRACE_RESP_FROM_MODEM |
+      UBMODEM_EVENT_FLAG_TRACE_STATE_CHANGE |
+#ifdef CONFIG_SYSTEM_CONMAN_VERBOSE
+      UBMODEM_EVENT_FLAG_TRACE_DATA_TO_MODEM |
+      UBMODEM_EVENT_FLAG_TRACE_DATA_FROM_MODEM |
+#endif
+#endif
+      UBMODEM_EVENT_FLAG_IP_ADDRESS |
+      UBMODEM_EVENT_FLAG_FAILED_LEVEL_TRANSITION |
+      UBMODEM_EVENT_FLAG_TARGET_LEVEL_REACHED |
+#ifdef CONFIG_UBMODEM_VOICE
       UBMODEM_EVENT_FLAG_CALL_RINGING |
       UBMODEM_EVENT_FLAG_CALL_ACTIVE |
-      UBMODEM_EVENT_FLAG_CALL_DISCONNECTED, event_call_status_change, conman);
-
-#ifdef CONFIG_SYSTEM_CONMAN_DEBUG
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_NEW_LEVEL, event_new_level, conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_TRACE_USRSOCK, event_trace_usrsock, conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_TRACE_CMD_TO_MODEM, event_cmd_to_modem, conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_TRACE_RESP_FROM_MODEM, event_resp_from_modem, conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_TRACE_STATE_CHANGE, event_state_change, conman);
-
-#ifdef CONFIG_SYSTEM_CONMAN_VERBOSE
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_TRACE_DATA_TO_MODEM, event_data_to_modem, conman);
-
-  ubmodem_register_event_listener(conman->ub.modem,
-      UBMODEM_EVENT_FLAG_TRACE_DATA_FROM_MODEM, event_data_from_modem, conman);
+      UBMODEM_EVENT_FLAG_CALL_DISCONNECTED |
 #endif
+      UBMODEM_EVENT_FLAG_ERROR |
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+      UBMODEM_EVENT_FLAG_FTP_DOWNLOAD_STATUS |
 #endif
+#ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
+      UBMODEM_EVENT_FLAG_CELL_LOCATION |
+#endif
+#ifndef CONFIG_UBMODEM_DISABLE_CELL_ENVIRONMENT
+      UBMODEM_EVENT_FLAG_CELL_ENVIRONMENT |
+#endif
+      0, ubmodem_event_cb, conman);
 
   ubmodem_request_level(conman->ub.modem, UBMODEM_LEVEL_POWERED_OFF);
 
@@ -884,8 +1340,11 @@ int __conman_ubmodem_get_status_connection(struct conman_s *conman,
 
   if (status->status == CONMAN_STATUS_ESTABLISHED)
     {
-      if (conman->ub.imei_requested || conman->ub.imsi_requested || conman->ub.udopn_requested)
-        status->status = CONMAN_STATUS_ESTABLISHING;
+      if (conman->ub.imei_requested || conman->ub.imsi_requested ||
+          conman->ub.udopn_requested || conman->ub.mcc_mnc_requested)
+        {
+          status->status = CONMAN_STATUS_ESTABLISHING;
+        }
 
       if (conman->ub.target_level == UBMODEM_LEVEL_GPRS)
         {
@@ -897,6 +1356,7 @@ int __conman_ubmodem_get_status_connection(struct conman_s *conman,
           snprintf(status->info.cellu.imei, sizeof(status->info.cellu.imei), "%s", conman->ub.imei);
           snprintf(status->info.cellu.imsi, sizeof(status->info.cellu.imsi), "%s", conman->ub.imsi);
           snprintf(status->info.cellu.oper_name, sizeof(status->info.cellu.oper_name), "%s", conman->ub.udopn);
+          snprintf(status->info.cellu.mcc_mnc, sizeof(status->info.cellu.mcc_mnc), "%s", conman->ub.mcc_mnc);
         }
 
       __conman_send_resp(conman, CONMAN_MSG_GET_CONNECTION_STATUS,
@@ -946,6 +1406,7 @@ bool __conman_ubmodem_is_destroying(struct conman_s *conman)
 int __conman_ubmodem_send_sms(struct conman_s *conman,
                               struct conman_msg_send_sms_s *sms)
 {
+#ifdef CONFIG_UBMODEM_SMS_ENABLED
   const char *receiver = &sms->sms_data[0];
   const char *message = &sms->sms_data[sms->receiver_len];
   struct sms_queue_entry_s *item;
@@ -1038,7 +1499,118 @@ int __conman_ubmodem_send_sms(struct conman_s *conman,
     }
 
   return OK;
+#else
+  free(sms);
+  errno = -ENOSYS;
+  return ERROR;
+#endif
 }
+
+/****************************************************************************
+ * Name: __conman_ubmodem_request_cell_environment
+ *
+ * Description:
+ *   Request for cell environment (serving & neighbor cell-ids, signal levels,
+ *   etc).
+ *
+ * Input Parameters:
+ *   conman  : connection manager handle
+ *
+ * Returned Value:
+ *   OK if successfully queued for sending.
+ *   Negated error code if case of error.
+ ****************************************************************************/
+
+int __conman_ubmodem_request_cell_environment(struct conman_s *conman)
+{
+#ifndef CONFIG_UBMODEM_DISABLE_CELL_ENVIRONMENT
+  if (conman->ub.status != CONMAN_STATUS_ESTABLISHED &&
+      conman->ub.status != CONMAN_STATUS_ESTABLISHING)
+    {
+      return ERROR;
+    }
+
+  return ubmodem_request_cell_environment(conman->ub.modem);
+#else
+  return ERROR;
+#endif
+}
+
+/****************************************************************************
+ * Name: __conman_ubmodem_filesystem_delete
+ *
+ * Description:
+ *  Delete file in modem filesystem
+ *
+ * Input Parameters:
+ *   conman  : connection manager handle
+ *   filename: Name of file to delete
+ *
+ * Returned Value:
+ *   OK if successfully queued for sending.
+ *   Negated error code if case of error.
+ ****************************************************************************/
+
+int __conman_ubmodem_filesystem_delete(struct conman_s *conman,
+                                       const char *filename)
+{
+#ifndef CONFIG_UBMODEM_DISABLE_FILESYSTEM
+  return ubmodem_filesystem_delete(conman->ub.modem, filename);
+#else
+  return ERROR;
+#endif
+}
+
+/****************************************************************************
+ * Name: __conman_ubmodem_ftp_download
+ *
+ * Description:
+ *  Retrieve a file from FTP server
+ *
+ * Input Parameters:
+ *   conman  : connection manager handle
+ *   ftp     : parameters configuration for the FTP server connection
+ *
+ * Returned Value:
+ *   OK if successfully queued for sending.
+ *   Negated error code if case of error.
+ ****************************************************************************/
+
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+int __conman_ubmodem_ftp_download(struct conman_s *conman,
+                                  struct conman_msg_ftp_download_s *ftp)
+{
+  struct ubmodem_ftp_download_s ubftp = {};
+  const char *hostname = &ftp->msg_data[0];
+  const char *username = &hostname[ftp->hostname_len];
+  const char *password = &username[ftp->username_len];
+  const char *filepath_src = &password[ftp->password_len];
+  const char *filepath_dst = &filepath_src[ftp->filepath_src_len];
+
+  /* Confirm that buffers contain null-terminated strings, without extra nulls
+   * inside.
+   */
+  DEBUGASSERT(strnlen(hostname, ftp->hostname_len) == ftp->hostname_len - 1);
+  DEBUGASSERT(strnlen(username, ftp->username_len) == ftp->username_len - 1);
+  DEBUGASSERT(strnlen(password, ftp->password_len) == ftp->password_len - 1);
+  DEBUGASSERT(strnlen(filepath_src, ftp->filepath_src_len) == ftp->filepath_src_len - 1);
+  DEBUGASSERT(strnlen(filepath_dst, ftp->filepath_dst_len) == ftp->filepath_dst_len - 1);
+
+  ubftp.hostname = hostname;
+  ubftp.username = username;
+  ubftp.password = password;
+  ubftp.filepath_src = filepath_src;
+  ubftp.filepath_dst = filepath_dst;
+
+  return ubmodem_ftp_download_file(conman->ub.modem, &ubftp, NULL);
+}
+#else
+int __conman_ubmodem_ftp_download(struct conman_s *conman,
+                                  struct conman_msg_ftp_download_s *ftp)
+{
+  return ERROR;
+}
+#endif /* CONFIG_UBMODEM_FTP_ENABLED */
 
 /****************************************************************************
  * Name: __conman_ubmodem_call_answer
@@ -1127,6 +1699,80 @@ int __conman_ubmodem_call_audioctl(struct conman_s *conman,
 #ifdef CONFIG_UBMODEM_VOICE
   ubmodem_audio_setup(conman->ub.modem, ctl->audio_out_on, false);
   return OK;
+#else
+  return ERROR;
+#endif
+}
+
+/****************************************************************************
+ * Name: __conman_ubmodem_start_celllocate
+ *
+ * Description:
+ *   Initiate u-blox modem based CellLocate®
+ *
+ * Input Parameters:
+ *   conman  : connection manager handle
+ *   ctl     : CellLocate controls
+ *
+ * Returned Value:
+ *   OK if successfully queued for sending.
+ *   Negated error code if case of error.
+ ****************************************************************************/
+
+int __conman_ubmodem_start_celllocate(struct conman_s *conman,
+                                const struct conman_msg_start_celllocate_s *ctl)
+{
+#ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
+  if (conman->ub.status != CONMAN_STATUS_ESTABLISHED)
+    {
+      return ERROR;
+    }
+  if (conman->ub.target_level < UBMODEM_LEVEL_GPRS)
+    {
+      conman_dbg("ERROR: CellLocate needs GRPS connection.\n");
+      return ERROR;
+    }
+
+  return ubmodem_start_cell_locate(conman->ub.modem, ctl->timeout,
+                                   ctl->target_accuracy);
+#else
+  return ERROR;
+#endif
+}
+
+/****************************************************************************
+ * Name: __conman_ubmodem_aid_celllocate
+ *
+ * Description:
+ *   Give modem current location for aiding u-blox CellLocate®
+ *
+ * Input Parameters:
+ *   conman  : connection manager handle
+ *   ctl     : CellLocate aid controls
+ *
+ * Returned Value:
+ *   OK if successfully queued for sending.
+ *   Negated error code if case of error.
+ ****************************************************************************/
+
+int __conman_ubmodem_aid_celllocate(struct conman_s *conman,
+                                 const struct conman_msg_aid_celllocate_s *ctl)
+{
+#ifndef CONFIG_UBMODEM_DISABLE_AID_CELLLOCATE
+  if (conman->ub.status == CONMAN_STATUS_OFF)
+    {
+      return ERROR;
+    }
+  if (conman->ub.target_level < UBMODEM_LEVEL_CMD_PROMPT)
+    {
+      conman_dbg("ERROR: CellLocate aiding needs modem power-on.\n");
+      return ERROR;
+    }
+
+  return ubmodem_cell_locate_give_location_aid(conman->ub.modem, ctl->time,
+                                               ctl->latitude, ctl->longitude,
+                                               ctl->altitude, ctl->accuracy,
+                                               ctl->speed, ctl->direction);
 #else
   return ERROR;
 #endif

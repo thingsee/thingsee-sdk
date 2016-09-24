@@ -1,0 +1,302 @@
+# Save device flash space and save yourself from `#ifdef` madness
+
+I needed to plant some functions inside the firmware, which I could call in a
+GDB session, but the firmware itself would have no use in them. This is where I
+begun learning the peculiarities of GCC. I had strongly believed that its linker
+is sophisticated enough to always strip symbols, which are nowhere referenced. I
+was wrong..
+
+## Observed behavior
+
+By default, the linking starts resolving undefined references as they are accessed
+from "seed" symbols. The linker goes through its set of archives (.a) and object
+files to find where the required member is stored. Complete object file is selected
+for linking. Each object file with useful data inside the archive is extracted
+and selected.
+
+Once it is done, the linker has a complete set of object files to produce an image.
+This is the point where usual flags begin to take effect on the output.
+
+Without any additional flags the linker will simply slap object files together,
+reallocate sections according to the linker script, place veneers and resolve
+references. This means everything included to an object file is included to the
+firmware.
+
+Inevitably, this leads to uneconomical use of the precious memory. The trendy way
+to fight the inflation of the firmware size is to add a configuration flag for
+every imaginable feature and have the preprocessor throw away useless parts even
+before the compiler tries to chew on it.
+
+## What is the problem
+
+We have learned that `#ifdef` all over the place does not help with understanding
+the code. Some of them can not be avoided, where they bring real variation of the
+behavior (i.e. the program will respond, but in a different way). Excluding the
+code altogether through conditional compilation makes the configuration fragile
+and its management tedious.
+
+## How to improve it
+
+GCC linker can throw away whole sections, but not the specific symbol from a
+section. Lets say executable code goes to the `.text` section and global writable
+data to the `.data` section (yes, the `.bss` is there too).
+
+The trick is to put every addressable member into own data or text section. This
+is done at the compilation step. The following GCC flags enable it:
+
+* `-fdata-sections`
+* `-ffunction-sections`
+
+If we translate the simplest source file `main.c` with a single `main` function,
+then `readelf -W --sections main.o` would report that we have in it:
+
+* `.text`
+* `.text.main`
+
+Repeating the same without these compiler flags shows only one `.text` section.
+
+Object files are prepared, so we can tell the linker to remove unused ones by
+the flag:
+
+* `--gc-sections`
+
+Sections, where unused members belong, will be stripped. Now, when we implement
+an optional feature, we can just leave it in the source tree. It will be compiled
+every time, so we would know, when it needs updating due to API changes. Other
+features may depend on it. Once the dependant code is activated (and it need not
+be specified how), the dependency will be activated as well.
+
+## Demo
+
+Let us look at a very simple demonstration project to illustrate the difference
+it makes to create dedicated sections per member.
+
+The project is driven by the `Makefile`:
+
+``` Makefile
+### Default build - complete object files are slapped together
+default : api-default.o main-default.o
+gcc -lc -o $@ $^
+
+api-default.o : api.c
+gcc -c -o $@ $^
+
+main-default.o : main.c
+gcc -c -o $@ $^
+
+### Sophisticated build - every data and function member is placed
+### in its own section at the compile time. Unused sections are
+### thrown away at the linking time.
+stripped : api-stripped.o main-stripped.o
+gcc -Wl,--gc-sections -lc -o $@ $^
+
+api-stripped.o : api.c
+gcc -c -fdata-sections -ffunction-sections -o $@ $^
+
+main-stripped.o : main.c
+gcc -c -fdata-sections -ffunction-sections -o $@ $^
+```
+
+The `main` function from `main.c` uses the API:
+
+``` C
+#include "api.h"
+#include <stdio.h>
+
+int main()
+{
+  printf("Hello!\n");
+  api_function();
+  return 0;
+}
+```
+
+The API is declared in the `api.h` header:
+
+``` C
+#ifndef API_H__
+#define API_H__
+
+extern void api_function(void);
+
+#endif /* API_H__ */
+```
+
+And implemented by the `api.c`:
+
+``` C
+#include "api.h"
+
+void api_function(void)
+{
+}
+
+void useless_function(void)
+{
+}
+```
+
+The important bit in the last file is the `useless_function` member. We will now
+show how it is treated by linker, when different settings are in place.
+
+First, the default behavior:
+
+``` shell
+$ make default
+$ readelf -W -s default | grep '_function'
+48: 00000000004005a8     6 FUNC    GLOBAL DEFAULT   13 useless_function
+63: 00000000004005a2     6 FUNC    GLOBAL DEFAULT   13 api_function
+```
+
+The `useless_function` has been linked into the executable and takes space.
+
+Linking objects with dedicated sections allows it to be removed:
+
+``` shell
+$ make stripped
+$ readelf -W -s stripped | grep '_function'
+57: 00000000004005a2     6 FUNC    GLOBAL DEFAULT   13 api_function
+```
+
+Only "useful" `api_function` is included and executable sizes show the difference
+too:
+
+``` shell
+$ du -b default stripped
+8618	default
+8317	stripped
+```
+
+## More useful example: Thingsee prod_test-b1.5 configuration
+
+For demonstration it was built with default flags (results under `prod_test/no-gc-sections`)
+and then with sections garbage collector (results under `prod_test/gc-sections`).
+
+> To enable garbage collector we add `-fdata-sections -ffunction-sections` to
+> `ARCHOPTIMIZATION` and `--gc-sections` to `LDFLAGS` in the product's top
+> `Make.defs` file. At the same time the linker script had to be modified to keep
+> the `.vectors` section: `KEEP(*(.vectors))`
+
+The results are as follows:
+
+``` shell
+$ du -b prod_test/no-gc-sections/nuttx.bin prod_test/gc-sections/nuttx.bin
+344505	prod_test/no-gc-sections/nuttx.bin
+332005	prod_test/gc-sections/nuttx.bin
+
+$ wc -l prod_test/no-gc-sections/System.map prod_test/gc-sections/System.map
+2880 prod_test/no-gc-sections/System.map
+2695 prod_test/gc-sections/System.map
+```
+
+Garbage collector saves `12500` bytes for production test firmware. Retail
+configuration has been measured the same way and the total savings yielded `2463`
+bytes and `55` symbols.
+
+## Introducing "unused" functions
+
+As it was mentioned in the beginning of this document, the ultimate goal of studying
+linker's intricacies was to find a **reliable** way to keep unused functions
+for debugging and testing purposes.
+
+With default linker flags it is easy to include unused symbols, if and only if
+at least one other symbol in the same translation unit is referenced by another
+translation unit, which is linked. Okay, pretty obscure, isn't it? While it is
+technically simple to achieve, the way is feeble and unreliable.
+
+The proposed concept of the "unused" function on its surface is similar to a
+well understood notion of "unused variable". The variable is declared unused to
+acknowledge the coding time decision. We arrange for unused variables to tell
+the compiler of our intentions. The compiler would warn us otherwise of possibly
+unwanted space/time expenditure. Unused functions are handled by the linker. When
+instructed to prevent superfluous costs, it directly discards all of them. "Unused"
+functions dodge the reduction. Designating an "unused" function means agreeing to
+extra space allocation for a design time reason.
+
+The "unused" function is certainly used somewhere. A slightly controversial term
+was introduced on purpose to avoid adding to the cognitive load.
+
+## Technical details of implementing "unused" functions
+
+With `-ffunction-sections` compiler flag every function will be stored to its own
+section. The name of the section is built from function's name. Unused functions
+override this practice and all of them go to the `.unusedtext` section. A new
+macro is defined:
+
+``` C
+# define unused_function __attribute__ ((section(".unusedtext")))
+```
+
+Further, unused function prototype can be declared as follows:
+
+``` C
+void a_function(void) unused_function;
+```
+
+It is easy to instruct the linker to "keep" certain section, while reducing the
+others:
+
+```
+SECTIONS
+{
+  .text : {
+    ...
+    *(.text .text.*)
+    KEEP(*(.text .unusedtext))
+    ...
+    } > flash
+  ...  
+```
+
+Editing linker script is a clean way. When the program does not have its own
+linker script, the same effect attained by declaring "unused" some "surely used"
+function (e.g. image entrypoint). The hack will place all symbols into
+`.unusedtext` section. Linker will not discard it, because one its member is
+referenced.
+
+When our image is linked against archives (static libraries), the process is
+different compared to linking against exact list of object files (see above). If
+a translation unit from a static library defines only "unused" functions, the
+product will expose none of them regardless of linker script modifications. The
+enclosed object file will not be loaded, because no other object file refers to
+them.
+
+The obscurity can be removed by changing linker's default behavior:
+
+> `--whole-archive`
+>
+> For each archive mentioned on the command line after the `--whole-archive` option,
+> include every object file in the archive in the link, rather than searching the
+> archive for the required object files. This is normally used to turn an archive
+> file into a shared library, forcing every object to be included in the resulting
+> shared library.  This option may be used more than once.
+>
+> Two notes when using this option from gcc: First, gcc doesn't know about this
+> option, so you have to use `-Wl,-whole-archive`.  Second, don't forget to use
+> `-Wl,-no-whole-archive` after your list of archives, because gcc will add its
+> own list of archives to your link and you may not want this flag to affect
+> those as well.
+
+When linking final executable, the list of libraries needs to be enclosed inside
+`--whole-archive ... --no-whole-archive` sequence, like so:
+
+```
+... --whole-archive -lm -lc -lsomething --no-whole-archive ...
+```
+
+Note that using these flags without own data and function sections created by the
+compiler actually increases the executable size. So, both approaches need to be
+used in concert.
+
+## Conclusion
+
+The described approach saves on firmware size, adds new feature and makes
+configuration management easier. The changes affect to the linking stage and they
+should impose little to no risk to the runtime functionality: it boots - it
+works.
+
+In summary, the `--gc-sections` discipline is imposed to allow for `--whole-library`
+usage, which in turn enables reliable "unused" functions.
+
+Another possible benefit is the ability to have more relaxed optimizer settings,
+which should improve debugging experience.

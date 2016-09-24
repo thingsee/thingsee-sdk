@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_hw.h
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -104,6 +104,16 @@ static inline uint32_t ubmodem_hw_reset_pin_set(struct ubmodem_s *modem,
     return 0;
 
   return modem->hw.ops->reset_pin_set(modem->hw.priv, set);
+}
+
+static inline void ubmodem_pm_set_activity(struct ubmodem_s *modem,
+                                           enum ubmodem_hw_pm_activity_e type,
+                                           bool set)
+{
+  if (!modem->hw.ops || !modem->hw.ops->pm_set_activity)
+    return;
+
+  modem->hw.ops->pm_set_activity(modem->hw.priv, type, set);
 }
 
 #endif /* __SYSTEM_UBMODEM_UBMODEM_HW_H_ */

@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# This script is a proxy to the real clang called for the code analysis.
+# We need to inspect the provided arguments and selectively pass them through.
+
+drop_arguments() {
+    for ARG in "$@"
+    do
+        [[ "$ARG" == "-march=armv7-m" ]] && continue
+        [[ "$ARG" == -fdiagnostics-color=* ]] && continue
+        echo "$ARG"
+    done
+}
+
+if [ -z "$REAL_CLANG" ]
+then
+    echo "Can not locate clang. Please assign REAL_CLANG environment variable" 1>&2
+    exit 1
+fi
+
+$REAL_CLANG $(drop_arguments "$@") -Wno-unknown-warning-option

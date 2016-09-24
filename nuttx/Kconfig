@@ -768,6 +768,13 @@ config DEBUG_FULLOPT
 
 endchoice # Optimization Level
 
+config BUILD_LTO
+	bool "Build NuttX with Link Time Optimization (LTO)"
+	default n
+	---help---
+		Link Time Optimization allows the compiler to optimize the complete
+		program instead of just each file.
+
 config DEBUG_OPTLEVEL
 	string "Custom Optimization Level"
 	default "-O2"

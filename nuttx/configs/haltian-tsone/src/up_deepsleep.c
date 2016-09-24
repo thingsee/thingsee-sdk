@@ -56,6 +56,7 @@
 #include "stm32_uart.h"
 #include "stm32_rtc.h"
 #include "haltian-tsone.h"
+#include "up_modem.h"
 #include "up_gpio.h"
 
 /************************************************************************************
@@ -64,6 +65,14 @@
 
 //#define DEEPSLEEP_WAKETIME_DEBUG
 //#define DEEPSLEEP_SLEEPTIME_DEBUG
+
+#define DEEP_SLEEP_MIN_MSECS 100
+
+#ifndef BOARD_DEEPSLEEP_SKIP_DEBUG
+#  define dss_lldbg(...) ((void)0)
+#else
+#  define dss_lldbg(...) lldbg(__VA_ARGS__)
+#endif
 
 /************************************************************************************
  * Private Functions
@@ -74,25 +83,22 @@
  ************************************************************************************/
 
 /************************************************************************************
-* Name: board_deepsleep_with_stopmode
+* Name: board_deepsleep_with_stopmode_msecs
 *
 * Description:
-*   Drive MCU to STOP mode for 'secs'. Wake-up is performed either by RTC
+*   Drive MCU to STOP mode for 'msecs'. Wake-up is performed either by RTC
 *   or by external interrupt on EXTI line.
 *
 ************************************************************************************/
 
 #ifndef CONFIG_BOARD_DISABLE_DEEPSLEEP
 
-void board_deepsleep_with_stopmode(uint32_t secs)
+void board_deepsleep_with_stopmode_msecs(uint32_t msecs)
 {
 #if defined(CONFIG_RTC) && defined(CONFIG_RTC_DATETIME)
-  struct tm t;
-  struct timespec ts;
-  struct timespec rtc_start_ts;
-  struct timespec rtc_end_ts;
-  uint32_t bk1r, bk2r;
+  struct timespec diff_ts;
 #endif
+  uint32_t millisecs;
 #ifdef CONFIG_BOARD_DEEPSLEEP_RECONFIGURE_GPIOS
   uint32_t gpio_off_mask;
   bool sdcard_enabled;
@@ -111,13 +117,40 @@ void board_deepsleep_with_stopmode(uint32_t secs)
 
   sched_lock();
 
+  /* Check if modem is in such state that in can allow deep-sleep. 'msecs'
+   * might be adjusted for quicker wake-up from deep-sleep in some activity
+   * modes. */
+
+  if (!up_modem_deep_sleep_readiness(&msecs))
+    {
+      dss_lldbg("INFO: Modem active, skipping deep-sleep!\n");
+
+      goto skip_deepsleep;
+    }
+
+  millisecs = msecs;
+
 #ifdef DEEPSLEEP_SLEEPTIME_DEBUG
-  lldbg("sleep for %d\n", secs);
+  lldbg("sleep for %d msec\n", millisecs);
 #endif
+
+  if (millisecs != 0 && millisecs < DEEP_SLEEP_MIN_MSECS)
+    {
+      dss_lldbg("INFO: too short deep-sleep: %d msec!\n", millisecs);
+
+      goto skip_deepsleep;
+    }
 
 #ifdef CONFIG_BOARD_DEEPSLEEP_RECONFIGURE_GPIOS
 
   /* Special support for SDcard. */
+
+  if (mmcsd_slot_pm_allowed(CONFIG_BOARD_MMCSDSLOTNO) == false)
+    {
+      dss_lldbg("INFO: SDcard active while trying deep-sleep!\n");
+
+      goto skip_deepsleep;
+    }
 
   if (stm32_gpioread(GPIO_CHIP_SELECT_SDCARD) == false)
     {
@@ -138,13 +171,6 @@ void board_deepsleep_with_stopmode(uint32_t secs)
       goto skip_deepsleep;
     }
 
-  if (stm32_gpioread(GPIO_PWR_SWITCH_MODEM))
-    {
-      lldbg("ERROR! Trying to deep-sleep when Modem active!\n");
-
-      goto skip_deepsleep;
-    }
-
   if (stm32_gpioread(GPIO_REGULATOR_GPS))
     {
       lldbg("ERROR! Trying to deep-sleep when GPS active!\n");
@@ -152,37 +178,25 @@ void board_deepsleep_with_stopmode(uint32_t secs)
       goto skip_deepsleep;
     }
 
+#ifdef CONFIG_BLUETOOTH
   if (stm32_gpioread(GPIO_REGULATOR_BLUETOOTH))
     {
       lldbg("ERROR! Trying to deep-sleep when Bluetooth active!\n");
 
       goto skip_deepsleep;
     }
+#endif
 
+#ifdef CONFIG_LCD_SSD1306
   if (stm32_gpioread(GPIO_REGULATOR_DISPLAY))
     {
       lldbg("ERROR! Trying to deep-sleep when Display active!\n");
 
       goto skip_deepsleep;
     }
-#endif /* CONFIG_BOARD_DEEPSLEEP_RECONFIGURE_GPIOS */
-
-#if defined(CONFIG_RTC) && defined(CONFIG_RTC_DATETIME)
-  /* Get RTC clock before STOP. */
-
-  stm32_rtc_getdatetime_with_subseconds(&t, &rtc_start_ts.tv_nsec);
-  rtc_start_ts.tv_sec = mktime(&t);
-
-  /* Get current time. */
-
-  ret = clock_gettime(CLOCK_REALTIME, &ts);
-  DEBUGASSERT(ret != ERROR);
-
-  /* Add nanoseconds to entropy pool. */
-
-  add_time_randomness(ts.tv_nsec);
-
 #endif
+
+#endif /* CONFIG_BOARD_DEEPSLEEP_RECONFIGURE_GPIOS */
 
 #ifdef DEEPSLEEP_WAKETIME_DEBUG
   if (wake_ts.tv_nsec || wake_ts.tv_sec)
@@ -204,11 +218,11 @@ void board_deepsleep_with_stopmode(uint32_t secs)
 #endif
 
 #ifdef CONFIG_RTC_PERIODIC_AUTORELOAD_WAKEUP
-  if (secs > 0)
+  if (millisecs > 0)
     {
       /* Prepare RTC for wake-up. */
 
-      ret = up_rtc_setperiodicwakeup(secs, NULL);
+      ret = up_rtc_setperiodicwakeup(millisecs, NULL);
       DEBUGASSERT(ret == OK);
     }
 #else
@@ -219,6 +233,10 @@ void board_deepsleep_with_stopmode(uint32_t secs)
    * completed. */
 
   stm32_serial_set_suspend(true);
+
+  /* Setup modem GPIOs for deep-sleep. */
+
+  up_modem_gpio_suspend(true);
 
 #ifdef CONFIG_BOARD_DEEPSLEEP_RECONFIGURE_GPIOS
 
@@ -253,6 +271,10 @@ void board_deepsleep_with_stopmode(uint32_t secs)
 #endif
 
 #if defined(CONFIG_USBDEV) && defined (CONFIG_STM32_USB)
+  /* Uninitialize USB stack, free up resources */
+
+  up_usbuninitialize();
+
   /* Reset USB peripheral */
 
   regval = getreg32(STM32_RCC_APB1RSTR);
@@ -288,7 +310,7 @@ void board_deepsleep_with_stopmode(uint32_t secs)
 #endif
 
 #ifdef CONFIG_RTC_PERIODIC_AUTORELOAD_WAKEUP
-  if (secs > 0)
+  if (millisecs > 0)
     {
       /* Prevent more wake-ups. */
 
@@ -297,66 +319,25 @@ void board_deepsleep_with_stopmode(uint32_t secs)
 #endif
 
 #if defined(CONFIG_RTC) && defined(CONFIG_RTC_DATETIME)
-  /* Get RTC clock after STOP. */
+  /* Synchronize systime clock with RTC after STOP.
+   *
+   * During STOP, RTC advanced normally and system clock was paused.
+   */
 
-  stm32_rtc_getdatetime_with_subseconds(&t, &rtc_end_ts.tv_nsec);
-  rtc_end_ts.tv_sec = mktime(&t);
+  clock_resynchronize(&diff_ts);
 
-  /* Advance time by RTC. */
+  /* Add nanoseconds to entropy pool. */
 
-  ts.tv_sec += rtc_end_ts.tv_sec - rtc_start_ts.tv_sec;
-  ts.tv_nsec += rtc_end_ts.tv_nsec - rtc_start_ts.tv_nsec;
-  if (ts.tv_nsec < 0)
-    {
-      ts.tv_nsec += 1000 * 1000 * 1000;
-      ts.tv_sec--;
-    }
-  if (ts.tv_nsec >= 1000 * 1000 * 1000)
-    {
-      ts.tv_nsec -= 1000 * 1000 * 1000;
-      ts.tv_sec++;
-    }
-
-  /* Set current time / date. clock_settime will alter the state of backup
-   * registers which contain the last time system clock was set. We do not
-   * want this routine to alter those register, thus we backup and restore
-   * those registers before/after. */
-
-  bk1r = getreg32(STM32_RTC_BK1R);
-  bk2r = getreg32(STM32_RTC_BK2R);
-
-  ret = clock_settime(CLOCK_REALTIME, &ts);
-  DEBUGASSERT(ret != ERROR);
-
-  stm32_pwr_enablebkp(true);
-  putreg32(bk1r, STM32_RTC_BK1R);
-  putreg32(bk2r, STM32_RTC_BK2R);
-  stm32_pwr_enablebkp(false);
-
-#ifdef DEEPSLEEP_WAKETIME_DEBUG
-  wake_ts = ts;
-#endif
+  add_time_randomness(diff_ts.tv_nsec);
 
 #if defined(CONFIG_CLOCK_MONOTONIC) && defined(CONFIG_CLOCK_MONOTONIC_OFFSET_TIME)
+  /* Adjust CLOCK_MONOTONIC offset by amount of time adjusted by RTC. */
 
-  /* Get amount of time adjusted by RTC. */
+  clock_increase_monotonic_offset(&diff_ts);
+#endif
 
-  ts.tv_sec = rtc_end_ts.tv_sec - rtc_start_ts.tv_sec;
-  ts.tv_nsec = rtc_end_ts.tv_nsec - rtc_start_ts.tv_nsec;
-  if (ts.tv_nsec < 0)
-    {
-      ts.tv_nsec += 1000 * 1000 * 1000;
-      ts.tv_sec--;
-    }
-  if (ts.tv_nsec >= 1000 * 1000 * 1000)
-    {
-      ts.tv_nsec -= 1000 * 1000 * 1000;
-      ts.tv_sec++;
-    }
-
-  /* Adjust CLOCK_MONOTONIC offset. */
-
-  clock_increase_monotonic_offset(&ts);
+#ifdef DEEPSLEEP_WAKETIME_DEBUG
+  (void)clock_gettime(CLOCK_REALTIME, &wake_ts);
 #endif
 
 #endif
@@ -382,6 +363,10 @@ void board_deepsleep_with_stopmode(uint32_t secs)
 
 #endif
 
+  /* Setup modem GPIOs for active mode. */
+
+  up_modem_gpio_suspend(false);
+
   /* Resume serial ports after setting up system clock, as USART baud rate is
    * configured relative to system clock. */
 
@@ -398,7 +383,7 @@ void board_deepsleep_with_stopmode(uint32_t secs)
   /* Restore SDcard GPIOs */
 
   stm32_configgpio(GPIO_SPI3_MOSI);
-  stm32_configgpio(GPIO_SPI3_MISO);
+  stm32_configgpio(GPIO_SPI3_MISO | GPIO_PULLUP);
   stm32_configgpio(GPIO_SPI3_SCK);
   stm32_configgpio(GPIO_CHIP_SELECT_SDCARD);
 
@@ -416,9 +401,9 @@ void board_deepsleep_with_stopmode(uint32_t secs)
 
       mmcsd_slot_pm_resume(CONFIG_BOARD_MMCSDSLOTNO);
     }
+#endif
 
 skip_deepsleep:
-#endif
 
   /* Allow scheduler to switch tasks. */
 
@@ -429,31 +414,26 @@ skip_deepsleep:
     {
       /* Get amount of time adjusted by RTC. */
 
-      ts.tv_sec = rtc_end_ts.tv_sec - rtc_start_ts.tv_sec;
-      ts.tv_nsec = rtc_end_ts.tv_nsec - rtc_start_ts.tv_nsec;
-      if (ts.tv_nsec < 0)
-        {
-          ts.tv_nsec += 1000 * 1000 * 1000;
-          ts.tv_sec--;
-        }
-      if (ts.tv_nsec >= 1000 * 1000 * 1000)
-        {
-          ts.tv_nsec -= 1000 * 1000 * 1000;
-          ts.tv_sec++;
-        }
-
-      lldbg("slept for %u.%03u\n", ts.tv_sec, ts.tv_nsec / (1000 * 1000));
+      lldbg("slept for %u.%03u\n", diff_ts.tv_sec, diff_ts.tv_nsec / (1000 * 1000));
     }
 #endif
 }
 
 #else /* !CONFIG_BOARD_DISABLE_DEEPSLEEP */
 
-void board_deepsleep_with_stopmode(uint32_t secs)
+void board_deepsleep_with_stopmode_msecs(uint32_t msecs)
 {
   /* Do nothing, as if woken up by interrupt before sleep. */
 
-  (void)secs;
+  (void)msecs;
 }
 
 #endif /* CONFIG_BOARD_DISABLE_DEEPSLEEP */
+
+void board_deepsleep_with_stopmode(uint32_t secs)
+{
+  if (secs > UINT32_MAX / 1000)
+    secs = UINT32_MAX / 1000;
+
+  board_deepsleep_with_stopmode_msecs(secs * 1000);
+}

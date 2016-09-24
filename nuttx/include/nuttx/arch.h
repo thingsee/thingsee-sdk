@@ -1859,6 +1859,29 @@ int up_rtc_getdatetime(FAR struct tm *tp);
 #endif
 
 /************************************************************************************
+ * Name: up_rtc_getdatetime_with_subseconds
+ *
+ * Description:
+ *   Get the current date and time from the date/time RTC.  This interface
+ *   is only supported by the date/time RTC hardware implementation.
+ *   It is used to replace the system timer.  It is only used by the RTOS during
+ *   initialization to set up the system time when CONFIG_RTC and CONFIG_RTC_DATETIME
+ *   are selected (and CONFIG_RTC_HIRES is not).
+ *
+ * Input Parameters:
+ *   tp - The location to return the high resolution time value.
+ *   nsec - The location to return the subsecond time value.
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno on failure
+ *
+ ************************************************************************************/
+
+#if defined(CONFIG_RTC) && defined(CONFIG_RTC_DATETIME)
+int up_rtc_getdatetime_with_subseconds(FAR struct tm *tp, FAR long *nsec);
+#endif
+
+/************************************************************************************
  * Name: up_rtc_settime
  *
  * Description:
@@ -1884,8 +1907,8 @@ int up_rtc_settime(FAR const struct timespec *tp);
  *    Sets RTC periodic autoreload wakeup
  *
  * Input Parameters:
- *   secs     - Time to sleep in seconds before wakeup and auto-reloading.
- *   callback - the function to call when the alarm expires.
+ *   millisecs - Time to sleep in seconds before wakeup and auto-reloading.
+ *   callback  - the function to call when the alarm expires.
  *
  * Returned Value:
  *   Zero (OK) on success; A negated errno value on failure.
@@ -1893,7 +1916,7 @@ int up_rtc_settime(FAR const struct timespec *tp);
  ************************************************************************************/
 
 #ifdef CONFIG_RTC_PERIODIC_AUTORELOAD_WAKEUP
-EXTERN int up_rtc_setperiodicwakeup(unsigned int secs, wakeupcb_t callback);
+EXTERN int up_rtc_setperiodicwakeup(unsigned int millisecs, wakeupcb_t callback);
 #endif
 
 /************************************************************************************

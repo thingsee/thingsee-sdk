@@ -1,0 +1,12 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config EXAMPLES_STEPPER
+	bool "Stepper motor example"
+	default n
+	depends on NSH_BUILTIN_APPS
+	depends on STEPPER
+	---help---
+		Enable the stepper motor example

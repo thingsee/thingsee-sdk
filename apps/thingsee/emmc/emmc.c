@@ -330,7 +330,7 @@ static FAR void *emmc_msconn_init(void)
   ret = usbmsc_configure(1, &handle);
   if (ret < 0)
     {
-      emmc_dbg("mcsonn_main: usbmsc_configure failed: %d\n", -ret);
+      emmc_dbg("usbmsc_configure failed: %d\n", -ret);
       usbmsc_uninitialize(handle);
       return NULL;
     }
@@ -350,7 +350,7 @@ static FAR void *emmc_msconn_init(void)
   ret = usbmsc_exportluns(handle);
   if (ret < 0)
     {
-      emmc_dbg("mcsonn_main: usbmsc_exportluns failed: %d\n", -ret);
+      emmc_dbg("usbmsc_exportluns failed: %d\n", -ret);
       usbmsc_uninitialize(handle);
       return NULL;
     }
@@ -367,7 +367,6 @@ static bool emmc_usbmsc_deepsleep_hook(void *const priv)
 
   return false;
 }
-
 
 #endif
 
@@ -484,19 +483,19 @@ void emmc_switch_to_filesystem_mode(void (*system_reset)(void))
 
       usbmsc_uninitialize(g_mschandle);
 
-#if 1
-      /* Restore functionality (mount) through reset. */
+      if (system_reset)
+        {
+          /* Restore functionality (mount) through reset. */
 
-      system_reset();
-#else
+          system_reset();
+        }
+
       /* Restore SDcard. */
 
       emmc_remount();
 
 #ifdef CONFIG_SYSLOG_RUNSTOP_DYNAMIC
       syslog_runstop(1);
-#endif
-
 #endif
     }
 

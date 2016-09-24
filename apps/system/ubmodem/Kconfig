@@ -29,6 +29,21 @@ config UBMODEM_POWERSAVE
 		enabled and the modem module enters idle mode automatically whenever
 		possible.
 
+config UBMODEM_CREG_WAIT_NETWORK_TO_RESTORE
+	bool "Wait GSM network connection to restore, instead of reinitializing"
+	default n
+	---help---
+		When losing network connectivity, wait connection to restore instead
+		of going through reinitialization of modem.
+
+config UBMODEM_DISABLE_GPRS_RESET_AFTER_REPEATED_DNS_FAILURES
+	bool "Do not reset GPRS if DNS server failed to respond repeatedly"
+	default n
+	---help---
+		By default, DNS failures are tracked to detect stuck GPRS connection
+		and reattach GPRS connection. Enable this configuration item to disable
+		this behaviour.
+
 if UBMODEM_POWERSAVE
 
 config UBMODEM_POWERSAVE_GUARD_PERIOD
@@ -42,12 +57,38 @@ config UBMODEM_POWERSAVE_GUARD_PERIOD
 		is used (typically 2000 GMS frames, ~ 9.2 sec). Default: 0.
 endif
 
+config UBMODEM_FAST_DORMANCY_DELAY_TIMER
+	int "Autonomous UMTS Fast Dormancy delay timer duration (seconds)"
+	default 3
+	---help---
+		Activates or deactivates the autonomous Fast Dormancy. If all the
+		constraints are satisfied a Signaling Connection Release Indication
+		(SCRI) is sent to the network after inactivity duration specified here.
+		
+		Setting value to '0' will disable the feature.
+
 config UBMODEM_SMS_ENABLED
 	bool "Enable SMS sending"
 	default n
 	---help---
 		Enables ubmodem library API for sending multi-part USC2 encoded
 		SMS messages.
+
+config UBMODEM_FTP_ENABLED
+	bool "Enable FTP transfers"
+	default n
+	---help---
+		Enables ubmodem library API for transferring files from/to FTP server.
+
+if UBMODEM_FTP_ENABLED
+
+config UBMODEM_FTP_CLIENT_TIMEOUT
+	int "FTP client timeout"
+	default 120
+	---help---
+		Adjust FTP client timeout in seconds.
+
+endif
 
 config UBMODEM_VOICE
 	bool "Enable voice-call / audio interfaces"
@@ -84,6 +125,30 @@ config UBMODEM_AUDIO_OUT_CTRL_GPIO_2_HIGH_OFF
 		Second GPIO audio pin is active when LOW and disabled when HIGH.
 
 endif
+
+config UBMODEM_DISABLE_CELLLOCATE
+	bool "Disable CellLocate functionality"
+	default n
+	---help---
+		Disable CellLocate
+
+config UBMODEM_DISABLE_AID_CELLLOCATE
+	bool "Disable 'external aiding of CellLocate' functionality"
+	default n
+	---help---
+		Disable external aiding of CellLocate
+
+config UBMODEM_DISABLE_CELL_ENVIRONMENT
+	bool "Disable cell-environment query functionality"
+	default n
+	---help---
+		Disable cell-environment querying
+
+config UBMODEM_DISABLE_FILESYSTEM
+	bool "Disable modem filesystem functionality"
+	default n
+	---help---
+		Disable modem filesystem access
 
 config UBMODEM_PARSER_DEBUG
 	bool "Enable AT-parser debugging"

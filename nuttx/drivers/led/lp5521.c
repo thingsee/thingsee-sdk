@@ -41,6 +41,7 @@
 #include <poll.h>
 #include <errno.h>
 #include <debug.h>
+#include <arpa/inet.h> /* HTONS */
 
 #include <nuttx/arch.h>
 #include <nuttx/i2c.h>
@@ -51,6 +52,10 @@
 /****************************************************************************
  * Pre-Processor Definitions
  ****************************************************************************/
+
+#ifndef CONFIG_LP5521_NPOLLWAITERS
+#  define CONFIG_LP5521_NPOLLWAITERS 2
+#endif
 
 #ifdef CONFIG_LED_LP5521_DEBUG
 #  define lp5521_dbg(x, ...)   dbg(x, ##__VA_ARGS__)
@@ -90,6 +95,10 @@
 
 /* Register bits/masks */
 
+#define LP5521_ENABLE_HOLD              0x0
+#define LP5521_ENABLE_STEP              0x1
+#define LP5521_ENABLE_RUN               0x2
+#define LP5521_ENABLE_EXEC_ONE          0x3
 #define LP5521_ENABLE_LOG_EN            (1 << 7)
 #define LP5521_ENABLE_CHIP_EN           (1 << 6)
 #define LP5521_ENABLE_R_EXEC_SHIFT      4
@@ -122,9 +131,42 @@
 #define LP5521_OP_MODE_G_MODE_MASK      (0x3 << LP5521_OP_MODE_G_MODE_SHIFT)
 #define LP5521_OP_MODE_B_MODE_MASK      (0x3 << LP5521_OP_MODE_B_MODE_SHIFT)
 
+#define LP5521_STATUS_EXT_CLK_USED      (1 << 3)
+#define LP5521_STATUS_R_INT             (1 << 2)
+#define LP5521_STATUS_G_INT             (1 << 1)
+#define LP5521_STATUS_B_INT             (1 << 0)
+
 #define LP5521_RESET_MASK               0xFF
 
 /* Completion times for device commands */
+
+/* Program command limits */
+
+#define LP5521_MASTER_CLOCK_HZ                  32768U
+
+#define LP5521_CMD_RAMP_WAIT_PRESCALE0_CLKDIV   16U
+#define LP5521_CMD_RAMP_WAIT_PRESCALE1_CLKDIV   512U
+#define LP5521_CMD_RAMP_WAIT_MIN_STEPTIME       1U
+#define LP5521_CMD_RAMP_WAIT_MAX_STEPTIME       63U
+#define LP5521_CMD_RAMP_WAIT_MIN_NUM_STEPS      1U
+#define LP5521_CMD_RAMP_WAIT_MAX_NUM_STEPS      128U
+#define LP5521_CMD_WAIT_NUM_STEPS               1U
+
+#define LP5521_CMD_BRANCH_MIN_LOOPS             1U
+#define LP5521_CMD_BRANCH_MAX_LOOPS             63U
+#define LP5521_CMD_BRANCH_INFINITE_LOOP         0U
+
+#define LP5521_CMD_RAMP_WAIT_MAX_USECS(prescale, num_steps) \
+  ((uint32_t)((uint64_t)(num_steps) * 1000U * 1000U * (prescale) * \
+      LP5521_CMD_RAMP_WAIT_MAX_STEPTIME / LP5521_MASTER_CLOCK_HZ))
+
+#define LP5521_CMD_RAMP_WAIT_MIN_USECS(prescale) \
+  ((uint32_t)((uint64_t)1000U * 1000U * (prescale) * \
+      LP5521_CMD_RAMP_WAIT_MIN_STEPTIME / LP5521_MASTER_CLOCK_HZ))
+
+#define LP5521_CMD_WAIT_MAX_USECS  \
+    LP5521_CMD_RAMP_WAIT_MAX_USECS(LP5521_CMD_RAMP_WAIT_PRESCALE1_CLKDIV, \
+                                   LP5521_CMD_WAIT_NUM_STEPS)
 
 /* Other macros */
 
@@ -140,6 +182,7 @@ struct lp5521_dev_s
 {
   sem_t devsem;
   uint8_t cref;
+  bool powered;
 
   /* I2C bus and address for device. */
 
@@ -150,6 +193,14 @@ struct lp5521_dev_s
 
   FAR const struct lp5521_board_s *board;
   FAR const struct lp5521_conf_s *config;
+
+  /* Interrupt and poll handling */
+
+  int int_pending;
+
+#ifndef CONFIG_DISABLE_POLL
+  struct pollfd *fds[CONFIG_LP5521_NPOLLWAITERS];
+#endif
 };
 
 /****************************************************************************
@@ -158,8 +209,15 @@ struct lp5521_dev_s
 
 static int lp5521_open(FAR struct file *filep);
 static int lp5521_close(FAR struct file *filep);
+static ssize_t lp5521_read(FAR struct file *filep, FAR char *buffer,
+                           size_t buflen);
 static ssize_t lp5521_write(FAR struct file *filep, FAR const char *buffer,
                             size_t buflen);
+
+#ifndef CONFIG_DISABLE_POLL
+static int lp5521_poll(struct file *filep, struct pollfd *fds, bool setup);
+static void lp5521_notify(struct lp5521_dev_s *priv);
+#endif
 
 /****************************************************************************
 * Private Data
@@ -170,18 +228,45 @@ static FAR struct lp5521_dev_s *g_lp5521_dev;
 static const struct file_operations g_lp5521_fileops = {
   lp5521_open,
   lp5521_close,
-  0,
+  lp5521_read,
   lp5521_write,
   0,
   0,
 #ifndef CONFIG_DISABLE_POLL
-  0
+  lp5521_poll
 #endif
 };
 
 /****************************************************************************
 * Private Functions
 ****************************************************************************/
+
+static void lp5521_irq_clear(FAR struct lp5521_dev_s *dev)
+{
+  if (dev->board->irq_clear)
+    {
+      dev->board->irq_clear(dev->board);
+    }
+}
+
+static int lp5521_irq_attach(FAR struct lp5521_dev_s *dev,
+                             int (*handler)(void *priv), void *priv)
+{
+  if (dev->board->irq_attach)
+    {
+      return dev->board->irq_attach(dev->board, handler, priv);
+    }
+
+  return OK;
+}
+
+static void lp5521_irq_enable(FAR struct lp5521_dev_s *dev, bool enable)
+{
+  if (dev->board->irq_enable)
+    {
+      dev->board->irq_enable(dev->board, enable);
+    }
+}
 
 static unsigned int lp5521_get_write_guardtime(uint8_t start_reg, size_t nregs)
 {
@@ -664,37 +749,51 @@ static int lp5521_set_pwm(FAR struct lp5521_dev_s *dev,
 static int lp5521_set_mode(FAR struct lp5521_dev_s *dev,
                            FAR const struct lp5521_cmd_mode_s *mode)
 {
-  struct {
-    enum lp5521_channel_mode_e mode;
+  static const struct {
     uint8_t shift;
     uint8_t mask;
+    uint8_t enableshift;
+    uint8_t enablemask;
   } modes[3] =
   {
     {
-      .mode  = mode->r,
-      .shift = LP5521_OP_MODE_R_MODE_SHIFT,
-      .mask  = LP5521_OP_MODE_R_MODE_MASK
+      .shift            = LP5521_OP_MODE_R_MODE_SHIFT,
+      .mask             = LP5521_OP_MODE_R_MODE_MASK,
+      .enableshift      = LP5521_ENABLE_R_EXEC_SHIFT,
+      .enablemask       = LP5521_ENABLE_R_EXEC_MASK,
     },
     {
-      .mode  = mode->g,
-      .shift = LP5521_OP_MODE_G_MODE_SHIFT,
-      .mask  = LP5521_OP_MODE_G_MODE_MASK
+      .shift            = LP5521_OP_MODE_G_MODE_SHIFT,
+      .mask             = LP5521_OP_MODE_G_MODE_MASK,
+      .enableshift      = LP5521_ENABLE_G_EXEC_SHIFT,
+      .enablemask       = LP5521_ENABLE_G_EXEC_MASK,
     },
     {
-      .mode  = mode->b,
-      .shift = LP5521_OP_MODE_B_MODE_SHIFT,
-      .mask  = LP5521_OP_MODE_B_MODE_MASK
+      .shift            = LP5521_OP_MODE_B_MODE_SHIFT,
+      .mask             = LP5521_OP_MODE_B_MODE_MASK,
+      .enableshift      = LP5521_ENABLE_B_EXEC_SHIFT,
+      .enablemask       = LP5521_ENABLE_B_EXEC_MASK,
     }
   };
+  enum lp5521_channel_mode_e ms[ARRAY_SIZE(modes)] =
+    { mode->r, mode->g, mode->b };
   int ret;
-  uint8_t regval = 0;
+  uint8_t modereg = 0;
+  uint8_t enablereg = 0;
   uint8_t modemask = 0;
   uint8_t newmodes = 0;
+  uint8_t enablemask = 0;
+  uint8_t newenables = 0;
+  uint8_t stopmodes = 0;
+  uint8_t stopmodesmask = 0;
+  uint8_t stopenable = 0;
+  uint8_t stopenablemask = 0;
+  uint8_t currmode;
   int i;
 
   for (i = 0; i < ARRAY_SIZE(modes); i++)
     {
-      switch (modes[i].mode)
+      switch (ms[i])
         {
         case LP5521_CHANNEL_MODE_NO_CHANGE:
         default:
@@ -710,11 +809,18 @@ static int lp5521_set_mode(FAR struct lp5521_dev_s *dev,
         case LP5521_CHANNEL_MODE_RUN_PROGRAM:
           newmodes |= LP5521_OP_MODE_RUN_PROGRAM << modes[i].shift;
           modemask |= modes[i].mask;
+          newenables |= LP5521_ENABLE_RUN << modes[i].enableshift;
+          enablemask |= modes[i].enablemask;
+          break;
+        case LP5521_CHANNEL_MODE_LOAD_PROGRAM:
+          newmodes |= LP5521_OP_MODE_LOAD_PROGRAM << modes[i].shift;
+          modemask |= modes[i].mask;
           break;
         }
     }
 
   DEBUGASSERT((modemask & newmodes) == newmodes);
+  DEBUGASSERT((enablemask & newenables) == newenables);
 
   if (modemask == 0)
     {
@@ -723,34 +829,203 @@ static int lp5521_set_mode(FAR struct lp5521_dev_s *dev,
       return 0;
     }
 
-  /* Read register. */
+  /* Read registers. */
 
-  ret = lp5521_i2c_read(dev, LP5521_REG_OP_MODE, &regval, sizeof(regval));
+  ret = lp5521_i2c_read(dev, LP5521_REG_OP_MODE, &modereg, sizeof(modereg));
   if (ret < 0)
     {
       lp5521_dbg("%s read failed.\n", "LP5521_REG_OP_MODE");
       return ret;
     }
 
-  lp5521_dbg("before: OP_MODE: %08b\n", regval);
-
-  /* Modify register. */
-
-  regval &= ~modemask;
-  regval |= newmodes;
-
-  /* Write register. */
-
-  ret = lp5521_i2c_write(dev, LP5521_REG_OP_MODE, &regval, sizeof(regval));
+  ret = lp5521_i2c_read(dev, LP5521_REG_ENABLE, &enablereg, sizeof(enablereg));
   if (ret < 0)
     {
-      lp5521_dbg("%s:%x write failed.\n", "LP5521_REG_OP_MODE", regval);
+      lp5521_dbg("%s read failed.\n", "LP5521_REG_ENABLE");
       return ret;
     }
 
-  lp5521_dbg("after:  OP_MODE: %08b\n", regval);
+  lp5521_dbg("before: OP_MODE: %08b, ENABLE: %08b\n", modereg, enablereg);
+
+  /* Leaving RUN mode requires extra steps: set execution to hold and disable
+   * operation mode. */
+
+  for (i = 0; i < ARRAY_SIZE(modes); i++)
+    {
+      if (ms[i] != LP5521_CHANNEL_MODE_NO_CHANGE)
+        {
+          currmode = (modereg & modes[i].mask) >> modes[i].shift;
+          if (currmode == LP5521_OP_MODE_RUN_PROGRAM)
+            {
+              stopenable     |= LP5521_ENABLE_HOLD << modes[i].enableshift;
+              stopenablemask |= modes[i].enablemask;
+              stopmodes     |= LP5521_OP_MODE_DISABLED << modes[i].shift;
+              stopmodesmask |= modes[i].mask;
+            }
+        }
+    }
+
+  DEBUGASSERT((stopmodesmask & stopmodes) == stopmodes);
+  DEBUGASSERT((stopenablemask & stopenable) == stopenable);
+
+  if (stopmodesmask)
+    {
+      /* Modify register. */
+
+      enablereg &= ~stopenablemask;
+      enablereg |= stopenable;
+
+      /* Write register. */
+
+      ret = lp5521_i2c_write(dev, LP5521_REG_ENABLE, &enablereg,
+                             sizeof(enablereg));
+      if (ret < 0)
+        {
+          lp5521_dbg("%s:%x write failed.\n", "LP5521_REG_ENABLE", enablereg);
+          return ret;
+        }
+
+      /* Modify register. */
+
+      modereg &= ~stopmodesmask;
+      modereg |= stopmodes;
+
+      /* Write register. */
+
+      ret = lp5521_i2c_write(dev, LP5521_REG_OP_MODE, &modereg,
+                             sizeof(modereg));
+      if (ret < 0)
+        {
+          lp5521_dbg("%s:%x write failed.\n", "LP5521_REG_OP_MODE", modereg);
+          return ret;
+        }
+    }
+
+  /* Modify register. */
+
+  modereg &= ~modemask;
+  modereg |= newmodes;
+
+  /* Write register. */
+
+  ret = lp5521_i2c_write(dev, LP5521_REG_OP_MODE, &modereg, sizeof(modereg));
+  if (ret < 0)
+    {
+      lp5521_dbg("%s:%x write failed.\n", "LP5521_REG_OP_MODE", modereg);
+      return ret;
+    }
+
+  if (enablemask)
+    {
+      /* Modify register. */
+
+      enablereg &= ~enablemask;
+      enablereg |= newenables;
+
+      /* Write register. */
+
+      ret = lp5521_i2c_write(dev, LP5521_REG_ENABLE, &enablereg,
+                             sizeof(enablereg));
+      if (ret < 0)
+        {
+          lp5521_dbg("%s:%x write failed.\n", "LP5521_REG_ENABLE", enablereg);
+          return ret;
+        }
+    }
+
+  lp5521_dbg("after:  OP_MODE: %08b, ENABLE: %08b\n", modereg, enablereg);
 
   return 0;
+}
+
+static int lp5521_get_status(FAR struct lp5521_dev_s *dev,
+                             FAR struct lp5521_status_s *status)
+{
+  uint8_t regval;
+  int ret;
+
+  /* Read register. */
+
+  ret = lp5521_i2c_read(dev, LP5521_REG_STATUS, &regval, sizeof(regval));
+  if (ret < 0)
+    {
+      lp5521_dbg("%s read failed.\n", "LP5521_REG_STATUS");
+      return ret;
+    }
+
+  status->r_int = !!(regval & LP5521_STATUS_R_INT);
+  status->g_int = !!(regval & LP5521_STATUS_G_INT);
+  status->b_int = !!(regval & LP5521_STATUS_B_INT);
+  status->ext_clk_used = !!(regval & LP5521_STATUS_EXT_CLK_USED);
+
+  return 0;
+}
+
+static int
+lp5521_load_program(FAR struct lp5521_dev_s *dev,
+                    FAR const struct lp5521_cmd_load_program_s *loadprog)
+{
+  struct lp5521_cmd_mode_s mode = {};
+  FAR const struct lp5521_program_s *prog = &loadprog->program;
+  uint8_t start_reg;
+  const char *reg_name;
+  int ret;
+
+  if (prog->ncommands > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -EINVAL;
+    }
+
+  mode.type = LED_LP5521_CMD_SET_MODE;
+  mode.r = LP5521_CHANNEL_MODE_NO_CHANGE;
+  mode.g = LP5521_CHANNEL_MODE_NO_CHANGE;
+  mode.b = LP5521_CHANNEL_MODE_NO_CHANGE;
+
+  switch (loadprog->channel)
+    {
+    case LP5521_CHANNEL_R:
+      mode.r = LP5521_CHANNEL_MODE_LOAD_PROGRAM;
+      start_reg = LP5521_REG_PROG_MEM_R_BASE;
+      reg_name = "LP5521_REG_PROG_MEM_R_BASE";
+      break;
+
+    case LP5521_CHANNEL_G:
+      mode.g = LP5521_CHANNEL_MODE_LOAD_PROGRAM;
+      start_reg = LP5521_REG_PROG_MEM_G_BASE;
+      reg_name = "LP5521_REG_PROG_MEM_G_BASE";
+      break;
+
+    case LP5521_CHANNEL_B:
+      mode.b = LP5521_CHANNEL_MODE_LOAD_PROGRAM;
+      start_reg = LP5521_REG_PROG_MEM_B_BASE;
+      reg_name = "LP5521_REG_PROG_MEM_B_BASE";
+      break;
+
+    default:
+      DEBUGASSERT(false);
+    }
+
+  /* Prepare channel mode for loading program. */
+
+  ret = lp5521_set_mode(dev, &mode);
+  if (ret < 0)
+    {
+      lp5521_dbg("lp5521_set_mode failed, channel=%d.\n", loadprog->channel);
+      return ret;
+    }
+
+  /* Load program. */
+
+  ret = lp5521_i2c_write(dev, start_reg, (const void *)prog->commands,
+                         sizeof(prog->commands[0]) * prog->ncommands);
+  if (ret < 0)
+    {
+      lp5521_dbg("%s write failed.\n", reg_name);
+      (void)reg_name;
+      return ret;
+    }
+
+  return ret;
 }
 
 static void lp5521_power_off(FAR struct lp5521_dev_s *dev)
@@ -764,6 +1039,8 @@ static void lp5521_power_off(FAR struct lp5521_dev_s *dev)
   (void)dev->board->set_enable(dev->board, false);
   (void)dev->board->set_power(dev->board, false);
 
+  dev->int_pending = 0;
+  dev->powered = false;
   lp5521_dbg("Powered OFF.\n");
 }
 
@@ -860,6 +1137,8 @@ static int lp5521_power_on(FAR struct lp5521_dev_s *dev,
         }
     }
 
+  dev->int_pending = 0;
+  dev->powered = true;
   lp5521_dbg("Powered ON.\n");
   return 0;
 }
@@ -883,10 +1162,9 @@ static ssize_t lp5521_write(FAR struct file *filep, FAR const char *buffer,
       return -EINVAL;
     }
 
-  ret = sem_wait(&priv->devsem);
-  if (ret < 0)
+  while (sem_wait(&priv->devsem) != 0)
     {
-      return ret;
+      assert(errno == EINTR);
     }
 
   type = *(FAR const enum lp5521_cmd_e *)buffer;
@@ -938,8 +1216,18 @@ static ssize_t lp5521_write(FAR struct file *filep, FAR const char *buffer,
       }
       break;
     case LED_LP5521_CMD_LOAD_PROGRAM:
-      /* TODO: LED programming. */
-      ret = -EINVAL;
+      {
+        FAR const struct lp5521_cmd_load_program_s *loadprog =
+            (FAR const struct lp5521_cmd_load_program_s *)buffer;
+
+        if (buflen != sizeof(*loadprog))
+          {
+            ret = -EINVAL;
+            goto out;
+          }
+
+        ret = lp5521_load_program(priv, loadprog);
+      }
       break;
     default:
       ret = -EINVAL;
@@ -950,6 +1238,179 @@ out:
   sem_post(&priv->devsem);
 
   return ret < 0 ? ret : buflen;
+}
+
+static ssize_t lp5521_read(FAR struct file *filep, FAR char *buffer,
+                           size_t buflen)
+{
+  FAR struct inode *inode;
+  FAR struct lp5521_dev_s *priv;
+  struct lp5521_status_s status = {};
+  irqstate_t flags;
+  int ret;
+
+  if (buflen < sizeof(status))
+    {
+      return -EINVAL;
+    }
+
+  DEBUGASSERT(filep);
+  inode = filep->f_inode;
+
+  DEBUGASSERT(inode && inode->i_private);
+  priv = inode->i_private;
+
+  while (sem_wait(&priv->devsem) != 0)
+    {
+      assert(errno == EINTR);
+    }
+
+  status.powered = priv->powered;
+  if (status.powered)
+    {
+      /* Get IRQ status. */
+
+      ret = lp5521_get_status(priv, &status);
+      if (ret < 0)
+        {
+          sem_post(&priv->devsem);
+          return ret;
+        }
+    }
+
+  flags = irqsave();
+  if (priv->int_pending)
+    {
+      priv->int_pending--;
+#ifndef CONFIG_DISABLE_POLL
+      if (priv->int_pending)
+        {
+          lp5521_notify(priv);
+        }
+#endif
+    }
+  irqrestore(flags);
+
+  sem_post(&priv->devsem);
+
+  memcpy(buffer, &status, sizeof(status));
+  return sizeof(status);
+}
+
+#ifndef CONFIG_DISABLE_POLL
+
+static int lp5521_poll(struct file *filep, struct pollfd *fds, bool setup)
+{
+  FAR struct inode *inode;
+  FAR struct lp5521_dev_s *priv;
+  irqstate_t flags;
+  int ret = OK;
+  int i;
+
+  DEBUGASSERT(filep);
+  inode = filep->f_inode;
+
+  DEBUGASSERT(inode && inode->i_private);
+  priv = inode->i_private;
+
+  ret = sem_wait(&priv->devsem);
+  if (ret < 0)
+    {
+      return -EINTR;
+    }
+
+  if (setup)
+    {
+      /* Ignore waits that do not include POLLIN */
+
+      if ((fds->events & POLLIN) == 0)
+        {
+          ret = -EDEADLK;
+          goto out;
+        }
+
+      /* This is a request to set up the poll.  Find an available
+       * slot for the poll structure reference
+       */
+
+      for (i = 0; i < CONFIG_LP5521_NPOLLWAITERS; i++)
+        {
+          /* Find an available slot */
+
+          if (!priv->fds[i])
+            {
+              /* Bind the poll structure and this slot */
+
+              priv->fds[i] = fds;
+              fds->priv = &priv->fds[i];
+              break;
+            }
+        }
+
+      if (i >= CONFIG_LP5521_NPOLLWAITERS)
+        {
+          fds->priv = NULL;
+          ret = -EBUSY;
+          goto out;
+        }
+      flags = irqsave();
+      if (priv->int_pending)
+        {
+          lp5521_notify(priv);
+        }
+      irqrestore(flags);
+    }
+  else if (fds->priv)
+    {
+      /* This is a request to tear down the poll. */
+
+      struct pollfd **slot = (struct pollfd **)fds->priv;
+      DEBUGASSERT(slot != NULL);
+
+      /* Remove all memory of the poll setup */
+
+      *slot = NULL;
+      fds->priv = NULL;
+    }
+
+out:
+  sem_post(&priv->devsem);
+  return ret;
+}
+
+static void lp5521_notify(struct lp5521_dev_s *priv)
+{
+  int i;
+
+  for (i = 0; i < CONFIG_LP5521_NPOLLWAITERS; i++)
+    {
+      struct pollfd *fds = priv->fds[i];
+      if (fds)
+        {
+          fds->revents |= POLLIN;
+          sem_post(fds->sem);
+        }
+    }
+}
+
+#endif /* !CONFIG_DISABLE_POLL */
+
+static int lp5521_int_handler(void *_priv)
+{
+  FAR struct lp5521_dev_s *priv = _priv;
+  irqstate_t flags;
+
+  flags = irqsave();
+
+  priv->int_pending++;
+
+#ifndef CONFIG_DISABLE_POLL
+  lp5521_notify(priv);
+#endif
+
+  irqrestore(flags);
+
+  return OK;
 }
 
 static int lp5521_open(FAR struct file *filep)
@@ -981,6 +1442,7 @@ static int lp5521_open(FAR struct file *filep)
           goto out_sem;
         }
 
+      lp5521_irq_enable(priv, true);
       priv->cref = use_count;
     }
   else
@@ -1016,6 +1478,8 @@ static int lp5521_close(FAR struct file *filep)
   use_count = priv->cref - 1;
   if (use_count == 0)
     {
+      lp5521_irq_enable(priv, false);
+
       /* Last user, do power off. */
 
       (void)lp5521_power_off(priv);
@@ -1032,6 +1496,134 @@ static int lp5521_close(FAR struct file *filep)
   sem_post(&priv->devsem);
 
   return 0;
+}
+
+static uint16_t lp5521_command_wait_ramp(unsigned int usecs, int nsteps)
+{
+  unsigned int prescale = 1;
+  unsigned int sign = 0;
+  unsigned int increment;
+  unsigned int step_usecs;
+  unsigned int cycle_usecs;
+  unsigned int ncycles;
+  uint16_t cmd;
+
+  if (nsteps < 0)
+    {
+      /* Negative direction. */
+
+      sign = 1;
+      nsteps = -nsteps;
+    }
+
+  if (nsteps == 0)
+    {
+      /* Wait command. */
+
+      increment = 0;
+    }
+  else
+    {
+      /* Range, 1 to 128. Note: nsteps == 1, same as wait command. */
+
+      increment = nsteps - 1;
+    }
+
+  /* Length of one step. */
+
+  step_usecs = usecs / (increment + 1);
+
+  /* Select prescale / cycle-time. */
+
+  if (step_usecs > LP5521_CMD_RAMP_WAIT_MAX_USECS(
+                                    LP5521_CMD_RAMP_WAIT_PRESCALE0_CLKDIV, 1U))
+    {
+      prescale = 1;
+      cycle_usecs = LP5521_CMD_RAMP_WAIT_MIN_USECS(
+                          LP5521_CMD_RAMP_WAIT_PRESCALE1_CLKDIV);
+    }
+  else
+    {
+      prescale = 0;
+      cycle_usecs = LP5521_CMD_RAMP_WAIT_MIN_USECS(
+                          LP5521_CMD_RAMP_WAIT_PRESCALE0_CLKDIV);
+    }
+
+  ncycles = step_usecs / cycle_usecs;
+  ncycles += (ncycles == 0);
+
+  /* Generate ramp/wait command. */
+
+  cmd = 0x0 << 15;
+  cmd += (prescale & 1) << 14;
+  cmd += (ncycles & 0x3F) << 8;
+  cmd += (sign & 1) << 7;
+  cmd += (increment & 0x7F) << 0;
+
+  return HTONS(cmd);
+}
+
+static uint16_t lp5521_command_set_pwm(uint8_t pwm)
+{
+  uint16_t cmd;
+
+  cmd = 0x40 << 8;
+  cmd += pwm << 0;
+
+  return HTONS(cmd);
+}
+
+static uint16_t lp5521_command_start(void)
+{
+  return HTONS(0x0000);
+}
+
+static  uint16_t lp5521_command_branch(unsigned int stepnum,
+                                       unsigned int nloops)
+{
+  uint16_t cmd;
+
+  cmd = 0x5 << 13;
+  cmd += (nloops & 0x3F) << 7;
+  cmd += (stepnum & 0xF) << 0;
+
+  return HTONS(cmd);
+}
+
+static uint16_t lp5521_command_end(bool sendint, bool resetpwm)
+{
+  uint16_t cmd;
+
+  cmd = 0x6 << 13;
+  cmd += (!!sendint) << 12;
+  cmd += (!!resetpwm) << 11;
+
+  return HTONS(cmd);
+}
+
+static uint16_t lp5521_command_trigger(unsigned int wait_trigger,
+                                       unsigned int send_trigger)
+{
+  uint16_t cmd;
+
+  cmd = 0x7 << 13;
+  cmd += (wait_trigger & 0x3F) << 7;
+  cmd += (send_trigger & 0x3F) << 1;
+
+  return HTONS(cmd);
+}
+
+static unsigned int lp5521_command_triggerflags(bool r, bool g, bool b,
+                                                bool ext)
+{
+  unsigned int flags = 0;
+
+  flags += !!r << 0;
+  flags += !!g << 1;
+  flags += !!b << 2;
+  flags += !!ext << 5;
+
+  return flags;
 }
 
 /****************************************************************************
@@ -1082,5 +1674,231 @@ int led_lp5521_register(FAR const char *devpath,
   priv->board->set_power(priv->board, false);
   priv->board->set_enable(priv->board, false);
 
+  /* Prepare interrupt line and handler. */
+
+  lp5521_irq_clear(priv);
+  lp5521_irq_attach(priv, lp5521_int_handler, priv);
+  lp5521_irq_enable(priv, false);
+
   return 0;
+}
+
+int lp5521_program_wait(struct lp5521_program_s *prog, unsigned int msecs)
+{
+  unsigned int usecs = msecs * 1000;
+  unsigned int wait_usecs;
+  unsigned int short_wait_usecs = 0;
+  unsigned int nloops;
+  unsigned int ncmds;
+
+  if (usecs / 1000 != msecs)
+    {
+      return -EINVAL;
+    }
+
+  if (msecs == 0)
+    {
+      return 0; /* Do nothing. */
+    }
+  else if ((usecs > LP5521_CMD_RAMP_WAIT_MAX_USECS(
+                             LP5521_CMD_RAMP_WAIT_PRESCALE0_CLKDIV, 1U)) &&
+           (usecs < LP5521_CMD_RAMP_WAIT_MIN_USECS(
+                             LP5521_CMD_RAMP_WAIT_PRESCALE1_CLKDIV) * 20U))
+    {
+      const unsigned int prescale1_min_usecs =
+          LP5521_CMD_RAMP_WAIT_MIN_USECS(LP5521_CMD_RAMP_WAIT_PRESCALE1_CLKDIV);
+
+      /* With msec > 30 ms, we could use prescale=1 and not use loop, but then
+       * wait time will increase in 15.6 ms steps, causing inaccuracy for short
+       * waits. Form wait from one longer wait with prescale=1 (to utilize
+       * automatic power-save) and one shorter wait with prescale=0. */
+
+      wait_usecs = usecs / prescale1_min_usecs;
+      wait_usecs *= prescale1_min_usecs;
+      short_wait_usecs = usecs - wait_usecs;
+
+      nloops = 0;
+    }
+  else if (usecs <= LP5521_CMD_WAIT_MAX_USECS)
+    {
+      /* Generate simple single command wait. */
+
+      wait_usecs = usecs;
+      nloops = 0;
+    }
+  else if (usecs <= (LP5521_CMD_BRANCH_MAX_LOOPS + 1) *
+                     LP5521_CMD_WAIT_MAX_USECS)
+    {
+      /* Very long wait (> 984 ms), use loop. */
+
+      nloops = usecs / LP5521_CMD_WAIT_MAX_USECS;
+      nloops += !!(usecs % LP5521_CMD_WAIT_MAX_USECS);
+
+      wait_usecs = usecs / nloops;
+    }
+  else
+    {
+      return -EINVAL;
+    }
+
+  /* Enough space left for these commands? */
+
+  ncmds = prog->ncommands + 1 + (nloops > 1) + (short_wait_usecs > 0);
+  if (ncmds > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -ENOBUFS;
+    }
+
+  ncmds = prog->ncommands;
+
+  /* Insert wait command. */
+
+  prog->commands[ncmds++] = lp5521_command_wait_ramp(wait_usecs, 0);
+
+  if (short_wait_usecs > 0)
+    {
+      /* Insert additional short wait command. */
+
+      prog->commands[ncmds++] = lp5521_command_wait_ramp(short_wait_usecs, 0);
+    }
+
+  if (nloops > 1)
+    {
+      /* Insert loop branch command. */
+
+      prog->commands[ncmds++] = lp5521_command_branch(prog->ncommands,
+                                                      nloops - 1);
+    }
+
+  ncmds -= prog->ncommands;
+  prog->ncommands += ncmds;
+
+  return ncmds;
+}
+
+int lp5521_program_ramp(struct lp5521_program_s *prog, unsigned int msecs,
+                        int increment)
+{
+  unsigned int usecs = msecs * 1000;
+  unsigned int increment_abs;
+
+  if (increment < LP5521_CMD_RAMP_WAIT_MIN_NUM_STEPS ||
+      increment > LP5521_CMD_RAMP_WAIT_MAX_NUM_STEPS)
+    {
+      return -EINVAL;
+    }
+
+  if (usecs / 1000 != msecs)
+    {
+      return -EINVAL;
+    }
+
+  increment_abs = increment < 0 ? -increment : increment;
+
+  if (usecs > LP5521_CMD_RAMP_WAIT_MAX_USECS(
+                         LP5521_CMD_RAMP_WAIT_PRESCALE1_CLKDIV, increment_abs))
+    {
+      /* Time too long for this amount of increment. TODO: generate loop
+       * as is done for 'wait'
+       */
+
+      return -EINVAL;
+    }
+
+  /* Enough space left for this command? */
+
+  if (prog->ncommands + 1 > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -ENOBUFS;
+    }
+
+  prog->commands[prog->ncommands++] = lp5521_command_wait_ramp(usecs,
+                                                               increment);
+
+  return 1;
+}
+
+int lp5521_program_set_pwm(struct lp5521_program_s *prog, uint8_t pwm)
+{
+  /* Enough space left for this command? */
+
+  if (prog->ncommands + 1 > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -ENOBUFS;
+    }
+
+  prog->commands[prog->ncommands++] = lp5521_command_set_pwm(pwm);
+  return 1;
+}
+
+int lp5521_program_goto_start(struct lp5521_program_s *prog)
+{
+  /* Enough space left for this command? */
+
+  if (prog->ncommands + 1 > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -ENOBUFS;
+    }
+
+  prog->commands[prog->ncommands++] = lp5521_command_start();
+  return 1;
+}
+
+int lp5521_program_branch(struct lp5521_program_s *prog, unsigned int jump_to,
+                          unsigned int loop_count)
+{
+  if (jump_to >= LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -EINVAL;
+    }
+
+  if ((loop_count < LP5521_CMD_BRANCH_MIN_LOOPS ||
+      loop_count > LP5521_CMD_BRANCH_MAX_LOOPS) &&
+      loop_count != LP5521_CMD_BRANCH_INFINITE_LOOP)
+    {
+      return -EINVAL;
+    }
+
+  /* Enough space left for this command? */
+
+  if (prog->ncommands + 1 > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -ENOBUFS;
+    }
+
+  prog->commands[prog->ncommands++] =
+      lp5521_command_branch(jump_to, loop_count);
+  return 1;
+}
+
+int lp5521_program_end(struct lp5521_program_s *prog, bool sendint,
+                       bool resetpwm)
+{
+  /* Enough space left for this command? */
+
+  if (prog->ncommands + 1 > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -ENOBUFS;
+    }
+
+  prog->commands[prog->ncommands++] = lp5521_command_end(sendint, resetpwm);
+  return 1;
+}
+
+int lp5521_program_trigger(struct lp5521_program_s *prog, bool wait_r,
+                           bool wait_g, bool wait_b, bool wait_ext, bool send_r,
+                           bool send_g, bool send_b, bool send_ext)
+{
+  /* Enough space left for this command? */
+
+  if (prog->ncommands + 1 > LP5521_MAX_PROGRAM_COMMANDS)
+    {
+      return -ENOBUFS;
+    }
+
+  prog->commands[prog->ncommands++] =
+      lp5521_command_trigger(
+          lp5521_command_triggerflags(wait_r, wait_g, wait_b, wait_ext),
+          lp5521_command_triggerflags(send_r, send_g, send_b, send_ext));
+  return 1;
 }

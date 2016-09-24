@@ -102,3 +102,17 @@ long strtol(const char *nptr, char **endptr, int base)
   return (long)accum;
 }
 
+/* Provide 'atoi' and 'atol' so that external binary libraries can be linked
+ * with NuttX libc. */
+
+#undef atol
+long atol(const char *nptr)
+{
+  return strtol(nptr, NULL, 10);
+}
+
+#undef atoi
+int atoi(const char *nptr)
+{
+  return atol(nptr);
+}

@@ -98,7 +98,7 @@ struct sendto_s
   FAR struct socket *st_sock;         /* Points to the parent socket structure */
 #endif
 #ifdef CONFIG_NET_SENDTO_TIMEOUT
-  uint32_t st_time;                   /* Last send time for determining timeout */
+  systime_t st_time;                  /* Last send time for determining timeout */
 #endif
   FAR struct devif_callback_s *st_cb; /* Reference to callback instance */
   sem_t st_sem;                       /* Semaphore signals sendto completion */

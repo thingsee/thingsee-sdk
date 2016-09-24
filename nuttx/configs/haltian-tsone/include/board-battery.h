@@ -37,6 +37,8 @@
 #ifndef __BOARD_BATTERY_H__
 #define __BOARD_BATTERY_H__
 
+#define HAVE_BOARD_GET_BATTERY_AVERAGE_VOLTAGE 1
+
 uint8_t board_get_battery_level(float voltage, int temperature);
 uint16_t board_get_battery_capacity(void);
 

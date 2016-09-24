@@ -74,6 +74,9 @@
 #ifdef CONFIG_HTS221_HUMIDITY
 #include <nuttx/sensors/hts221.h>
 #endif
+#ifdef CONFIG_GAM9AXEL_SENS
+#include <nuttx/sensors/lsm9ds0.h>
+#endif
 #ifdef CONFIG_LSM9DS1_SENS
 #include <nuttx/sensors/lsm9ds1.h>
 #endif
@@ -113,6 +116,10 @@
 
 #ifndef CONFIG_BOARD_I2C_BQ24251_CHARGER
 #  define CONFIG_BOARD_I2C_BQ24251_CHARGER 1
+#endif
+
+#ifndef CONFIG_BOARD_I2C_GAM9AXEL_SENS
+#  define CONFIG_BOARD_I2C_GAM9AXEL_SENS 1
 #endif
 
 #ifndef CONFIG_BOARD_I2C_HTS221_HUMIDITY
@@ -193,6 +200,12 @@ FAR typedef struct stm32_mbr3108_config_s
 } stm32_mbr3108_config_t;
 #endif
 
+#ifdef CONFIG_GAM9AXEL_SENS
+FAR typedef struct stm32_lsm9ds0_config_s {
+  lsm9ds0_config_t dev;
+  xcpt_t handler;
+} stm32_lsm9ds0_config_t;
+#endif
 
 #ifdef CONFIG_LSM9DS1_SENS
 FAR typedef struct stm32_lsm9ds1_config_s {
@@ -225,6 +238,11 @@ FAR typedef struct stm32_max44009_config_s {
   static int mbr3108_set_power(FAR struct mbr3108_board_s *state, bool on);
 #endif
 
+#ifdef CONFIG_GAM9AXEL_SENS
+  static int lsm9ds0_attach_irq(FAR lsm9ds0_config_t *state, xcpt_t handler);
+  static void lsm9ds0_enable_irq(FAR lsm9ds0_config_t *state, bool enable);
+  static void lsm9ds0_clear_irq(FAR lsm9ds0_config_t *state);
+#endif
 
 #ifdef CONFIG_HTS221_HUMIDITY
   static int hts221_attach_irq(FAR hts221_config_t *state, xcpt_t handler);
@@ -313,6 +331,14 @@ static stm32_mbr3108_config_t g_mbr3108_config = {
 };
 #endif
 
+#ifdef CONFIG_GAM9AXEL_SENS
+static stm32_lsm9ds0_config_t g_lsm9ds0_config = {
+  .dev.irq_attach = lsm9ds0_attach_irq,
+  .dev.irq_enable = lsm9ds0_enable_irq,
+  .dev.irq_clear = lsm9ds0_clear_irq,
+  .handler = NULL
+};
+#endif
 
 #ifdef CONFIG_HTS221_HUMIDITY
 static stm32_hts221_config_t g_hts221_config = {
@@ -625,6 +651,55 @@ static void max44009_clear_irq(FAR struct max44009_config_t *state)
 
 #endif
 
+#ifdef CONFIG_GAM9AXEL_SENS
+
+static int lsm9ds0_init(struct i2c_dev_s *i2c)
+{
+  /* First address is for the acceleration and magnetic sensor. The second is for gyro-sensor */
+  uint8_t addrs[] = { 0x1D, 0x6B };
+
+  stm32_configgpio(GPIO_LSM9DS0_SA);
+  return lsm9ds0_register("/dev/lsm9ds0", i2c, addrs, &g_lsm9ds0_config.dev);
+}
+
+static int lsm9ds0_attach_irq(FAR struct lsm9ds0_config_t *state, xcpt_t handler)
+{
+  FAR struct stm32_lsm9ds0_config_s *dev = (FAR struct stm32_lsm9ds0_config_s *)state;
+
+  /* Just save the handler for use when the interrupt is enabled */
+  dev->handler = handler;
+
+  return OK;
+}
+
+static void lsm9ds0_enable_irq(FAR struct lsm9ds0_config_t *state, bool enable)
+{
+  FAR struct stm32_lsm9ds0_config_s *priv = (FAR struct stm32_lsm9ds0_config_s *)state;
+
+  DEBUGASSERT(priv->handler);
+  /* Attach and enable, or detach and disable */
+  if (enable)
+    {
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_INT_G, true, false, false, priv->handler);
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_DRDY_G, true, false, false, priv->handler);
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_INT1_XM, true, false, false, priv->handler);
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_INT2_XM, true, false, false, priv->handler);
+    }
+  else
+    {
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_INT_G, false, false, false, NULL);
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_DRDY_G, false, false, false, NULL);
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_INT1_XM, false, false, false, NULL);
+      (void)stm32_gpiosetevent(GPIO_LSM9DS0_INT2_XM, false, false, false, NULL);
+    }
+}
+
+static void lsm9ds0_clear_irq(FAR struct lsm9ds0_config_t *state)
+{
+  /* Do nothing */
+}
+
+#endif
 
 #ifdef CONFIG_LIS2DH
 
@@ -1008,6 +1083,10 @@ int up_i2c_devinitialize(void)
   bq24251_init(i2c_buses[CONFIG_BOARD_I2C_BQ24251_CHARGER - 1]);
 #endif
 
+#ifdef CONFIG_GAM9AXEL_SENS
+  DEBUG_CHECK_I2C(CONFIG_BOARD_I2C_GAM9AXEL_SENS);
+  lsm9ds0_init(i2c_buses[CONFIG_BOARD_I2C_GAM9AXEL_SENS - 1]);
+#endif
 
 #ifdef CONFIG_HTS221_HUMIDITY
   DEBUG_CHECK_I2C(CONFIG_BOARD_I2C_HTS221_HUMIDITY);

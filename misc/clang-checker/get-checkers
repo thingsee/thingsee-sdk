@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sed -e 's/^- /-disable-checker /' -e 's/^+ /-enable-checker /' -e 's/^#.*//' -e '/^$/d' <$(dirname $0)/checkers.txt

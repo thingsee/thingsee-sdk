@@ -1,0 +1,52 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config THINGSEE_CONNECTORS
+    bool "Thingsee connectors"
+    default n
+    ---help---
+        Enable the Thingsee connectors
+
+if THINGSEE_CONNECTORS
+    config THINGSEE_HTTPS_PROTOCOL
+        bool "Enables HTTPS protocol"
+        depends on MBEDTLS
+        default n
+        ---help---
+            Enable HTTPS protocol (see separate mbedTLS config section for TLS
+            configuration).
+
+    config THINGSEE_MQTT_PROTOCOL
+        bool "Enables MQTT protocol"
+        default n
+        ---help---
+            Enable MQTT protocol
+
+    config THINGSEE_CONNECTORS_DEBUG
+        bool "Thingsee connector debug"
+        default n
+        ---help---
+            Enable the thingsee connectors debug
+
+    config THINGSEE_CONNECTORS_PROTOCOL_DEBUG
+        bool "Thingsee connector protocol debug"
+        default n
+        ---help---
+            Enable verbose network protocol debugging traces (HTTP, etc)
+
+    config ONLY_CONNECTOR_CORE_LIBRARY
+        bool "Only build connector core library, without individual connectors"
+        default n
+        ---help---
+            Only build connector core library, and disable building
+            connectors Thingsee Engine. Allows using connector core
+            with custom application connector(s).
+
+    if !ONLY_CONNECTOR_CORE_LIBRARY
+
+    source "$APPSDIR/ts_engine/connectors/Kconfig_extra"
+
+    endif
+endif

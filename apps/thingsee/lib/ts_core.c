@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/thingsee/lib/ts_core.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Authors: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *            Sami Pelkonen <sami.pelkonen@haltian.com>
  *
@@ -60,6 +60,8 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+//#define TS_CORE_TIMERS_DEBUG
+
 //#define TS_CORE_PERF_DEBUG
 
 #ifdef TS_CORE_PERF_DEBUG
@@ -73,16 +75,52 @@
 //#define TS_CORE_DEEPSLEEP_DEBUG
 #endif
 
+/* Number of file descriptors handled by ts_core (default: maximum fds
+ * configured for NuttX). */
+
+#define TS_CORE_NFILES (CONFIG_NFILE_DESCRIPTORS + CONFIG_NSOCKET_DESCRIPTORS)
+
 /* Default sleep time when there are no file descriptors / timers active */
 
 #define CORE_DEFAULT_SLEEP_MS           1000
 
 /* Maximum non-deep-sleep sleep time */
 
-#define TS_CORE_MAX_POLL_TIMEOUT_MSEC   2500
+#if defined(CONFIG_THINGSEE_CORE_MAX_POLL_TIMEOUT_MSEC) && \
+    CONFIG_THINGSEE_CORE_MAX_POLL_TIMEOUT_MSEC > 0
+#  define TS_CORE_MAX_POLL_TIMEOUT_MSEC \
+            CONFIG_THINGSEE_CORE_MAX_POLL_TIMEOUT_MSEC
+#else
+#  define TS_CORE_MAX_POLL_TIMEOUT_MSEC 2500
+#endif
+
+/* Minimum non-deep-sleep sleep time */
+
+#define TS_CORE_MIN_POLL_TIMEOUT_MSEC   100
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
+#ifdef TS_CORE_PERF_DEBUG
+#  define perf_dbg_start_ticks(ts_core) \
+          ((void)(ts_core->elapsed.prev_ticks = clock_systimer()))
+
+#  define perf_dbg_add_elapsed_ticks(ts_core, type) \
+          ((void)({ \
+            ts_core->elapsed.type += \
+              TICK2MSEC(clock_systimer() - ts_core->elapsed.prev_ticks); \
+            ts_core->elapsed.n##type++; \
+          }))
+#else
+#  define perf_dbg_start_ticks(ts_core) ((void)0)
+#  define perf_dbg_add_elapsed_ticks(ts_core, type) ((void)0)
+#endif
+
+#ifdef TS_CORE_DEEPSLEEP_DEBUG
+#  define deepsleep_dbg(...) dbg(__VA_ARGS__)
+#else
+#  define deepsleep_dbg(...) ((void)0)
 #endif
 
 /****************************************************************************
@@ -93,29 +131,13 @@
 
 struct file_s
 {
-  /* Single linked list entry */
-
-  sq_entry_t entry;
-
-  /* Monitored file descriptor */
-
-  int fd:20;
-
-  /* File descriptor active */
-
-  bool active:1;
-
-  /* File descriptor poll type */
-
-  pollevent_t events;
-
   /* File descriptor callback function */
 
   ts_fd_callback_t callback;
 
   /* Private data for callback function */
 
-  void * priv;
+  void *priv;
 
   /* Name of function that registered this entry. */
 
@@ -126,9 +148,8 @@ struct file_s
 
 struct timer_flags_s
 {
-  bool active:1;                                /* Timer is active */
-  bool is_new:1;                                /* Timer is new and not yet active */
-  enum ts_timer_type_e type:4;                  /* Timer type */
+  enum ts_timer_type_e type:4;    /* Timer type */
+  bool done:1;                    /* Timer done, and in done_timers sq */
 };
 
 /* Timer entry */
@@ -147,32 +168,23 @@ struct timer_s
 
   struct timer_flags_s flags;
 
-  union
+  /* Members for date and RTC based interval/timeout timers. */
+
+  struct
   {
-    /* Members for interval and timeout timers. */
+    /* Absolute time when date timer expires */
 
-    struct
+    struct timespec date_expires;
+
+    /* Interval length */
+
+    uint32_t interval_ms;
+
+    union
     {
-      /* System tick count when timer expires */
-
-      uint32_t expires;
-
-      /* Timer interval / timeout in system ticks */
-
-      uint32_t ticks;
-
-      /* Timer callback function */
+      /* Interval/timeout timer callback function */
 
       ts_timer_callback_t callback;
-    };
-
-    /* Members for date/RTC timers. */
-
-    struct
-    {
-      /* Absolute time when date timer expires */
-
-      struct timespec date_expires;
 
       /* Date timer callback function */
 
@@ -210,13 +222,19 @@ struct deepsleep_hook_s
 
 struct ts_core_s
 {
-  /* File descriptor queue */
+  /* File descriptor lists */
 
-  sq_queue_t files;
+  unsigned int nfiles;
+  unsigned int nfiles_deleted;
+  struct file_s files[TS_CORE_NFILES];
+  struct pollfd pollfds[TS_CORE_NFILES];
 
-  /* Timer queue */
+  /* Timer queues */
 
   sq_queue_t timers;
+  sq_queue_t new_timers;
+  sq_queue_t done_timers;
+  size_t heap_size;
 
   /* Deep-sleep hook queue */
 
@@ -228,10 +246,11 @@ struct ts_core_s
 
 #ifdef TS_CORE_PERF_DEBUG
   struct {
-    uint32_t start_ticks;
-    uint32_t prev_ticks;
+    systime_t start_ticks;
+    systime_t prev_ticks;
 
     uint32_t poll;
+    uint32_t npoll;
     uint32_t files;
     uint32_t nfiles;
     uint32_t timers;
@@ -263,45 +282,183 @@ static struct ts_core_s g_ts_core;
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: timespec_cmp
+ ****************************************************************************/
+static int timespec_cmp(const struct timespec *a, const struct timespec *b)
+{
+  int64_t a_nsec = (int64_t)a->tv_sec * (1000 * 1000 * 1000) + a->tv_nsec;
+  int64_t b_nsec = (int64_t)b->tv_sec * (1000 * 1000 * 1000) + b->tv_nsec;
+
+  if (a_nsec > b_nsec)
+    return 1;
+  if (a_nsec < b_nsec)
+    return -1;
+  return 0;
+}
+
+/****************************************************************************
+ * Name: timespec_add
+ ****************************************************************************/
+static struct timespec *timespec_add(struct timespec *ts,
+                                     const struct timespec *add)
+{
+  ts->tv_sec += add->tv_sec;
+  ts->tv_nsec += add->tv_nsec;
+  while (ts->tv_nsec >= 1000 * 1000 * 1000)
+    {
+      ts->tv_nsec -= 1000 * 1000 * 1000;
+      ts->tv_sec += 1;
+    }
+  while (ts->tv_nsec < 0)
+    {
+      ts->tv_nsec += 1000 * 1000 * 1000;
+      ts->tv_sec -= 1;
+    }
+
+  return ts;
+}
+
+/****************************************************************************
+ * Name: timespec_add_msec
+ ****************************************************************************/
+static struct timespec *timespec_add_msec(struct timespec *ts,
+                                          long msec)
+{
+  struct timespec add;
+
+  add.tv_sec = msec / 1000;
+  add.tv_nsec = (msec - add.tv_sec * 1000) * (1000 * 1000);
+
+  return timespec_add(ts, &add);
+}
+
+/****************************************************************************
+ * Name: timespec_to_msec
+ ****************************************************************************/
+static int64_t timespec_to_msec(const struct timespec *ts)
+{
+  return (int64_t)ts->tv_sec * 1000 + ts->tv_nsec / (1000 * 1000);
+}
+
+/****************************************************************************
+ * Name: purge_timers
+ ****************************************************************************/
+static void purge_timers(sq_queue_t *queue)
+{
+  struct timer_s * timer;
+
+  while ((timer = (struct timer_s *)sq_remfirst(queue)) != NULL)
+    {
+      /* Free memory associated with timer */
+
+      free(timer);
+    }
+}
+
+/****************************************************************************
+ * Name: execute_timer_callback
+ ****************************************************************************/
+static int execute_timer_callback(struct ts_core_s * const ts_core,
+                                  struct timer_s *timer)
+{
+  enum ts_timer_type_e type = timer->flags.type;
+  int ret;
+
+  ret = (type == TS_TIMER_TYPE_DATE) ?
+          timer->date_callback(timer->id, &timer->date_expires, timer->priv) :
+          timer->callback(timer->id, timer->priv);
+
+  if (timer->flags.done)
+    {
+      return ret; /* Timer deleted itself in callback. */
+    }
+
+  /* Executed timer is always first of active queue (unless deleted itself). */
+
+  DEBUGASSERT(timer == (struct timer_s *)sq_peek(&ts_core->timers));
+
+  if (type == TS_TIMER_TYPE_INTERVAL)
+    {
+      /* Set next timeout event */
+
+      timespec_add_msec(&timer->date_expires, timer->interval_ms);
+
+      /* Move to new queue for reinsertion to active queue. */
+
+      sq_remfirst(&ts_core->timers);
+      sq_addlast(&timer->entry, &ts_core->new_timers);
+    }
+  else
+    {
+      /* Deactivate timer, move to done queue. */
+
+      sq_remfirst(&ts_core->timers);
+      sq_addlast(&timer->entry, &ts_core->done_timers);
+
+      timer->flags.done = true;
+    }
+
+  return ret;
+}
+
+/****************************************************************************
  * Name: ts_core_get_timer_id
  *
  * Description:
- *   Get next available timer ID
+ *   Get unused timer ID
  *
  * Input Parameters:
  *   ts_core     - Pointer to Thingsee core library structure
+ *   new_timer   - New timer object for which to create ID
  *
  * Returned Value:
  *   Timer ID (>= 0) when timer was created successfully
  *  -1 (ERROR) means the function was executed unsuccessfully
  *
  ****************************************************************************/
-static int ts_core_get_timer_id(struct ts_core_s * const ts_core)
+static int ts_core_get_timer_id(struct ts_core_s * const ts_core,
+                                struct timer_s * new_timer)
 {
-  struct timer_s * timer;
-  int timer_id = TS_CORE_FIRST_TIMER_ID;
+  /* Convert timer object position in heap to timer_id. */
 
-  DEBUGASSERT(ts_core != NULL);
+  if (ts_core->heap_size <= 0)
+    {
+      struct mallinfo ml = mallinfo();
 
-  timer = (struct timer_s *)sq_peek(&ts_core->timers);
+      ts_core->heap_size = ml.arena;
+      DEBUGASSERT(ts_core->heap_size > 0);
+      DEBUGASSERT(ts_core->heap_size < INT_MAX);
+    }
 
-  /* Search timer queue for available timer ID */
+  return ((uintptr_t)new_timer % (ts_core->heap_size)) + TS_CORE_FIRST_TIMER_ID;
+}
+
+/****************************************************************************
+ * Name: dbg_timers
+ ****************************************************************************/
+static void dbg_timers(const char *qname, sq_queue_t *timer_queue)
+{
+#ifdef TS_CORE_TIMERS_DEBUG
+  struct timer_s *timer = (struct timer_s *)sq_peek(timer_queue);
+  struct timespec curr_ts;
+  int64_t curr_msec;
+  int i = 0;
+
+  clock_gettime(CLOCK_MONOTONIC, &curr_ts);
+  curr_msec = timespec_to_msec(&curr_ts);
 
   while (timer)
     {
-      if (timer->flags.active && timer->id >= timer_id)
-        {
-          /* Update next available timer ID */
+      int64_t timer_msec = timespec_to_msec(&timer->date_expires);
 
-          timer_id = timer->id + 1;
-        }
+      dbg("[%s] %d: id=%d: expiry in %lld msec, type %d\n",
+          qname, i, timer->id, (timer_msec - curr_msec), timer->flags.type);
 
-      /* Move to next timer in queue */
+      i++;
 
       timer = (struct timer_s *)sq_next(&timer->entry);
     }
-
-  return timer_id;
+#endif
 }
 
 /****************************************************************************
@@ -316,49 +473,69 @@ static int ts_core_get_timer_id(struct ts_core_s * const ts_core)
  ****************************************************************************/
 static void ts_core_gc_timers(struct ts_core_s * const ts_core)
 {
-  struct timer_s * timer;
+  struct timer_s *new_timer, *next_new_timer;
 
   DEBUGASSERT(ts_core != NULL);
 
-  timer = (struct timer_s *)sq_peek(&ts_core->timers);
-  while (timer)
+  /* Insert new timers to active queue. */
+
+  new_timer = (struct timer_s *)sq_peek(&ts_core->new_timers);
+  while (new_timer)
     {
-      /* Check if timer is new. */
+      struct timer_s *prev, *active;
 
-      if (timer->flags.is_new)
+      next_new_timer = (struct timer_s *)sq_next(&new_timer->entry);
+
+      DEBUGASSERT(new_timer == (struct timer_s *)sq_peek(&ts_core->new_timers));
+      sq_remfirst(&ts_core->new_timers);
+
+      /* Ordered insert to active timer queue. */
+
+      active = (struct timer_s *)sq_peek(&ts_core->timers);
+      if (!active)
         {
-          /* Timer was added on this iteration of main-event loop, now remove
-           * the 'is_new' mark so that timer becomes active for next round.
-           */
-
-          timer->flags.is_new = false;
-        }
-
-      /* Check if timer has been marked as deleted */
-
-      if (!timer->flags.active)
-        {
-          struct timer_s * deleted = timer;
-
-          /* Move to next timer in queue */
-
-          timer = (struct timer_s *)sq_next(&timer->entry);
-
-          /* Remove deleted timer from queue */
-
-          sq_rem(&deleted->entry, &ts_core->timers);
-
-          /* Free memory associated with timer */
-
-          free(deleted);
+          sq_addfirst(&new_timer->entry, &ts_core->timers);
         }
       else
         {
-          /* Move to next timer in queue */
+          if (timespec_cmp(&new_timer->date_expires,
+                           &active->date_expires) < 0)
+            {
+              sq_addfirst(&new_timer->entry, &ts_core->timers);
+            }
+          else
+            {
+              while (true)
+                {
+                  prev = active;
+                  active = (struct timer_s *)sq_next(&active->entry);
 
-          timer = (struct timer_s *)sq_next(&timer->entry);
+                  if (!active || timespec_cmp(&new_timer->date_expires,
+                                              &active->date_expires) < 0)
+                    {
+                      break;
+                    }
+                }
+
+              sq_addafter(&prev->entry, &new_timer->entry,
+                          &ts_core->timers);
+            }
         }
+
+      new_timer = next_new_timer;
     }
+
+  DEBUGASSERT(sq_peek(&ts_core->new_timers) == NULL);
+
+  /* Free completed timers. */
+
+  dbg_timers("gc done", &ts_core->done_timers);
+  purge_timers(&ts_core->done_timers);
+  DEBUGASSERT(sq_peek(&ts_core->done_timers) == NULL);
+
+  /* Debug print. */
+
+  dbg_timers("gc active", &ts_core->timers);
 }
 
 /****************************************************************************
@@ -378,181 +555,52 @@ static void ts_core_gc_timers(struct ts_core_s * const ts_core)
 static int ts_core_timer_get_timeout(struct ts_core_s * const ts_core)
 {
   struct timer_s * timer = (struct timer_s *)sq_peek(&ts_core->timers);
-  uint32_t const current_tickcount = clock_systimer();
-  int timeout_ms = -1;
-  int ret;
-
-  if (timer)
-    {
-      uint32_t next_to_expire = UINT32_MAX;
-      struct timespec curr_ts;
-
-      /* Get current time. */
-
-      ret = clock_gettime(CLOCK_MONOTONIC, &curr_ts);
-      DEBUGASSERT(ret != ERROR);
-
-      while (timer)
-        {
-          /* Check that timer is active */
-
-          if (timer->flags.active && !timer->flags.is_new &&
-              timer->flags.type != TS_TIMER_TYPE_DATE)
-            {
-              /* Get lowest tick count */
-
-              if (timer->expires < next_to_expire)
-                next_to_expire = timer->expires;
-            }
-          else if (timer->flags.active && !timer->flags.is_new &&
-                   timer->flags.type == TS_TIMER_TYPE_DATE)
-            {
-              int64_t msec_diff;
-              uint32_t ticks_diff;
-
-              /* Get difference between current time and expire time. */
-
-              if (curr_ts.tv_sec > timer->date_expires.tv_sec)
-                {
-                  /* Already expired. */
-
-                  next_to_expire = current_tickcount;
-                }
-              else
-                {
-                  msec_diff = timer->date_expires.tv_sec - curr_ts.tv_sec;
-                  msec_diff *= 1000;
-
-                  /* 'timespec->tv_nsec' is signed long. */
-
-                  msec_diff += (timer->date_expires.tv_nsec - curr_ts.tv_nsec) /
-                               (1000 * 1000);
-
-                  if (msec_diff <= 0)
-                    {
-                      /* Already expired, current_tickcount is lowest possible
-                       * tick count. */
-
-                      next_to_expire = current_tickcount;
-                    }
-                  else
-                    {
-                      if (msec_diff > UINT32_MAX)
-                        msec_diff = UINT32_MAX;
-
-                      ticks_diff = MSEC2TICK((uint32_t)msec_diff);
-
-                      /* Get lowest tick count */
-
-                      if (current_tickcount + ticks_diff < next_to_expire)
-                        next_to_expire = current_tickcount + ticks_diff;
-                    }
-                }
-            }
-
-          /* Move to next timer in queue */
-
-          timer = (struct timer_s *)sq_next(&timer->entry);
-        }
-
-      if (next_to_expire > current_tickcount)
-        {
-          /* Set timeout to next timer event in milliseconds */
-
-          timeout_ms = TICK2MSEC(next_to_expire - current_tickcount);
-        }
-      else
-        {
-          /* Timer has expired */
-
-          timeout_ms = 0;
-        }
-    }
-
-  return timeout_ms;
-}
-
-/****************************************************************************
- * Name: ts_core_timer_get_date_timeout
- *
- * Description:
- *   Get timeout to next date timer
- *
- * Input Parameters:
- *   ts_core     - Pointer to Thingsee core internals
- *
- * Returned Value:
- *   Timeout in seconds to next date timer event
- *  -1 when there is no registered date timers
- *
- ****************************************************************************/
-static int ts_core_timer_get_date_timeout(struct ts_core_s * const ts_core)
-{
-  struct timer_s * timer = (struct timer_s *)sq_peek(&ts_core->timers);
-  int timeout_sec = -1;
-  uint32_t smallest = UINT32_MAX;
   struct timespec curr_ts;
+  int timeout_ms = -1;
+  int64_t curr_msec;
+  int64_t timer_msec;
   int ret;
 
   if (!timer)
-    return timeout_sec;
+    return timeout_ms;
 
   /* Get current time. */
 
   ret = clock_gettime(CLOCK_MONOTONIC, &curr_ts);
   DEBUGASSERT(ret != ERROR);
 
-  while (timer)
+  curr_msec = timespec_to_msec(&curr_ts);
+
+  DEBUGASSERT(timer->flags.type >= 0);
+  DEBUGASSERT(timer->flags.type < TS_TIMER_TYPE_MAX);
+
+  /* Get difference between current time and expire time. */
+
+  timer_msec = timespec_to_msec(&timer->date_expires);
+
+  if (timer_msec <= curr_msec)
     {
-      /* Check that timer is active */
+      /* Already expired. */
 
-      if (timer->flags.active && !timer->flags.is_new &&
-          timer->flags.type == TS_TIMER_TYPE_DATE)
-        {
-          time_t secs;
-          int64_t nsecs;
+      timeout_ms = 0;
+    }
+  else
+    {
+      /* First timer in active timer queue expires first. */
 
-          if (timer->date_expires.tv_sec < curr_ts.tv_sec)
-            {
-              /* Already expired (and active). */
-
-              return 0;
-            }
-
-          /* Get time to expiring. */
-
-          nsecs = (long)timer->date_expires.tv_sec - (long)curr_ts.tv_sec;
-          nsecs *= (1000 * 1000 * 1000);
-          nsecs += (long)timer->date_expires.tv_nsec - (long)curr_ts.tv_nsec;
-
-          if (nsecs <= 0)
-            {
-              /* Already expired (and active). */
-
-              return 0;
-            }
-
-          secs = nsecs / (1000 * 1000 * 1000);
-
-          /* Add extra second so that we will deep-sleep slightly pass the
-           * timer expiry time. This is because deep-sleep RTC wake-up
-           * works in one second quantity and we want to avoid busy looping
-           * for date timers.
-           */
-
-          secs += (timer->date_expires.tv_nsec != curr_ts.tv_nsec);
-
-          if (secs < smallest)
-            smallest = secs;
-        }
-
-      /* Move to next timer in queue */
-
-      timer = (struct timer_s *)sq_next(&timer->entry);
+      if (timer_msec - curr_msec <= INT_MAX)
+        timeout_ms = timer_msec - curr_msec;
+      else
+        timeout_ms = INT_MAX;
     }
 
-  return smallest;
+  /* Debug print. */
+
+  dbg_timers("timeout active", &ts_core->timers);
+
+  return timeout_ms;
 }
+
 /****************************************************************************
  * Name: ts_core_process_timers
  *
@@ -562,112 +610,64 @@ static int ts_core_timer_get_date_timeout(struct ts_core_s * const ts_core)
  ****************************************************************************/
 static int ts_core_process_timers(struct ts_core_s * const ts_core)
 {
+  struct timespec curr_ts;
   struct timer_s * timer;
+  int64_t curr_msec;
+  int64_t timer_msec;
 
   DEBUGASSERT(ts_core != NULL);
 
-  /* Get first expired timer from queue */
+  /* Debug print. */
 
-  timer = (struct timer_s *)sq_peek(&ts_core->timers);
-  while (timer)
+  dbg_timers("pre active ", &ts_core->timers);
+
+  /* Get next timer from queue, use peek since timers queue might have
+   * been modified (entries removed) in timer callback. */
+
+  while ((timer = (struct timer_s *)sq_peek(&ts_core->timers)) != NULL)
     {
-      /* Check if systick based timer is active and has expired */
+      int ret;
 
-      if (timer->flags.active && !timer->flags.is_new &&
-          timer->flags.type != TS_TIMER_TYPE_DATE &&
-          timer->expires < clock_systimer())
+      DEBUGASSERT(timer->flags.type >= 0);
+      DEBUGASSERT(timer->flags.type < TS_TIMER_TYPE_MAX);
+
+      /* Get current time. */
+
+      ret = clock_gettime(CLOCK_MONOTONIC, &curr_ts);
+      DEBUGASSERT(ret != ERROR);
+
+      curr_msec = timespec_to_msec(&curr_ts);
+
+      /* Check if timer has expired. */
+
+      timer_msec = timespec_to_msec(&timer->date_expires);
+
+      if (timer_msec <= curr_msec)
         {
-          int ret;
+          perf_dbg_start_ticks(ts_core);
 
-#ifdef TS_CORE_PERF_DEBUG
-          ts_core->elapsed.prev_ticks = clock_systimer();
-#endif
           /* Execute timer callback */
 
-          ret = timer->callback(timer->id, timer->priv);
+          ret = execute_timer_callback(ts_core, timer);
 
-#ifdef TS_CORE_PERF_DEBUG
-          ts_core->elapsed.timers += TICK2MSEC(clock_systimer() -
-                                               ts_core->elapsed.prev_ticks);
-          ts_core->elapsed.ntimers++;
-#endif
+          perf_dbg_add_elapsed_ticks(ts_core, timers);
 
           if (ret < 0)
-            dbg("Timer %d callback returned %d\n", timer->id, ret);
-
-          /* Check if timer was one shot timeout timer */
-
-          if (timer->flags.type == TS_TIMER_TYPE_TIMEOUT)
-            {
-              /* Deactivate timer */
-
-              timer->flags.active = false;
-            }
-          else if (timer->flags.type == TS_TIMER_TYPE_INTERVAL)
-            {
-              uint32_t const current_tickcount = clock_systimer();
-
-              /* Set next timeout event */
-
-              timer->expires += timer->ticks;
-
-              /* Check if expiry time has already passed */
-
-              if (timer->expires < current_tickcount)
-                {
-                  /* Mark timer to expire right away */
-
-                  timer->expires = current_tickcount;
-                }
-            }
+            dbg("RTC timer %d callback returned %d\n", timer->id, ret);
         }
-
-      /* Check if RTC based timer is active */
-
-      if (timer->flags.active && !timer->flags.is_new &&
-          timer->flags.type == TS_TIMER_TYPE_DATE)
+      else
         {
-          struct timespec curr_ts;
-          int ret;
+          /* Not expired timer, so following timers have not expired either. */
 
-          /* Get current time. */
-
-          ret = clock_gettime(CLOCK_MONOTONIC, &curr_ts);
-          DEBUGASSERT(ret != ERROR);
-
-          /* Check if timer has expired. */
-
-          if (timer->date_expires.tv_sec < curr_ts.tv_sec ||
-              (timer->date_expires.tv_sec == curr_ts.tv_sec &&
-               timer->date_expires.tv_nsec < curr_ts.tv_nsec))
-            {
-#ifdef TS_CORE_PERF_DEBUG
-              ts_core->elapsed.prev_ticks = clock_systimer();
-#endif
-              /* Execute timer callback */
-
-              ret = timer->date_callback(timer->id, &timer->date_expires,
-                                         timer->priv);
-
-#ifdef TS_CORE_PERF_DEBUG
-              ts_core->elapsed.timers += TICK2MSEC(clock_systimer() -
-                                                   ts_core->elapsed.prev_ticks);
-              ts_core->elapsed.ntimers++;
-#endif
-
-              if (ret < 0)
-                dbg("Date timer %d callback returned %d\n", timer->id, ret);
-
-              /* Deactivate timer */
-
-              timer->flags.active = false;
-            }
+          break;
         }
-
-      /* Get next timer from queue */
-
-      timer = (struct timer_s *)sq_next(&timer->entry);
     }
+
+  /* Debug print. */
+
+  dbg_timers("post active", &ts_core->timers);
+  dbg_timers("post new   ", &ts_core->new_timers);
+  dbg_timers("post done  ", &ts_core->done_timers);
 
   return OK;
 }
@@ -684,38 +684,42 @@ static int ts_core_process_timers(struct ts_core_s * const ts_core)
  ****************************************************************************/
 static void ts_core_gc_files(struct ts_core_s * const ts_core)
 {
-  struct file_s * file;
+  int i;
+  int num_after;
 
   DEBUGASSERT(ts_core != NULL);
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-  while (file)
+  if (ts_core->nfiles_deleted <= 0)
+    return;
+
+  DEBUGASSERT(ts_core->nfiles > 0 && ts_core->nfiles_deleted <= ts_core->nfiles);
+
+  for (i = 0; i < ts_core->nfiles && ts_core->nfiles_deleted > 0; i++)
     {
-      /* Check if file has been marked for garbage collection */
-
-      if (!file->active)
+      if (ts_core->pollfds[i].fd >= 0)
         {
-          struct file_s * deleted = file;
+          /* Skip active file. */
 
-          /* Move to next file in queue */
-
-          file = (struct file_s *)sq_next(&file->entry);
-
-          /* Remove deleted file from queue */
-
-          sq_rem(&deleted->entry, &ts_core->files);
-
-          /* Free memory associated with file */
-
-          free(deleted);
+          continue;
         }
-      else
+
+      num_after = ts_core->nfiles - i - 1;
+      if (num_after > 0)
         {
-          /* Move to next file in queue */
+          /* Move tail of list forward. */
 
-          file = (struct file_s *)sq_next(&file->entry);
+          memmove(&ts_core->pollfds[i], &ts_core->pollfds[i + 1],
+                  num_after * sizeof(ts_core->pollfds[i]));
+          memmove(&ts_core->files[i], &ts_core->files[i + 1],
+                  num_after * sizeof(ts_core->files[i]));
         }
+
+      ts_core->nfiles--;
+      ts_core->nfiles_deleted--;
+      i--;
     }
+
+  DEBUGASSERT(ts_core->nfiles_deleted == 0);
 }
 
 #ifdef CONFIG_THINGSEE_DEEPSLEEP_WATCHDOG
@@ -769,7 +773,7 @@ static void reset_deepsleep_watchdog(struct ts_core_s * const ts_core)
       TS_TIMER_TYPE_TIMEOUT, CONFIG_THINGSEE_DEEPSLEEP_WATCHDOG_TIMEOUT * 1000,
       no_deepsleep_cb, ts_core);
 }
-#endif // CONFIG_THINGSEE_DEEPSLEEP_WATCHDOG
+#endif /* CONFIG_THINGSEE_DEEPSLEEP_WATCHDOG */
 
 /****************************************************************************
  * Name: ts_core_deepsleep
@@ -780,12 +784,18 @@ static void reset_deepsleep_watchdog(struct ts_core_s * const ts_core)
  * Input Parameters:
  *   ts_core     - Pointer to Thingsee core library structure
  *
+ * Return Value:
+ *   Time deep-slept in milliseconds.
+ *
  ****************************************************************************/
-static void ts_core_deepsleep(struct ts_core_s * const ts_core)
+#ifndef CONFIG_THINGSEE_DEEPSLEEP_DISABLED
+static int ts_core_deepsleep(struct ts_core_s * const ts_core)
 {
-  struct deepsleep_hook_s * entry;
-  struct file_s * file;
-  int timeout_secs;
+  struct deepsleep_hook_s *entry;
+  struct file_s *file;
+  struct pollfd *pfd;
+  int timeout_msecs;
+  int time_deepslept = 0;
 
   sched_lock();
 
@@ -797,10 +807,10 @@ static void ts_core_deepsleep(struct ts_core_s * const ts_core)
           if (!entry->hook(entry->priv))
             {
               /* Hook prevented deep-sleep. */
-#ifdef TS_CORE_DEEPSLEEP_DEBUG
-              dbg("Hook %p(%p)<%s> prevented deep-sleep.\n", entry->hook,
-                  entry->priv, entry->reg_func_name);
-#endif
+
+              deepsleep_dbg("Hook %p(%p)<%s> prevented deep-sleep.\n",
+                            entry->hook, entry->priv, entry->reg_func_name);
+
               goto out;
             }
         }
@@ -812,72 +822,93 @@ static void ts_core_deepsleep(struct ts_core_s * const ts_core)
 
   /* Check all file-descriptors if there is work left to do. */
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-  while (file)
+  if (ts_core->nfiles > 0)
     {
-      if (file->active)
+      int i, ret;
+
+      /* Check with poll if any file has work left. */
+
+      ret = poll(ts_core->pollfds, ts_core->nfiles, 0);
+
+      for (i = 0; ret > 0 && i < ts_core->nfiles; i++)
         {
-          struct pollfd fds = {};
-          int ret;
+          file = &ts_core->files[i];
+          pfd = &ts_core->pollfds[i];
 
-          /* Check with poll if file has work left. */
+          ret -= (pfd->revents != 0);
 
-          fds.fd = file->fd;
-          fds.events = file->events;
-
-          ret = poll(&fds, 1, 0);
-
-          if (ret > 0 && fds.revents > 0)
+          if (pfd->revents != 0)
             {
-#ifdef TS_CORE_DEEPSLEEP_DEBUG
-              dbg("Poll %p(%p)<%s> prevented deep-sleep.\n", file->callback,
-                  file->priv, file->reg_func_name);
-#endif
+              deepsleep_dbg("Poll %p(%p)<%s> prevented deep-sleep.\n",
+                            file->callback, file->priv, file->reg_func_name);
+              (void)file;
+
               goto out;
             }
         }
-
-      /* Move to next file in queue */
-
-      file = (struct file_s *)sq_next(&file->entry);
     }
 
   /* Deep-sleep ok for all hooks. */
 
-  timeout_secs = ts_core_timer_get_date_timeout(ts_core);
+  timeout_msecs = ts_core_timer_get_timeout(ts_core);
 
-  if (timeout_secs == 0)
+  if (timeout_msecs == 0)
     {
-#ifdef TS_CORE_DEEPSLEEP_DEBUG
-      dbg("Deep-sleep: %s.\n", "Timer already expired, skipping deep-sleep");
-#endif
+      deepsleep_dbg("Deep-sleep: %s.\n", "Timer already expired, skipping deep-sleep");
+
       goto out; /* Timer already expired. */
     }
-
-  if (timeout_secs < 0)
+#ifndef BOARD_HAS_SUBSECOND_DEEPSLEEP
+  else if (timeout_msecs > 0 && timeout_msecs < 1000)
     {
-      timeout_secs = 0; /* No timers active, sleep to interrupt. */
+      deepsleep_dbg("Deep-sleep: %s.\n", "Timer expiring soon, skipping deep-sleep");
 
-#ifdef TS_CORE_DEEPSLEEP_DEBUG
-      dbg("Deep-sleep: %s.\n", "No timers active, sleep to interrupt");
+      goto out;
+    }
 #endif
+
+  if (timeout_msecs < 0)
+    {
+      timeout_msecs = 0; /* No timers active, sleep to interrupt. */
+
+      deepsleep_dbg("Deep-sleep: %s.\n", "No timers active, sleep to interrupt");
     }
   else
     {
-      if (timeout_secs > BOARD_DEEPSLEEP_MAX_SECS)
+      if (timeout_msecs > BOARD_DEEPSLEEP_MAX_SECS * 1000)
         {
-          timeout_secs = BOARD_DEEPSLEEP_MAX_SECS;
+          timeout_msecs = BOARD_DEEPSLEEP_MAX_SECS * 1000;
         }
 
-#ifdef TS_CORE_DEEPSLEEP_DEBUG
-      dbg("Deep-sleep: Sleeping %d seconds.\n", timeout_secs);
-#endif
+      deepsleep_dbg("Deep-sleep: Sleeping %.3f seconds.\n", timeout_msecs / 1000.0);
     }
 
 #ifndef CONFIG_ARCH_SIM
+  struct timespec ts_entry, ts_exit;
+
   /* Go to deep-sleep mode. */
 
-  board_deepsleep_with_stopmode(timeout_secs);
+  (void)clock_gettime(CLOCK_MONOTONIC, &ts_entry);
+#ifdef BOARD_HAS_SUBSECOND_DEEPSLEEP
+  board_deepsleep_with_stopmode_msecs(timeout_msecs);
+#else
+  board_deepsleep_with_stopmode(timeout_msecs / 1000);
+#endif
+  (void)clock_gettime(CLOCK_MONOTONIC, &ts_exit);
+
+  /* How long deep-slept? */
+
+  time_deepslept = ts_exit.tv_sec - ts_entry.tv_sec;
+  if (time_deepslept < INT_MAX / MSEC_PER_SEC)
+    {
+      time_deepslept *= MSEC_PER_SEC;
+      time_deepslept += (ts_exit.tv_nsec - ts_entry.tv_nsec) / NSEC_PER_MSEC;
+      DEBUGASSERT(time_deepslept >= 0);
+    }
+  else
+    {
+      time_deepslept = INT_MAX;
+    }
 #endif
 
 #ifdef CONFIG_THINGSEE_DEEPSLEEP_WATCHDOG
@@ -888,8 +919,14 @@ static void ts_core_deepsleep(struct ts_core_s * const ts_core)
 
 out:
   sched_unlock();
-  return;
+  return time_deepslept;
 }
+#else
+static int ts_core_deepsleep(struct ts_core_s * const ts_core)
+{
+  return 0;
+}
+#endif /* CONFIG_THINGSEE_DEEPSLEEP_DISABLED */
 
 /****************************************************************************
  * Name: ts_core_process
@@ -901,37 +938,17 @@ out:
  ****************************************************************************/
 static int ts_core_process(struct ts_core_s *const ts_core)
 {
-  static struct pollfd fds[CONFIG_NFILE_DESCRIPTORS];
-  static struct file_s * files[CONFIG_NFILE_DESCRIPTORS];
-  struct file_s * file;
+  struct file_s *file;
+  struct pollfd *pfd;
   int timeout_ms = -1;
-  int nfds = 0;
+  int time_deepslept = 0;
+  int nrevents;
   int ret;
   int i;
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-
-  while (file)
-    {
-      if (file->active)
-        {
-          /* Check that we do not exceed system defined maximum limit for monitored files */
-
-          DEBUGASSERT(nfds < CONFIG_NFILE_DESCRIPTORS);
-
-          files[nfds] = file;
-          fds[nfds].fd = file->fd;
-          fds[nfds++].events = file->events;
-        }
-
-      /* Move to next file in queue */
-
-      file = (struct file_s *)sq_next(&file->entry);
-    }
-
   /* Deep-sleep handling */
 
-  ts_core_deepsleep(ts_core);
+  time_deepslept = ts_core_deepsleep(ts_core);
 
   /* Get timeout to next timer */
 
@@ -940,25 +957,27 @@ static int ts_core_process(struct ts_core_s *const ts_core)
   /* Limit poll/normal timer length so that we re-evaluate deep-sleepiness
    * periodically. */
 
-  if (timeout_ms > TS_CORE_MAX_POLL_TIMEOUT_MSEC)
+  if (timeout_ms > TS_CORE_MAX_POLL_TIMEOUT_MSEC || timeout_ms == -1)
     {
-      timeout_ms = TS_CORE_MAX_POLL_TIMEOUT_MSEC;
+      timeout_ms = TS_CORE_MAX_POLL_TIMEOUT_MSEC - time_deepslept;
+      if (timeout_ms < TS_CORE_MIN_POLL_TIMEOUT_MSEC)
+        timeout_ms = TS_CORE_MIN_POLL_TIMEOUT_MSEC;
     }
 
-  if (nfds)
+  if (timeout_ms)
     {
-#ifdef TS_CORE_PERF_DEBUG
-      ts_core->elapsed.prev_ticks = clock_systimer();
-#endif
+      deepsleep_dbg("poll-timeout: waiting poll event for %d milliseconds.\n", timeout_ms);
+    }
+
+  if (ts_core->nfiles)
+    {
+      perf_dbg_start_ticks(ts_core);
 
       /* Poll file descriptors with timeout */
 
-      ret = poll(fds, nfds, timeout_ms);
+      ret = poll(ts_core->pollfds, ts_core->nfiles, timeout_ms);
 
-#ifdef TS_CORE_PERF_DEBUG
-      ts_core->elapsed.poll = TICK2MSEC(clock_systimer() -
-                                        ts_core->elapsed.prev_ticks);
-#endif
+      perf_dbg_add_elapsed_ticks(ts_core, poll);
 
       if (ret < 0)
         {
@@ -967,28 +986,29 @@ static int ts_core_process(struct ts_core_s *const ts_core)
           return ret;
         }
 
-      if (ret > 0)
+      nrevents = ret;
+
+      for (i = 0; nrevents > 0 && i < ts_core->nfiles; i++)
         {
-          for (i = 0; i < nfds; i++)
+          file = &ts_core->files[i];
+          pfd = &ts_core->pollfds[i];
+
+          nrevents -= (pfd->revents != 0);
+
+          if (pfd->revents != 0 && file->callback != NULL && pfd->fd >= 0)
             {
-              if (fds[i].revents != 0 && files[i]->callback != NULL && files[i]->active)
-                {
-#ifdef TS_CORE_PERF_DEBUG
-                  ts_core->elapsed.prev_ticks = clock_systimer();
-#endif
-                  /* Execute file descriptor callback */
+              int fd = pfd->fd;
 
-                  ret = files[i]->callback(&fds[i], files[i]->priv);
+              perf_dbg_start_ticks(ts_core);
 
-#ifdef TS_CORE_PERF_DEBUG
-                  ts_core->elapsed.files += TICK2MSEC(clock_systimer() -
-                                                      ts_core->elapsed.prev_ticks);
-                  ts_core->elapsed.nfiles++;
-#endif
+              /* Execute file descriptor callback */
 
-                  if (ret < 0)
-                    dbg("Callback for file %d returned %d.\n", fds[i].fd, ret);
-                }
+              ret = file->callback(pfd, file->priv);
+
+              perf_dbg_add_elapsed_ticks(ts_core, files);
+
+              if (ret < 0)
+                dbg("Callback for file %d returned %d.\n", fd, ret);
             }
         }
 
@@ -1065,19 +1085,13 @@ static int __ts_core_timer_setup(const ts_timer_type_t type,
 
   /* Allocate memory for new timer */
 
-  timer = malloc(sizeof(struct timer_s));
+  timer = calloc(1, sizeof(struct timer_s));
   if (!timer)
     return ERROR;
 
   /* Setup interval timer */
 
-  timer->id = ts_core_get_timer_id(ts_core);
-
-  /* Initialize timer flags */
-
-  memset(&timer->flags, 0, sizeof(timer->flags));
-  timer->flags.active = true;
-  timer->flags.is_new = true;
+  timer->id = ts_core_get_timer_id(ts_core, timer);
   timer->flags.type = type;
 
   if (type == TS_TIMER_TYPE_DATE)
@@ -1088,15 +1102,18 @@ static int __ts_core_timer_setup(const ts_timer_type_t type,
   else
     {
       uint32_t timeout_ms = *(const uint32_t *)timeval;
-      timer->ticks = MSEC2TICK(timeout_ms);
-      timer->expires = clock_systimer() + timer->ticks;
+
+      (void)clock_gettime(CLOCK_MONOTONIC, &timer->date_expires);
+      timespec_add_msec(&timer->date_expires, timeout_ms);
+
       timer->callback = callback;
+      timer->interval_ms = timeout_ms;
     }
   timer->priv = priv;
 
-  /* Add timer to queue */
+  /* Add timer to new timers queue */
 
-  sq_addlast(&timer->entry, &ts_core->timers);
+  sq_addlast(&timer->entry, &ts_core->new_timers);
 
   return timer->id;
 }
@@ -1123,13 +1140,16 @@ int ts_core_initialize(void)
 
   ts_core->deepsleep_watchdog_timer = -1;
 
-  /* Initialize file descriptor queue */
+  /* Initialize file descriptor list */
 
-  sq_init(&ts_core->files);
+  ts_core->nfiles = 0;
+  ts_core->nfiles_deleted = 0;
 
-  /* Initialize timer queue */
+  /* Initialize timer queues */
 
   sq_init(&ts_core->timers);
+  sq_init(&ts_core->new_timers);
+  sq_init(&ts_core->done_timers);
 
   return OK;
 }
@@ -1148,47 +1168,33 @@ int ts_core_initialize(void)
  ****************************************************************************/
 int ts_core_deinitialize(void)
 {
-  struct ts_core_s * ts_core = &g_ts_core;
-  struct file_s * file;
-  struct timer_s * timer;
+  struct ts_core_s *ts_core = &g_ts_core;
+  struct deepsleep_hook_s *hook;
 
   /* Unregister file descriptors */
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-  while (file)
+  memset(ts_core->pollfds, 0, sizeof(ts_core->pollfds));
+  memset(ts_core->files, 0, sizeof(ts_core->files));
+  ts_core->nfiles = 0;
+  ts_core->nfiles_deleted = 0;
+
+  /* Unregister deepsleep hooks */
+
+  /* Remove hook from queue */
+
+  while ((hook = (struct deepsleep_hook_s *)sq_remfirst(
+                   &ts_core->deepsleep_hooks)) != NULL)
     {
-      struct file_s * deleted = file;
+      /* Free memory associated with hook */
 
-      /* Move to next file in queue */
-      file = (struct file_s *)sq_next(&file->entry);
-
-      /* Remove file from queue */
-
-      sq_rem(&deleted->entry, &ts_core->files);
-
-      /* Free memory associated with file */
-
-      free(deleted);
+      free(hook);
     }
 
   /* Free timers */
 
-  timer = (struct timer_s *)sq_peek(&ts_core->timers);
-  while (timer)
-    {
-      struct timer_s * deleted = timer;
-
-      /* Move to next timer in queue */
-      timer = (struct timer_s *)sq_next(&timer->entry);
-
-      /* Remove timer from queue */
-
-      sq_rem(&deleted->entry, &ts_core->timers);
-
-      /* Free memory associated with timer */
-
-      free(deleted);
-    }
+  purge_timers(&ts_core->timers);
+  purge_timers(&ts_core->new_timers);
+  purge_timers(&ts_core->done_timers);
 
   ts_core->deepsleep_watchdog_timer = -1;
 
@@ -1217,8 +1223,10 @@ int __ts_core_fd_register(const int fd, const pollevent_t events,
                           const ts_fd_callback_t callback,
                           void * const priv, const char *reg_func_name)
 {
-  struct ts_core_s * ts_core = &g_ts_core;
-  struct file_s * file;
+  struct ts_core_s *ts_core = &g_ts_core;
+  struct file_s *file;
+  struct pollfd *pfd;
+  int file_idx;
 
   /* Check input parameters */
 
@@ -1229,57 +1237,124 @@ int __ts_core_fd_register(const int fd, const pollevent_t events,
       return ERROR;
     }
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-  while (file)
+  for (file_idx = 0; file_idx < ts_core->nfiles; file_idx++)
     {
+      file = &ts_core->files[file_idx];
+      pfd = &ts_core->pollfds[file_idx];
+
       /* Check if file descriptor is already registered */
 
-      if (file->fd == fd)
+      if (pfd->fd == fd)
         {
           /* File descriptor is already registered */
 
-          if (file->active)
-            {
-              set_errno(EEXIST);
+          set_errno(EEXIST);
 
-              return ERROR;
-            }
-
-          /* We used to 'reuse' entry here. We must not do this, as
-           * new 'fd' might not be for same device instance as the original
-           * 'file->fd'. Setting 'active' could activate callback too early
-           * if poll result handling loop is being currently processed. */
+          return ERROR;
         }
 
-      /* Move to next file */
+      /* Check if file entry is freed */
 
-      file = (struct file_s *)sq_next(&file->entry);
+      if (pfd->fd < 0)
+        {
+          DEBUGASSERT(ts_core->nfiles_deleted > 0);
+
+          /* Reuse this file entry. */
+
+          break;
+        }
     }
 
-  /* Allocate memory for file */
-
-  file = calloc(1, sizeof(struct file_s));
-  if (!file)
+  if (file_idx >= TS_CORE_NFILES)
     {
       set_errno(ENOMEM);
 
       return ERROR;
     }
 
+  if (file_idx == ts_core->nfiles)
+    {
+      /* Not 'reused', increase count. */
+
+      ts_core->nfiles++;
+    }
+  else
+    {
+      /* Reused deleted entry. */
+
+      ts_core->nfiles_deleted--;
+    }
+
+  file = &ts_core->files[file_idx];
+  pfd = &ts_core->pollfds[file_idx];
+
+  /* Initialize memory for file */
+
+  memset(file, 0, sizeof(*file));
+  memset(pfd, 0, sizeof(*pfd));
+
   /* Setup file descriptor for monitoring */
 
-  file->fd = fd;
-  file->active = true;
-  file->events = events;
+  pfd->fd = fd;
+  pfd->events = events;
   file->callback = callback;
   file->priv = priv;
   file->reg_func_name = reg_func_name;
 
-  /* Add file to file descriptor queue */
-
-  sq_addlast(&file->entry, &ts_core->files);
-
   return OK;
+}
+
+/****************************************************************************
+ * Name: ts_core_fd_set_poll_events
+ *
+ * Description:
+ *   Update new poll events for file descriptor.
+ *   Call this only from callback
+ *
+ * Input Parameters:
+ *   fd          - File descriptor that is currently monitored
+ *   events      - new poll events
+ *
+ * Returned Value:
+ *   0 (OK) means the function was executed successfully
+ *  -1 (ERROR) means the function was executed unsuccessfully. Check value of
+ *  errno for more details.
+ *
+ ****************************************************************************/
+int ts_core_fd_set_poll_events(const int fd, const pollevent_t events)
+{
+  struct ts_core_s *ts_core = &g_ts_core;
+  struct pollfd *pfd;
+  int i;
+
+  /* Check input parameters */
+
+  if (fd < 0)
+    {
+      set_errno(EINVAL);
+
+      return ERROR;
+    }
+
+  for (i = 0; i < ts_core->nfiles; i++)
+    {
+      pfd = &ts_core->pollfds[i];
+
+      /* Check if file descriptor matches */
+
+      if (pfd->fd == fd)
+        {
+          /* Update poll events */
+
+          pfd->events = events;
+
+          return OK;
+        }
+    }
+
+  set_errno(EBADF);
+
+  return ERROR;
 }
 
 /****************************************************************************
@@ -1299,8 +1374,9 @@ int __ts_core_fd_register(const int fd, const pollevent_t events,
  ****************************************************************************/
 int ts_core_fd_unregister(const int fd)
 {
-  struct ts_core_s * ts_core = &g_ts_core;
-  struct file_s * file;
+  struct ts_core_s *ts_core = &g_ts_core;
+  struct pollfd *pfd;
+  int i;
 
   /* Check input parameters */
 
@@ -1311,23 +1387,22 @@ int ts_core_fd_unregister(const int fd)
       return ERROR;
     }
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-  while (file)
+  for (i = 0; i < ts_core->nfiles; i++)
     {
-      /* Check if file is active and file descriptor matches */
+      pfd = &ts_core->pollfds[i];
 
-      if (file->active && file->fd == fd)
+      /* Check if file descriptor matches */
+
+      if (pfd->fd == fd)
         {
           /* Mark file for garbage collection */
 
-          file->active = false;
+          pfd->fd = -1;
+          pfd->revents = 0;
+          ts_core->nfiles_deleted++;
 
           return OK;
         }
-
-      /* Move to next file */
-
-      file = (struct file_s *)sq_next(&file->entry);
     }
 
   set_errno(EBADF);
@@ -1408,6 +1483,13 @@ int __ts_core_timer_stop(const int timer_id)
 {
   struct ts_core_s * ts_core = &g_ts_core;
   struct timer_s * timer;
+  int i;
+  sq_queue_t *timer_queues[] =
+    {
+      &ts_core->timers,
+      &ts_core->new_timers,
+      NULL,
+    };
 
   /* Check input parameters */
 
@@ -1418,21 +1500,35 @@ int __ts_core_timer_stop(const int timer_id)
       return ERROR;
     }
 
-  timer = (struct timer_s *)sq_peek(&ts_core->timers);
-  while (timer)
+  for (i = 0; timer_queues[i]; i++)
     {
-      if (timer->flags.active && timer->id == timer_id)
+      struct timer_s * prev = NULL;
+
+      timer = (struct timer_s *)sq_peek(timer_queues[i]);
+      while (timer)
         {
-          /* Deactivate timer */
+          if (timer->id == timer_id)
+            {
+              /* Remove timer from active/new queue */
 
-          timer->flags.active = false;
+              if (prev)
+                sq_remafter(&prev->entry, timer_queues[i]);
+              else
+                sq_remfirst(timer_queues[i]);
 
-          return OK;
+              /* Add timer to completed/'to-be-freed' queue */
+
+              sq_addlast(&timer->entry, &ts_core->done_timers);
+              timer->flags.done = true;
+
+              return OK;
+            }
+
+          /* Move to next timer */
+
+          prev = timer;
+          timer = (struct timer_s *)sq_next(&timer->entry);
         }
-
-      /* Move to next timer */
-
-      timer = (struct timer_s *)sq_next(&timer->entry);
     }
 
   set_errno(EINVAL);
@@ -1511,6 +1607,7 @@ int ts_core_deepsleep_hook_remove(ts_deepsleep_hook_t hookfn)
 {
   struct ts_core_s * ts_core = &g_ts_core;
   struct deepsleep_hook_s * entry;
+  struct deepsleep_hook_s * prev = NULL;
 
   /* Check input parameters */
 
@@ -1528,7 +1625,11 @@ int ts_core_deepsleep_hook_remove(ts_deepsleep_hook_t hookfn)
         {
           /* Remove from list and free entry */
 
-          sq_rem(&entry->entry, &ts_core->deepsleep_hooks);
+          if (prev)
+            sq_remafter(&prev->entry, &ts_core->deepsleep_hooks);
+          else
+            sq_remfirst(&ts_core->deepsleep_hooks);
+
           free(entry);
 
           return OK;
@@ -1536,6 +1637,7 @@ int ts_core_deepsleep_hook_remove(ts_deepsleep_hook_t hookfn)
 
       /* Move to next hook */
 
+      prev = entry;
       entry = (struct deepsleep_hook_s *)sq_next(&entry->entry);
     }
 
@@ -1660,7 +1762,8 @@ void ts_core_mainloop(volatile bool *goon)
 {
   struct ts_core_s * ts_core = &g_ts_core;
 
-  /* Clear 'is_new' mark from timers registered before starting mainloop. */
+  /* Move timers registered before starting mainloop from new queue to active
+   * queue.*/
 
   ts_core_gc_timers(ts_core);
 
@@ -1718,6 +1821,26 @@ static int ts_core_timer_selftest_cb(const int timer_id, void * const priv)
 }
 
 /****************************************************************************
+ * Name: ts_core_timer_selftest_date_cb
+ *
+ * Description:
+ *   Thingsee core timer callback during selftests
+ *
+ ****************************************************************************/
+static int ts_core_timer_selftest_date_cb(const int timer_id,
+                                          const struct timespec *date,
+                                          void * const priv)
+{
+  bool * cb_ok = (bool *)priv;
+
+  DEBUGASSERT(cb_ok);
+
+  *cb_ok = true;
+
+  return OK;
+}
+
+/****************************************************************************
  * Name: ts_core_timer_selftest
  *
  * Description:
@@ -1726,16 +1849,20 @@ static int ts_core_timer_selftest_cb(const int timer_id, void * const priv)
  ****************************************************************************/
 static void ts_core_timer_selftest(void)
 {
+  struct timespec curr_ts;
   struct ts_core_s * ts_core = &g_ts_core;
   struct timer_s * timer;
   int timeout_id;
   bool timeout_cb_ok = false;
   int interval_id;
   bool interval_cb_ok = false;
+  int date_id;
+  bool date_cb_ok = false;
 
   /* Check that there are no timers registered */
 
   DEBUGASSERT(sq_peek(&ts_core->timers) == NULL);
+  DEBUGASSERT(sq_peek(&ts_core->new_timers) == NULL);
 
   /* Setup timeout timer */
 
@@ -1743,63 +1870,84 @@ static void ts_core_timer_selftest(void)
                                    1 * MSEC_PER_TICK,
                                    ts_core_timer_selftest_cb,
                                    &timeout_cb_ok);
-  DEBUGASSERT(timeout_id == TS_CORE_FIRST_TIMER_ID + 0);
+  DEBUGASSERT(ts_core->heap_size > 0);
+  DEBUGASSERT(timeout_id >= TS_CORE_FIRST_TIMER_ID);
+  DEBUGASSERT(timeout_id < TS_CORE_FIRST_TIMER_ID + ts_core->heap_size);
 
   /* Setup interval timer */
 
   interval_id = ts_core_timer_setup(TS_TIMER_TYPE_INTERVAL,
-                                    1 * MSEC_PER_TICK,
+                                    2 * MSEC_PER_TICK,
                                     ts_core_timer_selftest_cb,
                                     &interval_cb_ok);
-  DEBUGASSERT(interval_id == TS_CORE_FIRST_TIMER_ID + 1);
+  DEBUGASSERT(interval_id >= TS_CORE_FIRST_TIMER_ID);
+  DEBUGASSERT(interval_id < TS_CORE_FIRST_TIMER_ID + ts_core->heap_size);
+  DEBUGASSERT(interval_id != timeout_id);
+
+  /* Setup date timer */
+
+  (void)clock_gettime(CLOCK_MONOTONIC, &curr_ts);
+  timespec_add_msec(&curr_ts, 2 * MSEC_PER_TICK);
+  date_id = ts_core_timer_setup_date(&curr_ts,
+                                     ts_core_timer_selftest_date_cb,
+                                     &date_cb_ok);
+  DEBUGASSERT(date_id >= TS_CORE_FIRST_TIMER_ID);
+  DEBUGASSERT(date_id < TS_CORE_FIRST_TIMER_ID + ts_core->heap_size);
+  DEBUGASSERT(date_id != timeout_id);
+  DEBUGASSERT(date_id != interval_id);
 
   /* Check timeout timer */
 
-  timer = (struct timer_s *)sq_peek(&ts_core->timers);
+  timer = (struct timer_s *)sq_peek(&ts_core->new_timers);
   DEBUGASSERT(timer);
-  DEBUGASSERT(timer->flags.active == true);
-  DEBUGASSERT(timer->flags.is_new == true);
   DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_TIMEOUT);
-  /* Not possible to check expires field exact value since system tick counter
-   * is running */
 
   /* Check interval timer */
 
   timer = (struct timer_s *)sq_next(&timer->entry);
   DEBUGASSERT(timer);
-  DEBUGASSERT(timer->flags.active == true);
-  DEBUGASSERT(timer->flags.is_new == true);
   DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_INTERVAL);
-  /* Not possible to check expires field exact value since system tick counter
-   * is running */
+
+  /* Check date timer */
+
+  timer = (struct timer_s *)sq_next(&timer->entry);
+  DEBUGASSERT(timer);
+  DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_DATE);
+
+  timer = (struct timer_s *)sq_next(&timer->entry);
+  DEBUGASSERT(!timer);
 
   /* Clear 'is_new' mark. */
 
   ts_core_gc_timers(ts_core);
 
+  timer = (struct timer_s *)sq_peek(&ts_core->new_timers);
+  DEBUGASSERT(!timer);
+
   /* Check timeout timer */
 
   timer = (struct timer_s *)sq_peek(&ts_core->timers);
   DEBUGASSERT(timer);
-  DEBUGASSERT(timer->flags.active == true);
-  DEBUGASSERT(timer->flags.is_new == false);
   DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_TIMEOUT);
-  /* Not possible to check expires field exact value since system tick counter
-   * is running */
 
   /* Check interval timer */
 
   timer = (struct timer_s *)sq_next(&timer->entry);
   DEBUGASSERT(timer);
-  DEBUGASSERT(timer->flags.active == true);
-  DEBUGASSERT(timer->flags.is_new == false);
   DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_INTERVAL);
-  /* Not possible to check expires field exact value since system tick counter
-   * is running */
+
+  /* Check date timer */
+
+  timer = (struct timer_s *)sq_next(&timer->entry);
+  DEBUGASSERT(timer);
+  DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_DATE);
+
+  timer = (struct timer_s *)sq_next(&timer->entry);
+  DEBUGASSERT(!timer);
 
   /* Wait for timers to expire */
 
-  usleep(3 * USEC_PER_MSEC);
+  usleep(4 * USEC_PER_TICK);
 
   /* Execute callbacks */
 
@@ -1809,24 +1957,46 @@ static void ts_core_timer_selftest(void)
 
   DEBUGASSERT(timeout_cb_ok == true);
   DEBUGASSERT(interval_cb_ok == true);
+  DEBUGASSERT(date_cb_ok == true);
 
-  /* Check timeout timer */
+  /* Check interval timer (should be in new timers queue for reinsertion) */
 
-  timer = (struct timer_s *)sq_peek(&ts_core->timers);
+  timer = (struct timer_s *)sq_peek(&ts_core->new_timers);
   DEBUGASSERT(timer);
-  DEBUGASSERT(timer->flags.active == false);
+  DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_INTERVAL);
+
+  timer = (struct timer_s *)sq_next(&timer->entry);
+  DEBUGASSERT(!timer);
+
+  /* Check timeout timer (done) */
+
+  timer = (struct timer_s *)sq_peek(&ts_core->done_timers);
+  DEBUGASSERT(timer);
   DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_TIMEOUT);
 
-  /* Check interval timer */
+  /* Check date timer (done) */
 
   timer = (struct timer_s *)sq_next(&timer->entry);
   DEBUGASSERT(timer);
-  DEBUGASSERT(timer->flags.active == true);
-  DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_INTERVAL);
+  DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_DATE);
+
+  timer = (struct timer_s *)sq_next(&timer->entry);
+  DEBUGASSERT(!timer);
+
+  timer = (struct timer_s *)sq_peek(&ts_core->timers);
+  DEBUGASSERT(!timer);
 
   /* Garbage collect non-active timers */
 
   ts_core_gc_timers(ts_core);
+
+  timer = (struct timer_s *)sq_peek(&ts_core->new_timers);
+  DEBUGASSERT(!timer);
+  timer = (struct timer_s *)sq_peek(&ts_core->done_timers);
+  DEBUGASSERT(!timer);
+  timer = (struct timer_s *)sq_peek(&ts_core->timers);
+  DEBUGASSERT(timer);
+  DEBUGASSERT(timer->flags.type == TS_TIMER_TYPE_INTERVAL);
 
   /* Try to stop timeout timer, which has already been removed */
 
@@ -1836,6 +2006,10 @@ static void ts_core_timer_selftest(void)
 
   DEBUGASSERT(ts_core_timer_stop(interval_id) == OK);
 
+  /* Try to stop date timer, which has already been removed */
+
+  DEBUGASSERT(ts_core_timer_stop(date_id) == ERROR);
+
   /* Garbage collect non-active timers */
 
   ts_core_gc_timers(ts_core);
@@ -1843,6 +2017,8 @@ static void ts_core_timer_selftest(void)
   /* Check that there are no timers registered */
 
   DEBUGASSERT(sq_peek(&ts_core->timers) == NULL);
+  DEBUGASSERT(sq_peek(&ts_core->new_timers) == NULL);
+  DEBUGASSERT(sq_peek(&ts_core->done_timers) == NULL);
 }
 
 /****************************************************************************
@@ -1866,56 +2042,117 @@ static int ts_core_fd_selftest_cb(const struct pollfd * const pfd, void * const 
  ****************************************************************************/
 static void ts_core_fd_selftest(void)
 {
-  struct ts_core_s * ts_core = &g_ts_core;
-  struct file_s * file;
+  struct ts_core_s *ts_core = &g_ts_core;
+  struct file_s *file;
+  struct pollfd *pfd;
 
   /* Check that there are no files registered */
 
-  DEBUGASSERT(sq_peek(&ts_core->files) == NULL);
+  DEBUGASSERT(ts_core->nfiles == 0);
+  DEBUGASSERT(ts_core->nfiles_deleted == 0);
 
   /* Register fd 1 poll in callback */
 
-  DEBUGASSERT(ts_core_fd_register(1, POLLIN, ts_core_fd_selftest_cb, ts_core) == OK);
+  DEBUGASSERT(ts_core_fd_register(1, POLLIN, ts_core_fd_selftest_cb,
+                                  (void*)(uintptr_t)10) == OK);
 
   /* Register fd 2 poll out callback */
 
-  DEBUGASSERT(ts_core_fd_register(2, POLLOUT, ts_core_fd_selftest_cb, ts_core) == OK);
+  DEBUGASSERT(ts_core_fd_register(2, POLLOUT, ts_core_fd_selftest_cb,
+                                  (void*)(uintptr_t)20) == OK);
+
+  /* Register fd 3 poll out|in callback */
+
+  DEBUGASSERT(ts_core_fd_register(3, POLLOUT|POLLIN, ts_core_fd_selftest_cb,
+                                  (void*)(uintptr_t)30) == OK);
 
   /* Check that files where registered correctly */
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-  DEBUGASSERT(file);
-  DEBUGASSERT(file->active == true);
-  DEBUGASSERT(file->events == POLLIN);
-  DEBUGASSERT(file->fd == 1);
+  DEBUGASSERT(ts_core->nfiles == 3);
+  DEBUGASSERT(ts_core->nfiles_deleted == 0);
 
-  file = (struct file_s *)sq_next(&file->entry);
-  DEBUGASSERT(file);
-  DEBUGASSERT(file->active == true);
-  DEBUGASSERT(file->events == POLLOUT);
-  DEBUGASSERT(file->fd == 2);
+  file = &ts_core->files[0];
+  pfd = &ts_core->pollfds[0];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)10);
+  DEBUGASSERT(pfd->events == POLLIN);
+  DEBUGASSERT(pfd->fd == 1);
+
+  file = &ts_core->files[1];
+  pfd = &ts_core->pollfds[1];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)20);
+  DEBUGASSERT(pfd->events == POLLOUT);
+  DEBUGASSERT(pfd->fd == 2);
+
+  file = &ts_core->files[2];
+  pfd = &ts_core->pollfds[2];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)30);
+  DEBUGASSERT(pfd->events == (POLLOUT|POLLIN));
+  DEBUGASSERT(pfd->fd == 3);
+
+  /* Unregister fd 3 */
+
+  DEBUGASSERT(ts_core_fd_unregister(3) == OK);
 
   /* Unregister fd 2 */
 
   DEBUGASSERT(ts_core_fd_unregister(2) == OK);
 
+  /* Check that files where unregistered correctly */
+
+  DEBUGASSERT(ts_core->nfiles == 3);
+  DEBUGASSERT(ts_core->nfiles_deleted == 2);
+
+  file = &ts_core->files[0];
+  pfd = &ts_core->pollfds[0];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)10);
+  DEBUGASSERT(pfd->events == POLLIN);
+  DEBUGASSERT(pfd->fd == 1);
+
+  file = &ts_core->files[1];
+  pfd = &ts_core->pollfds[1];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)20);
+  DEBUGASSERT(pfd->events == POLLOUT);
+  DEBUGASSERT(pfd->fd == -1);
+
+  file = &ts_core->files[2];
+  pfd = &ts_core->pollfds[2];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)30);
+  DEBUGASSERT(pfd->events == (POLLOUT|POLLIN));
+  DEBUGASSERT(pfd->fd == -1);
+
+  /* Garbage collect files */
+
+  ts_core_gc_files(ts_core);
+
+  DEBUGASSERT(ts_core->nfiles == 1);
+  DEBUGASSERT(ts_core->nfiles_deleted == 0);
+
+  file = &ts_core->files[0];
+  pfd = &ts_core->pollfds[0];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)10);
+  DEBUGASSERT(pfd->events == POLLIN);
+  DEBUGASSERT(pfd->fd == 1);
+
   /* Unregister fd 1 */
 
   DEBUGASSERT(ts_core_fd_unregister(1) == OK);
 
-  /* Check that files where unregistered correctly */
+  DEBUGASSERT(ts_core->nfiles == 1);
+  DEBUGASSERT(ts_core->nfiles_deleted == 1);
 
-  file = (struct file_s *)sq_peek(&ts_core->files);
-  DEBUGASSERT(file);
-  DEBUGASSERT(file->active == false);
-  DEBUGASSERT(file->events == POLLIN);
-  DEBUGASSERT(file->fd == 1);
-
-  file = (struct file_s *)sq_next(&file->entry);
-  DEBUGASSERT(file);
-  DEBUGASSERT(file->active == false);
-  DEBUGASSERT(file->events == POLLOUT);
-  DEBUGASSERT(file->fd == 2);
+  file = &ts_core->files[0];
+  pfd = &ts_core->pollfds[0];
+  DEBUGASSERT(file->callback == ts_core_fd_selftest_cb);
+  DEBUGASSERT(file->priv == (void*)(uintptr_t)10);
+  DEBUGASSERT(pfd->events == POLLIN);
+  DEBUGASSERT(pfd->fd == -1);
 
   /* Garbage collect files */
 
@@ -1923,7 +2160,8 @@ static void ts_core_fd_selftest(void)
 
   /* Check that there are no files registered */
 
-  DEBUGASSERT(sq_peek(&ts_core->files) == NULL);
+  DEBUGASSERT(ts_core->nfiles == 0);
+  DEBUGASSERT(ts_core->nfiles_deleted == 0);
 }
 
 /****************************************************************************

@@ -124,7 +124,7 @@
 int nanosleep(FAR const struct timespec *rqtp, FAR struct timespec *rmtp)
 {
   irqstate_t flags;
-  uint32_t starttick;
+  systime_t starttick;
   sigset_t set;
   struct siginfo value;
   int errval;
@@ -183,9 +183,9 @@ int nanosleep(FAR const struct timespec *rqtp, FAR struct timespec *rmtp)
 
   if (rmtp)
     {
-      uint32_t elapsed;
-      uint32_t remaining;
-      int ticks;
+      systime_t elapsed;
+      systime_t remaining;
+      ssystime_t ticks;
 
       /* First get the number of clock ticks that we were requested to
        * wait.
@@ -202,16 +202,16 @@ int nanosleep(FAR const struct timespec *rqtp, FAR struct timespec *rmtp)
        * amount of time that we failed to wait.
        */
 
-      if (elapsed >= (uint32_t)ticks)
+      if (elapsed >= (systime_t)ticks)
         {
           remaining = 0;
         }
       else
         {
-          remaining = (uint32_t)ticks - elapsed;
+          remaining = (systime_t)ticks - elapsed;
         }
 
-      (void)clock_ticks2time((int)remaining, rmtp);
+      (void)clock_ticks2time((ssystime_t)remaining, rmtp);
     }
 
   irqrestore(flags);
