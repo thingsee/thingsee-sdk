@@ -107,7 +107,7 @@ static void *guard_stop_conman(void *priv)
     }
 
   ret = pthread_mutex_trylock(&g_conman_shutdown.mutex);
-  if (ret < 0)
+  if (ret != 0)
     {
       /* Already shutting down. */
 

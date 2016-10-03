@@ -1524,7 +1524,7 @@ int ubgps_handle_aid_alpsrv(struct ubgps_s * const gps, struct ubx_msg_s const *
   /* Check that AssistNow Offline data is available */
 
   ret = pthread_mutex_trylock(&g_aid_mutex);
-  if (ret < 0)
+  if (ret != 0)
     {
       dbg_int("mutex_trylock failed: %d\n", ret);
       return OK;
@@ -1540,6 +1540,7 @@ int ubgps_handle_aid_alpsrv(struct ubgps_s * const gps, struct ubx_msg_s const *
     {
       free(gps->assist->alp_file);
       gps->assist->alp_file = NULL;
+      pthread_mutex_unlock(&g_aid_mutex);
       return OK;
     }
 

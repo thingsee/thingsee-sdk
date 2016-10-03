@@ -757,7 +757,7 @@ int ubgps_aid_updater_start(struct gps_assistance_s * const assist)
   DEBUGASSERT(assist);
 
   ret = pthread_mutex_trylock(&g_aid_mutex);
-  if (ret < 0)
+  if (ret != 0)
     {
       aid_dbg("mutex locked => updater already running\n");
       return OK;
