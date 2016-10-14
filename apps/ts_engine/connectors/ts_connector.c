@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/ts_engine/connectors/ts_connector.c
  *
- * Copyright (C) 2015 Haltian Ltd.
+ * Copyright (C) 2015-2016 Haltian Ltd.
  * Authors:
  *   Timo Voutilainen <timo.voutilainen@haltian.com>
  *
@@ -108,10 +108,10 @@ struct tsc_context_priv_s
  * Public Data
  ****************************************************************************/
 
-struct ts_connector tsc =
+const struct ts_connector tsc =
 {
   .id = TS_CONNECTOR_ID,
-  .name = "TSC",
+  .name = "Thingsee Cloud",
   .allow_deepsleep = tsc_allow_deepsleep,
   .init = tsc_init,
   .uninit = tsc_uninit,
@@ -334,10 +334,9 @@ static bool tsc_allow_deepsleep(void * const priv)
 static int tsc_parse_cloud_params(const char * const connectors)
 {
   cJSON *root, *arrayitem;
-  cJSON *connid, *port;
-  uint16_t i;
+  cJSON *port;
   int ret = ERROR;
-  uint32_t connector_id;
+  uint32_t connid = 1;
 
   DEBUGASSERT(connectors);
 
@@ -349,68 +348,42 @@ static int tsc_parse_cloud_params(const char * const connectors)
     }
 
   /* Find our connector parameters from array */
-  for (i = 0; i < cJSON_GetArraySize(root); i++)
+  arrayitem = conn_init_find_connector_settings(root, tsc.name, &connid);
+  if (!arrayitem)
     {
-      arrayitem = cJSON_GetArrayItem(root, i);
-      if (!arrayitem)
+      goto out;
+    }
+
+  /* This is our connector data - make sure at least mandatory items can be found*/
+  ts_context.cloud_params.connector_id = connid;
+  ret = OK;
+
+  if ((conn_init_param_from_json(&arrayitem, "connectorName", &ts_context.cloud_params.connector_name) != OK ||
+       conn_init_param_from_json(&arrayitem, "protocol", &ts_context.cloud_params.protocol) != OK ||
+       conn_init_param_from_json(&arrayitem, "host", &ts_context.con.host) != OK ||
+       conn_init_param_from_json(&arrayitem, "deviceAuthUuid", &ts_context.cloud_params.device_auth_uuid) != OK ||
+       conn_init_param_from_json(&arrayitem, "deviceAuthToken", &ts_context.cloud_params.device_auth_token) != OK ||
+       conn_init_param_from_json(&arrayitem, "api", &ts_context.cloud_params.api) != OK))
+    {
+      ret = ERROR;
+      con_dbg("Mandatory item missing in cloud params!\n");
+      goto out;
+    }
+  ts_context.con.port = HTTP_DEFAULT_PORT;
+  port = cJSON_GetObjectItem(arrayitem, "port");
+  if (port)
+    {
+      if (cJSON_type(port) == cJSON_Number)
         {
-          /* No more connectors */
-          break;
-        }
-      connid = cJSON_GetObjectItem(arrayitem, "connectorId");
-      if (!connid)
-        {
-          /* This Connector does not seem to have connector ID ! */
-          con_dbg("Found connector without connector ID!\n");
-          continue;
-        }
-      if (cJSON_type(connid) == cJSON_Number)
-        {
-          connector_id = cJSON_int(connid);
+          ts_context.con.port = cJSON_int(port);
         }
       else
         {
-          con_dbg("Found connector with bad connector ID!\n");
-          continue;
+          con_dbg("Failed to read port - using default (%d)!\n", HTTP_DEFAULT_PORT);
         }
-      /* TODO: Do we need to loop through connectors array
-         Or do we only get the data valid to us (one connector data)?
-         if (connector_id == TS_CONNECTOR_ID)
-         if (connector_id == 1) */
-        {
-          /* This is our connector data - make sure at least mandatory items can be found*/
-          ts_context.cloud_params.connector_id = connector_id;
-          ret = OK;
+    }
 
-          if ((conn_init_param_from_json(&arrayitem, "connectorName", &ts_context.cloud_params.connector_name) != OK ||
-              conn_init_param_from_json(&arrayitem, "protocol", &ts_context.cloud_params.protocol) != OK ||
-              conn_init_param_from_json(&arrayitem, "host", &ts_context.con.host) != OK ||
-              conn_init_param_from_json(&arrayitem, "deviceAuthUuid", &ts_context.cloud_params.device_auth_uuid) != OK ||
-              conn_init_param_from_json(&arrayitem, "deviceAuthToken", &ts_context.cloud_params.device_auth_token) != OK ||
-              conn_init_param_from_json(&arrayitem, "api", &ts_context.cloud_params.api) != OK))
-            {
-              ret = ERROR;
-              con_dbg("Mandatory item missing in cloud params!\n");
-              goto out;
-            }
-          ts_context.con.port = HTTP_DEFAULT_PORT;
-          port = cJSON_GetObjectItem(arrayitem, "port");
-          if (port)
-            {
-              if (cJSON_type(port) == cJSON_Number)
-                {
-                  ts_context.con.port = cJSON_int(port);
-                }
-              else
-                {
-                  con_dbg("Failed to read port - using default (%d)!\n", HTTP_DEFAULT_PORT);
-                }
-            }
-        } /* Our connector data */
-    } /* For */
-
-  out:
-
+out:
   cJSON_Delete(root);
   return ret;
 }

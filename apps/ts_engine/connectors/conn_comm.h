@@ -166,7 +166,10 @@ typedef struct
 void conn_set_protocol_type(conn_protocol_type_t type);
 void conn_free_pointer(void **ptr);
 int conn_init_boolean_from_json(cJSON **container, char *id, bool *dest);
-int conn_init_param_from_json(cJSON **container, char *id, char ** dest);
+int conn_init_number_from_json(cJSON **container, char *id, double *dest);
+int conn_init_param_from_json(cJSON **container, char *id, char **dest);
+cJSON *conn_init_find_connector_settings(cJSON *root, const char *find_name,
+                                         uint32_t *connid);
 void conn_destroy_task(struct conn_network_task_s *task);
 int conn_network_give_new_conn_task(struct conn_network_task_s *conn_task);
 struct conn_network_task_s* conn_create_network_task(

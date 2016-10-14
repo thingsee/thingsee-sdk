@@ -1,1 +1,4 @@
+source "$APPSDIR/ts_engine/connectors/Kconfig_initialstate"
+source "$APPSDIR/ts_engine/connectors/Kconfig_kii"
+source "$APPSDIR/ts_engine/connectors/Kconfig_meshblu"
 source "$APPSDIR/ts_engine/connectors/Kconfig_ts"

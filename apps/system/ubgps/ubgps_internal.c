@@ -200,7 +200,7 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
 
   if (status != OK)
     {
-      dbg("%s: event id: %d, status %s\n", ts_gps_get_statename(state),
+      dbg("%s: event id: %d, status %s\n", ubgps_get_statename(state),
           event->id, status == OK ? "OK" : "ERROR");
     }
 

@@ -1,7 +1,8 @@
 /****************************************************************************
- * apps/thingsee/engine/connector.h
+ * apps/ts_engine/connectors/kii_construct_connext.h
  *
- * Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ * Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ * Author: Pekka Ervasti <pekka.ervasti@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,18 +31,27 @@
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- * Authors:
- *   Pekka Ervasti <pekka.ervasti@haltian.com>
- *
  ****************************************************************************/
 
-#ifndef __TS_ENGINE_CONNECTOR_H__
-#define __TS_ENGINE_CONNECTOR_H__
+#ifndef __APPS_TS_ENGINE_CONNECTORS_KII_CONSTRUCT_CONNEXT_H
+#define __APPS_TS_ENGINE_CONNECTORS_KII_CONSTRUCT_CONNEXT_H
 
-int
-__ts_engine_cancel_connection(void);
+struct ts_context {
+  con_str_t con;
+  bool kii_waiting_access_token:1;
+  bool kii_active:1;
+  kii_cloud_params_s cloud_params;
+  pthread_mutex_t mutex;
+};
 
-int
-ts_engine_select_connector (const uint32_t connector_idx, const struct ts_connector **con);
+conn_workflow_context_s *kii_create_workflow_context(struct ts_payload *payload,
+                                                     send_cb_t cb, const void *priv);
+int kii_post_data_construct(conn_workflow_context_s *context,
+                            char **outhdr, char **outdata);
+struct conn_network_task_s *kii_post_data_process_stream(
+    conn_workflow_context_s *context, int status_code, size_t content_len,
+    char (*stream_getc)(void *priv), void *stream_priv) weak_function;
+struct conn_network_task_s *kii_post_data_process(
+    conn_workflow_context_s *context, int status_code, const char *content) weak_function;
 
-#endif
+#endif /* __APPS_TS_ENGINE_CONNECTORS_KII_CONSTRUCT_CONNEXT_H */

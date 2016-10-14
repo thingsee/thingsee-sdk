@@ -32,6 +32,7 @@
  *
  * Authors:
  *   Pekka Ervasti <pekka.ervasti@haltian.com>
+ *   Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  ****************************************************************************/
 
@@ -39,6 +40,7 @@
 
 #include <stdlib.h>
 #include <debug.h>
+#include <string.h>
 #include <assert.h>
 
 #include <apps/thingsee/ts_core.h>
@@ -59,13 +61,20 @@
 
 struct ts_connector_state
 {
-  struct ts_connector *con;
+  const struct ts_connector *con;
+  uint32_t con_idx;
   int timerid;
   uint32_t conman_connid;
   bool requested:1;
 };
 
-struct ts_connector_state g_state = { .con = NULL, .timerid = -1, .requested = false };
+struct ts_connector_state g_state =
+  {
+    .con = NULL,
+    .con_idx = -1,
+    .timerid = -1,
+    .requested = false
+  };
 
 static int cancel_connection_cb(const int timer_id, void * const priv)
 {
@@ -158,18 +167,53 @@ static int request_connection(void)
   return ret;
 }
 
+static char *
+get_connector_name_by_index(const char *connectors, uint32_t connector_idx)
+{
+  cJSON *root, *arrayitem, *connname;
+  char *connector_name;
 
-static struct ts_connector *
-find_connector_by_id (connector_id_t connector_id)
+  root = cJSON_Parse(connectors);
+  if (!root)
+    {
+      eng_dbg("Failed to parse cloud params\n");
+      return NULL;
+    }
+
+  arrayitem = cJSON_GetArrayItem(root, connector_idx);
+  if (!arrayitem)
+    {
+      cJSON_Delete(root);
+      return NULL;
+    }
+
+  connname = cJSON_GetObjectItem(arrayitem, "connectorName");
+  if (!connname || cJSON_type(connname) != cJSON_String)
+    {
+      eng_dbg("Found connector without connector name!\n");
+      connector_name = strdup("");
+    }
+  else
+    {
+      connector_name = strdup(cJSON_string(connname));
+    }
+
+  cJSON_Delete(root);
+  return connector_name;
+}
+
+static const struct ts_connector *
+find_connector_by_name (const char *connector_name)
 {
   int i;
 
   for (i = 0; ts_connectors[i] != NULL; i++)
     {
-      if (ts_connectors[i]->id == connector_id)
-	{
-	  return ts_connectors[i];
-	}
+      if (ts_connectors[i]->name == connector_name ||
+          strcasecmp(ts_connectors[i]->name, connector_name) == 0)
+        {
+          return ts_connectors[i];
+        }
     }
 
   return NULL;
@@ -182,86 +226,98 @@ __ts_engine_cancel_connection(void)
 }
 
 int
-ts_engine_select_connector (const uint32_t connector_id, struct ts_connector **con)
+ts_engine_select_connector (const uint32_t connector_idx, const struct ts_connector **con)
 {
   int ret;
   const char *connectors;
+  char *connector_name;
 
   *con = NULL;
 
   if (g_state.con)
     {
-      if (g_state.con->id == connector_id)
-	{
+      if (connector_idx != -1 && g_state.con_idx == connector_idx)
+        {
           ret = request_connection();
           if (ret < 0)
             {
               eng_dbg("request_connection failed\n");
             }
           *con = g_state.con;
-	  return OK;
-	}
+          return OK;
+        }
 
       if (g_state.con->allow_deepsleep)
-	{
-	  ret = ts_core_deepsleep_hook_remove (
-	      g_state.con->allow_deepsleep);
-	  if (ret != OK)
-	    {
-	      eng_dbg ("deepsleep hook unregister failed\n");
-	    }
-	}
+        {
+          ret = ts_core_deepsleep_hook_remove (
+              g_state.con->allow_deepsleep);
+          if (ret != OK)
+            {
+              eng_dbg ("deepsleep hook unregister failed\n");
+            }
+        }
 
       /* Uninitialize current */
 
       if (g_state.con->uninit)
-	{
-	  ret = g_state.con->uninit ();
-	  if (ret != OK)
-	    {
-	      return ERROR;
-	    }
-	}
+        {
+          ret = g_state.con->uninit ();
+          if (ret != OK)
+            {
+              return ERROR;
+            }
+        }
 
       g_state.con = NULL;
+      g_state.con_idx = -1;
     }
 
-  if (connector_id == -1)
+  if (connector_idx == -1)
     {
       eng_dbg ("connector uninitialized\n");
       return OK;
     }
 
-  if (connector_id < 0 || connector_id >= count_ts_engine_connectors())
+  connectors = cloud_property_connectors ();
+  if (!connectors)
     {
-      eng_dbg ("connector_id %d does not exist\n", connector_id);
+      eng_dbg("cloud_property_connectors failed\n");
       return ERROR;
     }
 
-  g_state.con = find_connector_by_id (connector_id);
-  if (!g_state.con)
+  connector_name = get_connector_name_by_index(connectors, connector_idx);
+  if (!connector_name)
     {
-      eng_dbg ("connector_id %d does not exist\n", connector_id);
+      eng_dbg ("connector_idx %d does not exist\n", connector_idx);
+      free ((void *)connectors);
       return ERROR;
     }
+
+  eng_dbg("connector_idx %d => connector_name '%s'\n",
+          connector_idx, connector_name);
+
+  g_state.con = find_connector_by_name (connector_name);
+  if (!g_state.con)
+    {
+      eng_dbg ("connector_name %d does not exist\n", connector_name);
+      free(connector_name);
+      free ((void *)connectors);
+      return ERROR;
+    }
+
+  free(connector_name);
+  g_state.con_idx = connector_idx;
 
   /* Initialize */
 
   if (g_state.con->init)
     {
-      connectors = cloud_property_connectors ();
-      if (!connectors)
-        {
-          eng_dbg("cloud_property_connectors failed\n");
-          g_state.con = NULL;
-          return ERROR;
-        }
-
       ret = g_state.con->init (connectors);
       if (ret != OK)
 	{
           eng_dbg("init failed\n");
           g_state.con = NULL;
+          g_state.con_idx = -1;
           free ((void *)connectors);
           return ERROR;
 	}
@@ -271,16 +327,16 @@ ts_engine_select_connector (const uint32_t connector_id, struct ts_connector **c
         {
           eng_dbg("__ts_engine_request_connection failed\n");
         }
-
-      free ((void *)connectors);
     }
+
+  free ((void *)connectors);
 
   /* Register deepsleep callback */
 
   if (g_state.con->allow_deepsleep)
     {
       ts_core_deepsleep_hook_add (g_state.con->allow_deepsleep,
-                                  g_state.con);
+                                  (void *)g_state.con);
     }
 
   *con = g_state.con;

@@ -1,7 +1,8 @@
 /****************************************************************************
- * apps/thingsee/engine/connector.h
+ * apps/ts_engine/connectors/kii_connext.h
  *
- * Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ * Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ * Author: Timo Voutilainen <timo.voutilainen@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,18 +31,51 @@
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- * Authors:
- *   Pekka Ervasti <pekka.ervasti@haltian.com>
- *
  ****************************************************************************/
 
-#ifndef __TS_ENGINE_CONNECTOR_H__
-#define __TS_ENGINE_CONNECTOR_H__
+#ifndef __APPS_TS_ENGINE_CONNECTORS_KII_CONNEXT_H
+#define __APPS_TS_ENGINE_CONNECTORS_KII_CONNEXT_H
 
-int
-__ts_engine_cancel_connection(void);
+#include "connector.h"
+#include "conn_comm.h"
 
-int
-ts_engine_select_connector (const uint32_t connector_idx, const struct ts_connector **con);
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
 
-#endif
+/****************************************************************************
+ * Public Types
+ ****************************************************************************/
+typedef struct
+{
+  uint32_t connector_id;
+  char *connector_name;
+  char *protocol;
+  char *app_id;
+  char *app_key;
+  char *access_token;
+  char *thing_type;
+  char *thing_id;
+  char *vendor_thing_id;
+  char *password;
+  char *kii_vendor;
+  char *bucket;
+  char *ext;
+}kii_cloud_params_s;
+
+typedef enum kii_get_ext_status
+{
+  KII_EXT_OK = 0,
+  KII_EXT_WAITING,
+  KII_EXT_FAILED
+}kii_get_ext_status_t;
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+kii_get_ext_status_t kii_get_vendor_thing_id(char **vendor_thing_id);
+
+kii_get_ext_status_t kii_get_configuration(kii_cloud_params_s *cloud_params,   con_str_t *con);
+
+ #endif /* __APPS_TS_ENGINE_CONNECTORS_KII_CONNEXT_H */

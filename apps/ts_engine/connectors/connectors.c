@@ -4,9 +4,15 @@
 #include <sys/types.h>
 #include "connector.h"
 
-extern struct ts_connector tsc;
+extern const struct ts_connector initialstate;
+extern const struct ts_connector kii;
+extern const struct ts_connector meshblu;
+extern const struct ts_connector tsc;
 
-struct ts_connector *ts_connectors[] = {
+const struct ts_connector * const ts_connectors[] = {
+        &initialstate,
+        &kii,
+        &meshblu,
         &tsc,
         NULL,
 };

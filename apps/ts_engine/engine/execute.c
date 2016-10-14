@@ -1029,7 +1029,7 @@ __ts_engine_send(struct ts_payload *payload, struct url * const url,
                  void const *priv)
 {
 #ifdef CONFIG_THINGSEE_CONNECTORS
-  struct ts_connector *con;
+  const struct ts_connector *con;
   int ret;
 
   ret = ts_engine_select_connector(0, &con);
@@ -1071,7 +1071,7 @@ __ts_engine_multisend(struct ts_payload **payloads, int number_of_payloads,
                       struct url * const url, void const *priv)
 {
 #ifdef CONFIG_THINGSEE_CONNECTORS
-  struct ts_connector *con;
+  const struct ts_connector *con;
   int ret;
 
   ret = ts_engine_select_connector(0, &con);
@@ -1196,7 +1196,7 @@ send_cause (struct ts_cause *cause)
   int ret;
 
 #ifdef CONFIG_THINGSEE_CONNECTORS
-  struct ts_connector *con;
+  const struct ts_connector *con;
 
   ret = ts_engine_select_connector(0, &con);
   if (ret == OK && con->send)
@@ -1363,7 +1363,7 @@ static void
 send_log (struct ts_engine_app *app, struct url * const url)
 {
   bool multisend;
-  struct ts_connector *con;
+  const struct ts_connector *con;
   int ret;
 
   eng_dbg ("send log to connector %d\n", 0);
@@ -1956,7 +1956,7 @@ profile_stop(struct ts_engine *engine, bool free, bool uninit_connector)
   __ts_engine_cancel_connection();
 
 #ifdef CONFIG_THINGSEE_CONNECTORS
-  struct ts_connector *con;
+  const struct ts_connector *con;
 
   if (uninit_connector)
     {

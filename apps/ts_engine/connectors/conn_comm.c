@@ -53,6 +53,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <math.h>
 
 #include <apps/system/conman.h>
 
@@ -531,6 +532,35 @@ int conn_init_boolean_from_json(cJSON **container, char *id, bool *dest)
   return OK;
 }
 
+int conn_init_number_from_json(cJSON **container, char *id, double *dest)
+{
+  cJSON *obj;
+  int type;
+
+  DEBUGASSERT(container && *container && id && dest);
+
+  obj = cJSON_GetObjectItem(*container, id);
+  if(!obj)
+    {
+      con_dbg("Failed to find %s\n", id);
+      return ERROR;
+    }
+
+  type = cJSON_type(obj);
+  if (type != cJSON_Number && type != cJSON_False && type != cJSON_True)
+    {
+      con_dbg("Illegal type for number: %d\n", type);
+      return ERROR;
+    }
+
+  if (type == cJSON_True)
+    *dest = 1;
+  else
+    *dest = cJSON_double(obj);
+
+  return OK;
+}
+
 int conn_init_param_from_json(cJSON **container, char *id, char ** dest)
 {
   char *tmp;
@@ -568,6 +598,68 @@ int conn_init_param_from_json(cJSON **container, char *id, char ** dest)
   *dest = tmp;
 
   return OK;
+}
+
+cJSON *conn_init_find_connector_settings(cJSON *root, const char *find_name,
+                                         uint32_t *connid)
+{
+  double connector_id = 0;
+  cJSON *arrayitem;
+  cJSON *connname;
+  const char *connector_name;
+  int i;
+
+  DEBUGASSERT(root && find_name && connid);
+
+  /* Find our connector parameters from array */
+  for (i = 0; i < cJSON_GetArraySize(root); i++)
+    {
+      arrayitem = cJSON_GetArrayItem(root, i);
+      if (!arrayitem)
+        {
+          /* No more connectors */
+          break;
+        }
+
+      connname = cJSON_GetObjectItem(arrayitem, "connectorName");
+      if (!connname)
+        {
+          /* This Connector does not seem to have connector name ! */
+          con_dbg("Found connector without connector name!\n");
+          continue;
+        }
+      if (cJSON_type(connname) == cJSON_String)
+        {
+          connector_name = cJSON_string(connname);
+        }
+      else
+        {
+          con_dbg("Found connector with bad connector name!\n");
+          continue;
+        }
+
+      if (strcasecmp(connector_name, find_name) != 0)
+        {
+          /* Connector name did not match, try next. */
+          continue;
+        }
+      else
+        {
+          if (conn_init_number_from_json(&arrayitem, "connectorId",
+                                         &connector_id) == OK)
+            {
+              *connid = lround(connector_id);
+              return arrayitem;
+            }
+          else
+            {
+              con_dbg("Mandatory item missing in cloud params!\n");
+            }
+        }
+    }
+
+  con_dbg("Failed to find cloud params for '%s'\n", find_name);
+  return NULL;
 }
 
 void conn_destroy_task(struct conn_network_task_s *task)

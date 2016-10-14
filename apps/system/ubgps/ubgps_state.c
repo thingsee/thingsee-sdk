@@ -249,6 +249,7 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
 
           dbg_sm("SM_EVENT_TARGET_STATE -> %u\n", target->target_state);
 
+#ifdef CONFIG_UBGPS_PSM_MODE
           /* Stop PSM timer */
 
           if (gps->state.psm_timer_id > 0)
@@ -256,6 +257,7 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
               ts_core_timer_stop(gps->state.psm_timer_id);
               gps->state.psm_timer_id = -1;
             }
+#endif
 
           if (target->target_state != GPS_STATE_POWER_OFF)
             {
