@@ -1,4 +1,4 @@
-#include "../retail/defconfig"
+#include "../retail-tls/defconfig"
 
 CONFIG_THINGSEE_ENGINE_DBG=y
 CONFIG_THINGSEE_CONNECTORS_DEBUG=y
