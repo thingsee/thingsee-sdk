@@ -576,7 +576,7 @@ static inline void enc_src(FAR struct enc_driver_s *priv)
    * workaround this condition.
    *
    * Also, "After a System Reset, all PHY registers should not be read or
-   * written to until at least 50 µs have passed since the Reset has ended.
+   * written to until at least 50 ï¿½s have passed since the Reset has ended.
    * All registers will revert to their Reset default values. The dual
    * port buffer memory will maintain state throughout the System Reset."
    */
@@ -757,7 +757,7 @@ static void enc_wrbreg(FAR struct enc_driver_s *priv, uint8_t ctrlreg,
 static int enc_waitbreg(FAR struct enc_driver_s *priv, uint8_t ctrlreg,
                         uint8_t bits, uint8_t value)
 {
-  uint32_t start = clock_systimer();
+  systime_t start = clock_systimer();
   uint32_t elapsed;
   uint8_t  rddata;
 
@@ -1007,7 +1007,7 @@ static uint16_t enc_rdphy(FAR struct enc_driver_s *priv, uint8_t phyaddr)
 
   enc_wrbreg(priv, ENC_MICMD, MICMD_MIIRD);
 
-  /*   3. Wait 10.24 µs. Poll the MISTAT.BUSY bit to be certain that the
+  /*   3. Wait 10.24 ï¿½s. Poll the MISTAT.BUSY bit to be certain that the
    *      operation is complete. While busy, the host controller should not
    *      start any MIISCAN operations or write to the MIWRH register.
    *
@@ -1075,7 +1075,7 @@ static void enc_wrphy(FAR struct enc_driver_s *priv, uint8_t phyaddr,
   enc_wrbreg(priv, ENC_MIWRH, phydata >> 8);
 
   /*    The PHY register will be written after the MIIM operation completes,
-   *    which takes 10.24 µs. When the write operation has completed, the BUSY
+   *    which takes 10.24 ï¿½s. When the write operation has completed, the BUSY
    *    bit will clear itself.
    *
    *    The host controller should not start any MIISCAN or MIIRD operations
@@ -2398,7 +2398,7 @@ static void enc_pwrsave(FAR struct enc_driver_s *priv)
  *   a slightly modified procedure:
  *
  *   1. Wake-up by clearing ECON2.PWRSV.
- *   2. Wait at least 300 ìs for the PHY to stabilize. To accomplish the
+ *   2. Wait at least 300 ï¿½s for the PHY to stabilize. To accomplish the
  *      delay, the host controller may poll ESTAT.CLKRDY and wait for it
  *      to become set.
  *   3. Restore receive capability by setting ECON1.RXEN.
@@ -2429,7 +2429,7 @@ static void enc_pwrfull(FAR struct enc_driver_s *priv)
 
   enc_bfcgreg(priv, ENC_ECON2, ECON2_PWRSV);
 
-  /* 2. Wait at least 300 ìs for the PHY to stabilize. To accomplish the
+  /* 2. Wait at least 300 ï¿½s for the PHY to stabilize. To accomplish the
    * delay, the host controller may poll ESTAT.CLKRDY and wait for it to
    * become set.
    */

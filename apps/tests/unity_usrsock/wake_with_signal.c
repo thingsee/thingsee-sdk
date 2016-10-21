@@ -2,7 +2,7 @@
  * apps/examples/unity_usrsock/wake_with_signal.c
  * Wake blocked IO with signal or daemon abort
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Authors: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,6 +56,9 @@
 
 #define TEST_FLAG_PAUSE_USRSOCK_HANDLING (1 << 0)
 #define TEST_FLAG_DAEMON_ABORT           (1 << 1)
+#define TEST_FLAG_MULTI_THREAD           (1 << 2)
+
+#define MAX_THREADS                      4
 
 /****************************************************************************
  * Private Types
@@ -81,9 +84,10 @@ enum e_test_type
 /****************************************************************************
  * Private Data
  ****************************************************************************/
-static pthread_t tid;
+static pthread_t tid[MAX_THREADS];
 static sem_t tid_startsem;
-static int test_sd;
+static sem_t tid_releasesem;
+static int test_sd[MAX_THREADS];
 static enum e_test_type test_type;
 static int test_flags;
 
@@ -97,19 +101,23 @@ static int test_flags;
 
 static FAR void * usrsock_blocking_socket_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   bool test_abort = !!(test_flags & TEST_FLAG_DAEMON_ABORT);
   bool test_hang = !!(test_flags & TEST_FLAG_PAUSE_USRSOCK_HANDLING);
 
   TEST_ASSERT_TRUE(test_hang);
   TEST_ASSERT_TRUE(test_abort);
 
-  /* Attempt hanging open socket. */
-
-  TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
+  /* Allow main thread to hang usrsock daemon at this point. */
 
   sem_post(&tid_startsem);
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_EQUAL(-1, test_sd);
+  sem_wait(&tid_releasesem);
+
+  /* Attempt hanging open socket. */
+
+  sem_post(&tid_startsem);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_EQUAL(-1, test_sd[tidx]);
   TEST_ASSERT_EQUAL(ENETDOWN, errno);
 
   return NULL;
@@ -117,73 +125,81 @@ static FAR void * usrsock_blocking_socket_thread(FAR void *param)
 
 static FAR void * usrsock_blocking_close_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   struct sockaddr_in addr;
   int ret;
   bool test_abort = !!(test_flags & TEST_FLAG_DAEMON_ABORT);
   bool test_hang = !!(test_flags & TEST_FLAG_PAUSE_USRSOCK_HANDLING);
 
+  TEST_ASSERT_TRUE(test_hang);
+  TEST_ASSERT_TRUE(test_abort);
+
   /* Open socket. */
 
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_TRUE(test_sd >= 0);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_TRUE(test_sd[tidx] >= 0);
 
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
   addr.sin_family = AF_INET;
   addr.sin_port = htons(255);
 
-  TEST_ASSERT_TRUE(test_hang);
-  TEST_ASSERT_TRUE(test_abort);
+  /* Allow main thread to hang usrsock daemon at this point. */
+
+  sem_post(&tid_startsem);
+  sem_wait(&tid_releasesem);
 
   /* Attempt hanging close socket. */
 
-  TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
-
   sem_post(&tid_startsem);
-  ret = close(test_sd);
+  ret = close(test_sd[tidx]);
   TEST_ASSERT_EQUAL(0, ret);
-  test_sd = -1;
+  test_sd[tidx] = -1;
 
   return NULL;
 }
 
 static FAR void * usrsock_blocking_connect_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   struct sockaddr_in addr;
   int ret;
   bool test_abort = !!(test_flags & TEST_FLAG_DAEMON_ABORT);
   bool test_hang = !!(test_flags & TEST_FLAG_PAUSE_USRSOCK_HANDLING);
 
+  TEST_ASSERT_TRUE(test_hang || !test_hang);
+
   /* Open socket. */
 
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_TRUE(test_sd >= 0);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_TRUE(test_sd[tidx] >= 0);
 
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
   addr.sin_family = AF_INET;
   addr.sin_port = htons(255);
 
-  if (test_hang)
-    {
-      TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
-    }
+  /* Allow main thread to hang usrsock daemon at this point. */
+
+  sem_post(&tid_startsem);
+  sem_wait(&tid_releasesem);
 
   /* Attempt blocking connect. */
 
   sem_post(&tid_startsem);
-  ret = connect(test_sd, (FAR const struct sockaddr *)&addr, sizeof(addr));
+  ret = connect(test_sd[tidx], (FAR const struct sockaddr *)&addr, sizeof(addr));
   TEST_ASSERT_EQUAL(-1, ret);
   TEST_ASSERT_EQUAL(test_abort ? ECONNABORTED : EINTR, errno);
 
   /* Close socket */
 
-  TEST_ASSERT_TRUE(close(test_sd) >= 0);
-  test_sd = -1;
+  TEST_ASSERT_TRUE(close(test_sd[tidx]) >= 0);
+  test_sd[tidx] = -1;
 
   return NULL;
 }
 
 static FAR void * usrsock_blocking_setsockopt_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   struct sockaddr_in addr;
   int ret;
   int value;
@@ -192,8 +208,8 @@ static FAR void * usrsock_blocking_setsockopt_thread(FAR void *param)
 
   /* Open socket. */
 
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_TRUE(test_sd >= 0);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_TRUE(test_sd[tidx] >= 0);
 
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
   addr.sin_family = AF_INET;
@@ -202,25 +218,29 @@ static FAR void * usrsock_blocking_setsockopt_thread(FAR void *param)
   TEST_ASSERT_TRUE(test_hang);
   TEST_ASSERT_TRUE(test_abort);
 
-  /* Attempt hanging setsockopt. */
+  /* Allow main thread to hang usrsock daemon at this point. */
 
-  TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
+  sem_post(&tid_startsem);
+  sem_wait(&tid_releasesem);
+
+  /* Attempt hanging setsockopt. */
 
   sem_post(&tid_startsem);
   value = 1;
-  ret = setsockopt(test_sd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
+  ret = setsockopt(test_sd[tidx], SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
   TEST_ASSERT_EQUAL(-1, ret);
 
   /* Close socket */
 
-  TEST_ASSERT_TRUE(close(test_sd) >= 0);
-  test_sd = -1;
+  TEST_ASSERT_TRUE(close(test_sd[tidx]) >= 0);
+  test_sd[tidx] = -1;
 
   return NULL;
 }
 
 static FAR void * usrsock_blocking_getsockopt_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   struct sockaddr_in addr;
   int ret;
   int value;
@@ -230,8 +250,8 @@ static FAR void * usrsock_blocking_getsockopt_thread(FAR void *param)
 
   /* Open socket. */
 
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_TRUE(test_sd >= 0);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_TRUE(test_sd[tidx] >= 0);
 
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
   addr.sin_family = AF_INET;
@@ -240,35 +260,41 @@ static FAR void * usrsock_blocking_getsockopt_thread(FAR void *param)
   TEST_ASSERT_TRUE(test_hang);
   TEST_ASSERT_TRUE(test_abort);
 
-  /* Attempt hanging getsockopt. */
+  /* Allow main thread to hang usrsock daemon at this point. */
 
-  TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
+  sem_post(&tid_startsem);
+  sem_wait(&tid_releasesem);
+
+  /* Attempt hanging getsockopt. */
 
   sem_post(&tid_startsem);
   value = -1;
   valuelen = sizeof(value);
-  ret = getsockopt(test_sd, SOL_SOCKET, SO_REUSEADDR, &value, &valuelen);
+  ret = getsockopt(test_sd[tidx], SOL_SOCKET, SO_REUSEADDR, &value, &valuelen);
   TEST_ASSERT_EQUAL(-1, ret);
 
   /* Close socket */
 
-  TEST_ASSERT_TRUE(close(test_sd) >= 0);
-  test_sd = -1;
+  TEST_ASSERT_TRUE(close(test_sd[tidx]) >= 0);
+  test_sd[tidx] = -1;
 
   return NULL;
 }
 
 static FAR void * usrsock_blocking_send_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   struct sockaddr_in addr;
   int ret;
   bool test_abort = !!(test_flags & TEST_FLAG_DAEMON_ABORT);
   bool test_hang = !!(test_flags & TEST_FLAG_PAUSE_USRSOCK_HANDLING);
 
+  TEST_ASSERT_TRUE(test_hang || !test_hang);
+
   /* Open socket. */
 
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_TRUE(test_sd >= 0);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_TRUE(test_sd[tidx] >= 0);
 
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
   addr.sin_family = AF_INET;
@@ -276,40 +302,43 @@ static FAR void * usrsock_blocking_send_thread(FAR void *param)
 
   /* Connect socket. */
 
-  ret = connect(test_sd, (FAR const struct sockaddr *)&addr, sizeof(addr));
+  ret = connect(test_sd[tidx], (FAR const struct sockaddr *)&addr, sizeof(addr));
   TEST_ASSERT_EQUAL(0, ret);
 
-  if (test_hang)
-    {
-      TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
-    }
+  /* Allow main thread to hang usrsock daemon at this point. */
+
+  sem_post(&tid_startsem);
+  sem_wait(&tid_releasesem);
 
   /* Attempt blocking send. */
 
   sem_post(&tid_startsem);
-  ret = send(test_sd, &addr, sizeof(addr), 0);
+  ret = send(test_sd[tidx], &addr, sizeof(addr), 0);
   TEST_ASSERT_EQUAL(-1, ret);
   TEST_ASSERT_EQUAL(test_abort ? EPIPE : EINTR, errno);
 
   /* Close socket */
 
-  TEST_ASSERT_TRUE(close(test_sd) >= 0);
-  test_sd = -1;
+  TEST_ASSERT_TRUE(close(test_sd[tidx]) >= 0);
+  test_sd[tidx] = -1;
 
   return NULL;
 }
 
 static FAR void * usrsock_blocking_recv_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   struct sockaddr_in addr;
   int ret;
   bool test_abort = !!(test_flags & TEST_FLAG_DAEMON_ABORT);
   bool test_hang = !!(test_flags & TEST_FLAG_PAUSE_USRSOCK_HANDLING);
 
+  TEST_ASSERT_TRUE(test_hang || !test_hang);
+
   /* Open socket. */
 
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_TRUE(test_sd >= 0);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_TRUE(test_sd[tidx] >= 0);
 
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
   addr.sin_family = AF_INET;
@@ -317,41 +346,45 @@ static FAR void * usrsock_blocking_recv_thread(FAR void *param)
 
   /* Connect socket. */
 
-  ret = connect(test_sd, (FAR const struct sockaddr *)&addr, sizeof(addr));
+  ret = connect(test_sd[tidx], (FAR const struct sockaddr *)&addr, sizeof(addr));
   TEST_ASSERT_EQUAL(0, ret);
 
-  if (test_hang)
-    {
-      TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
-    }
+  /* Allow main thread to hang usrsock daemon at this point. */
+
+  sem_post(&tid_startsem);
+  sem_wait(&tid_releasesem);
 
   /* Attempt blocking recv. */
 
   sem_post(&tid_startsem);
-  ret = recv(test_sd, &addr, sizeof(addr), 0);
+  ret = recv(test_sd[tidx], &addr, sizeof(addr), 0);
   TEST_ASSERT_EQUAL(-1, ret);
   TEST_ASSERT_EQUAL(test_abort ? EPIPE : EINTR, errno);
 
   /* Close socket */
 
-  TEST_ASSERT_TRUE(close(test_sd) >= 0);
-  test_sd = -1;
+  TEST_ASSERT_TRUE(close(test_sd[tidx]) >= 0);
+  test_sd[tidx] = -1;
 
   return NULL;
 }
 
 static FAR void * usrsock_blocking_poll_thread(FAR void *param)
 {
+  intptr_t tidx = (intptr_t)param;
   struct sockaddr_in addr;
   int ret;
   struct pollfd pfd = {};
   bool test_abort = !!(test_flags & TEST_FLAG_DAEMON_ABORT);
   bool test_hang = !!(test_flags & TEST_FLAG_PAUSE_USRSOCK_HANDLING);
 
+  TEST_ASSERT_TRUE(test_abort);
+  TEST_ASSERT_TRUE(test_hang || !test_hang);
+
   /* Open socket. */
 
-  test_sd = socket(AF_INET, SOCK_STREAM, 0);
-  TEST_ASSERT_TRUE(test_sd >= 0);
+  test_sd[tidx] = socket(AF_INET, SOCK_STREAM, 0);
+  TEST_ASSERT_TRUE(test_sd[tidx] >= 0);
 
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
   addr.sin_family = AF_INET;
@@ -359,18 +392,17 @@ static FAR void * usrsock_blocking_poll_thread(FAR void *param)
 
   /* Connect socket. */
 
-  ret = connect(test_sd, (FAR const struct sockaddr *)&addr, sizeof(addr));
+  ret = connect(test_sd[tidx], (FAR const struct sockaddr *)&addr, sizeof(addr));
   TEST_ASSERT_EQUAL(0, ret);
 
-  TEST_ASSERT_TRUE(test_abort);
-  if (test_hang)
-    {
-      TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
-    }
+  /* Allow main thread to hang usrsock daemon at this point. */
+
+  sem_post(&tid_startsem);
+  sem_wait(&tid_releasesem);
 
   /* Attempt poll. */
 
-  pfd.fd = test_sd;
+  pfd.fd = test_sd[tidx];
   pfd.events = POLLIN;
 
   sem_post(&tid_startsem);
@@ -380,64 +412,97 @@ static FAR void * usrsock_blocking_poll_thread(FAR void *param)
 
   /* Attempt read from aborted socket */
 
-  ret = recv(test_sd, &addr, sizeof(addr), 0);
+  ret = recv(test_sd[tidx], &addr, sizeof(addr), 0);
   TEST_ASSERT_EQUAL(-1, ret);
   TEST_ASSERT_EQUAL(EPIPE, errno);
 
   /* Close socket */
 
-  TEST_ASSERT_TRUE(close(test_sd) >= 0);
-  test_sd = -1;
+  TEST_ASSERT_TRUE(close(test_sd[tidx]) >= 0);
+  test_sd[tidx] = -1;
 
   return NULL;
 }
 
 static void do_wake_test(enum e_test_type type, int flags)
 {
-  static const pthread_startroutine_t thread_funcs[__TEST_TYPE_MAX] =
+  static const struct
   {
-    [TEST_TYPE_SOCKET]      = usrsock_blocking_socket_thread,
-    [TEST_TYPE_CLOSE]       = usrsock_blocking_close_thread,
-    [TEST_TYPE_CONNECT]     = usrsock_blocking_connect_thread,
-    [TEST_TYPE_SETSOCKOPT]  = usrsock_blocking_setsockopt_thread,
-    [TEST_TYPE_GETSOCKOPT]  = usrsock_blocking_getsockopt_thread,
-    [TEST_TYPE_RECV]        = usrsock_blocking_recv_thread,
-    [TEST_TYPE_SEND]        = usrsock_blocking_send_thread,
-    [TEST_TYPE_POLL]        = usrsock_blocking_poll_thread,
-  };
+    pthread_startroutine_t fn;
+    bool stop_only_on_hang;
+  } thread_funcs[__TEST_TYPE_MAX] =
+    {
+      [TEST_TYPE_SOCKET]      = { usrsock_blocking_socket_thread, false },
+      [TEST_TYPE_CLOSE]       = { usrsock_blocking_close_thread, false },
+      [TEST_TYPE_CONNECT]     = { usrsock_blocking_connect_thread, true },
+      [TEST_TYPE_SETSOCKOPT]  = { usrsock_blocking_setsockopt_thread, false },
+      [TEST_TYPE_GETSOCKOPT]  = { usrsock_blocking_getsockopt_thread, false },
+      [TEST_TYPE_RECV]        = { usrsock_blocking_recv_thread, true },
+      [TEST_TYPE_SEND]        = { usrsock_blocking_send_thread, true },
+      [TEST_TYPE_POLL]        = { usrsock_blocking_poll_thread, true },
+    };
   int ret;
+  int nthreads = (flags & TEST_FLAG_MULTI_THREAD) ? MAX_THREADS : 1;
+  int tidx;
+  bool test_abort = !!(flags & TEST_FLAG_DAEMON_ABORT);
+  bool test_hang = !!(flags & TEST_FLAG_PAUSE_USRSOCK_HANDLING);
 
   /* Start test daemon. */
 
   TEST_ASSERT_EQUAL(OK, usrsocktest_daemon_start(&usrsocktest_daemon_config));
   TEST_ASSERT_EQUAL(0, usrsocktest_daemon_get_num_active_sockets());
 
-  /* Launch worker thread. */
+  /* Launch worker threads. */
 
   test_type = type;
   test_flags = flags;
-  ret = pthread_create(&tid, NULL, thread_funcs[type], NULL);
-  TEST_ASSERT_EQUAL(OK, ret);
+  for (tidx = 0; tidx < nthreads; tidx++)
+    {
+      ret = pthread_create(&tid[tidx], NULL, thread_funcs[type].fn,
+                           (pthread_addr_t)(intptr_t)tidx);
+      TEST_ASSERT_EQUAL(OK, ret);
+    }
 
-  /* Let worker to start. */
+/* Let workers to start. */
 
-  sem_wait(&tid_startsem);
+  for (tidx = 0; tidx < nthreads; tidx++)
+    {
+      sem_wait(&tid_startsem);
+    }
+
+  if (test_hang || !thread_funcs[type].stop_only_on_hang)
+    {
+      TEST_ASSERT_EQUAL(0, usrsocktest_daemon_pause_usrsock_handling(true));
+    }
+
+  for (tidx = 0; tidx < nthreads; tidx++)
+    {
+      sem_post(&tid_releasesem);
+    }
+  for (tidx = 0; tidx < nthreads; tidx++)
+    {
+      sem_wait(&tid_startsem);
+    }
+
   usleep(100 * USEC_PER_MSEC); /* Let worker thread proceed to blocking
                                 * function. */
 
-  if (!(flags & TEST_FLAG_DAEMON_ABORT))
+  if (!test_abort)
     {
       /* Wake waiting thread with signal. */
 
       /* Send signal to task to break out from blocking send. */
 
-      pthread_kill(tid, 1);
+      for (tidx = 0; tidx < nthreads; tidx++)
+        {
+          pthread_kill(tid[tidx], 1);
 
-      /* Wait threads to complete work. */
+          /* Wait threads to complete work. */
 
-      ret = pthread_join(tid, NULL);
-      TEST_ASSERT_EQUAL(OK, ret);
-      tid = -1;
+          ret = pthread_join(tid[tidx], NULL);
+          TEST_ASSERT_EQUAL(OK, ret);
+          tid[tidx] = -1;
+        }
       TEST_ASSERT_FALSE(Unity.CurrentTestFailed);
 
       /* Stopping daemon should succeed. */
@@ -458,9 +523,12 @@ static void do_wake_test(enum e_test_type type, int flags)
 
       /* Wait threads to complete work. */
 
-      ret = pthread_join(tid, NULL);
-      TEST_ASSERT_EQUAL(OK, ret);
-      tid = -1;
+      for (tidx = 0; tidx < nthreads; tidx++)
+        {
+          ret = pthread_join(tid[tidx], NULL);
+          TEST_ASSERT_EQUAL(OK, ret);
+          tid[tidx] = -1;
+        }
       TEST_ASSERT_FALSE(Unity.CurrentTestFailed);
     }
 }
@@ -489,9 +557,15 @@ TEST_GROUP(WakeWithSignal);
  ****************************************************************************/
 TEST_SETUP(WakeWithSignal)
 {
-  tid = -1;
-  test_sd = -1;
+  int i;
+
+  for (i = 0; i < MAX_THREADS; i++)
+    {
+      tid[i] = -1;
+      test_sd[i] = -1;
+    }
   sem_init(&tid_startsem, 0, 0);
+  sem_init(&tid_releasesem, 0, 0);
 }
 
 /****************************************************************************
@@ -513,19 +587,25 @@ TEST_SETUP(WakeWithSignal)
 TEST_TEAR_DOWN(WakeWithSignal)
 {
   int ret;
+  int i;
 
-  if (tid != -1)
+  for (i = 0; i < MAX_THREADS; i++)
     {
-      ret = pthread_cancel(tid);
-      assert(ret == OK);
-      ret = pthread_join(tid, NULL);
-      assert(ret == OK);
-    }
-  if (test_sd != -1)
-    {
-      close(test_sd);
+      if (tid[i] != -1)
+        {
+          ret = pthread_cancel(tid[i]);
+          assert(ret == OK);
+          ret = pthread_join(tid[i], NULL);
+          assert(ret == OK);
+        }
+      if (test_sd[i] != -1)
+        {
+          close(test_sd[i]);
+          test_sd[i] = -1;
+        }
     }
   sem_destroy(&tid_startsem);
+  sem_destroy(&tid_releasesem);
 }
 
 /****************************************************************************
@@ -561,6 +641,38 @@ TEST(WakeWithSignal, WakeBlockingConnect)
 }
 
 /****************************************************************************
+ * Name: WakeBlockingConnectMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking connect with signal
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, WakeBlockingConnectMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = true;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_CONNECT, TEST_FLAG_MULTI_THREAD);
+}
+
+/****************************************************************************
  * Name: WakeBlockingSend
  *
  * Description:
@@ -593,6 +705,37 @@ TEST(WakeWithSignal, WakeBlockingSend)
 }
 
 /****************************************************************************
+ * Name: WakeBlockingSendMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking send with signal
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, WakeBlockingSendMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = false;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_SEND, TEST_FLAG_MULTI_THREAD);
+}
+/****************************************************************************
  * Name: WakeBlockingRecv
  *
  * Description:
@@ -623,6 +766,39 @@ TEST(WakeWithSignal, WakeBlockingRecv)
   /* Run test. */
 
   do_wake_test(TEST_TYPE_RECV, 0);
+}
+
+/****************************************************************************
+ * Name: WakeBlockingRecvMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking recv with signal
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, WakeBlockingRecvMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = false;
+  usrsocktest_daemon_config.endpoint_block_connect = false;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_RECV, TEST_FLAG_MULTI_THREAD);
 }
 
 /****************************************************************************
@@ -658,6 +834,39 @@ TEST(WakeWithSignal, AbortBlockingConnect)
 }
 
 /****************************************************************************
+ * Name: AbortBlockingConnectMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking connect with daemon abort
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, AbortBlockingConnectMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = true;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_CONNECT,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_MULTI_THREAD);
+}
+
+/****************************************************************************
  * Name: AbortBlockingSend
  *
  * Description:
@@ -687,6 +896,39 @@ TEST(WakeWithSignal, AbortBlockingSend)
   /* Run test. */
 
   do_wake_test(TEST_TYPE_SEND, TEST_FLAG_DAEMON_ABORT);
+}
+
+/****************************************************************************
+ * Name: AbortBlockingSendMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking send with daemon abort
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, AbortBlockingSendMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = false;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_SEND,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_MULTI_THREAD);
 }
 
 /****************************************************************************
@@ -720,6 +962,40 @@ TEST(WakeWithSignal, AbortBlockingRecv)
   /* Run test. */
 
   do_wake_test(TEST_TYPE_RECV, TEST_FLAG_DAEMON_ABORT);
+}
+
+/****************************************************************************
+ * Name: AbortBlockingRecvMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking recv with daemon abort
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, AbortBlockingRecvMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = false;
+  usrsocktest_daemon_config.endpoint_block_connect = false;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_RECV,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_MULTI_THREAD);
 }
 
 /****************************************************************************
@@ -757,6 +1033,41 @@ TEST(WakeWithSignal, PendingRequestBlockingConnect)
 }
 
 /****************************************************************************
+ * Name: PendingRequestBlockingConnectMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking connect with daemon abort (and daemon not handling
+ *   pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingConnectMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = true;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_CONNECT,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
+}
+
+/****************************************************************************
  * Name: PendingRequestBlockingSend
  *
  * Description:
@@ -788,6 +1099,41 @@ TEST(WakeWithSignal, PendingRequestBlockingSend)
 
   do_wake_test(TEST_TYPE_SEND,
                TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING);
+}
+
+/****************************************************************************
+ * Name: PendingRequestBlockingSendMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking send with daemon abort (and daemon not handling
+ *   pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingSendMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = false;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_SEND,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
 }
 
 /****************************************************************************
@@ -826,6 +1172,42 @@ TEST(WakeWithSignal, PendingRequestBlockingRecv)
 }
 
 /****************************************************************************
+ * Name: PendingRequestBlockingRecvMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking recv with daemon abort (and daemon not handling
+ *   pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingRecvMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = false;
+  usrsocktest_daemon_config.endpoint_block_connect = false;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_RECV,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
+}
+
+/****************************************************************************
  * Name: PendingRequestBlockingOpen
  *
  * Description:
@@ -858,6 +1240,42 @@ TEST(WakeWithSignal, PendingRequestBlockingOpen)
 
   do_wake_test(TEST_TYPE_SOCKET,
                TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING);
+}
+
+/****************************************************************************
+ * Name: PendingRequestBlockingOpenMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking open with daemon abort (and daemon not handling
+ *   pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingOpenMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = true;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_SOCKET,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
 }
 
 /****************************************************************************
@@ -896,6 +1314,42 @@ TEST(WakeWithSignal, PendingRequestBlockingClose)
 }
 
 /****************************************************************************
+ * Name: PendingRequestBlockingCloseMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking close with daemon abort (and daemon not handling
+ *   pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingCloseMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = true;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_CLOSE,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
+}
+
+/****************************************************************************
  * Name: PendingRequestBlockingPoll
  *
  * Description:
@@ -928,6 +1382,42 @@ TEST(WakeWithSignal, PendingRequestBlockingPoll)
 
   do_wake_test(TEST_TYPE_POLL,
                TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING);
+}
+
+/****************************************************************************
+ * Name: PendingRequestBlockingPollMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking poll with daemon abort (and daemon not handling
+ *   pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingPollMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = false;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_POLL,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
 }
 
 /****************************************************************************
@@ -966,6 +1456,42 @@ TEST(WakeWithSignal, PendingRequestBlockingSetSockOpt)
 }
 
 /****************************************************************************
+ * Name: PendingRequestBlockingSetSockOptMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking setsockopt with daemon abort (and daemon not
+ *   handling pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingSetSockOptMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = true;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_SETSOCKOPT,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
+}
+
+/****************************************************************************
  * Name: PendingRequestBlockingGetSockOpt
  *
  * Description:
@@ -998,4 +1524,40 @@ TEST(WakeWithSignal, PendingRequestBlockingGetSockOpt)
 
   do_wake_test(TEST_TYPE_GETSOCKOPT,
                TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING);
+}
+
+/****************************************************************************
+ * Name: PendingRequestBlockingGetSockOptMultiThread
+ *
+ * Description:
+ *   Wake multiple blocking getsockopt with daemon abort (and daemon not
+ *   handling pending requests before abort)
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions/Limitations:
+ *   None
+ *
+ ****************************************************************************/
+TEST(WakeWithSignal, PendingRequestBlockingGetSockOptMultiThread)
+{
+  /* Configure test daemon. */
+
+  usrsocktest_daemon_config = usrsocktest_daemon_defconf;
+  usrsocktest_daemon_config.delay_all_responses = false;
+  usrsocktest_daemon_config.endpoint_block_send = true;
+  usrsocktest_daemon_config.endpoint_block_connect = true;
+  usrsocktest_daemon_config.endpoint_recv_avail = 0;
+  usrsocktest_daemon_config.endpoint_addr = "127.0.0.1";
+  usrsocktest_daemon_config.endpoint_port = 255;
+
+  /* Run test. */
+
+  do_wake_test(TEST_TYPE_GETSOCKOPT,
+               TEST_FLAG_DAEMON_ABORT | TEST_FLAG_PAUSE_USRSOCK_HANDLING |
+               TEST_FLAG_MULTI_THREAD);
 }

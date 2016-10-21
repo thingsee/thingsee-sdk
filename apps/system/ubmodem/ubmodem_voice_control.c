@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_voice_control.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,12 +51,20 @@
 
 #include <apps/system/ubmodem.h>
 
+#ifdef CONFIG_NETUTILS_DNSCLIENT
+#include <apps/netutils/dnsclient.h>
+#endif
+
 #include "ubmodem_internal.h"
 #include "ubmodem_voice.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+#define VOICE_MODEM_PROBE_SECS             7
+#define VOICE_MODEM_PROBE_FAILS            3
 
 /****************************************************************************
  * Type Declarations
@@ -128,18 +136,137 @@ static const struct at_cmd_def_s urc_ATpCLIP =
 static const struct at_cmd_def_s cmd_ATA =
 {
   .name         = "A",
+  .timeout_dsec = 20 * 10,
 };
 
 static const struct at_cmd_def_s cmd_ATpCHUP =
 {
   .name         = "+CHUP",
+  .timeout_dsec = 20 * 10,
 };
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
 
-void modem_voice_report_ringing(struct ubmodem_s *modem)
+static void voice_probe_check_cmee_result(struct ubmodem_s *modem,
+                                          bool cmee_ok, int cmee_setting,
+                                          void *priv)
+{
+  int err;
+
+  /* Release main state machine for next task. */
+
+  __ubmodem_change_state(modem, MODEM_STATE_WAITING);
+
+  if (!cmee_ok && modem->voice.probe_fails++ >= VOICE_MODEM_PROBE_FAILS)
+    {
+      /* Modem HW is in unknown state, attempt to recover. */
+
+      err = __ubmodem_recover_stuck_hardware(modem);
+      MODEM_DEBUGASSERT(modem, err != ERROR);
+    }
+}
+
+static int voice_probe_check_cmee(struct ubmodem_s *modem, void *priv)
+{
+  int err;
+
+  modem->voice.probe_task_queued = false;
+
+  if (!modem->voice.pm_activity_enabled)
+    {
+      return ERROR;
+    }
+
+  if (modem->level < UBMODEM_LEVEL_CMD_PROMPT)
+    {
+      return ERROR;
+    }
+
+  /* Check CMEE setting to see if modem has reseted or not. */
+
+  err = __ubmodem_check_cmee_status(modem, voice_probe_check_cmee_result, modem);
+  MODEM_DEBUGASSERT(modem, err == OK);
+
+  return OK;
+}
+
+static int voice_probe_fn(struct ubmodem_s *modem, const int timer_id,
+                          void * const arg)
+{
+  int ret;
+
+  modem->voice.probe_timerid = -1;
+
+  if (!modem->voice.pm_activity_enabled)
+    {
+      return OK;
+    }
+
+  /* Start CMEE probe task. */
+
+  if (!modem->voice.probe_task_queued)
+    {
+      ret = __ubmodem_add_task(modem, voice_probe_check_cmee, modem);
+      MODEM_DEBUGASSERT(modem, ret != ERROR);
+      modem->voice.probe_task_queued = true;
+    }
+
+  /* Reregister timer. */
+
+  modem->voice.probe_timerid = __ubmodem_set_timer(modem,
+                                 VOICE_MODEM_PROBE_SECS * 1000,
+                                 voice_probe_fn, modem);
+  MODEM_DEBUGASSERT(modem, modem->voice.probe_timerid >= 0);
+
+  return OK;
+}
+
+static void modem_voice_pm_activity(struct ubmodem_s *modem,
+                                    bool ringing_or_active)
+{
+  if (ringing_or_active == modem->voice.pm_activity_enabled)
+    {
+      /* Already in this state. */
+
+      return;
+    }
+
+  modem->voice.pm_activity_enabled = ringing_or_active;
+
+  modem->voice.probe_fails = 0;
+  if (modem->voice.probe_timerid >= 0)
+    {
+      __ubmodem_remove_timer(modem, modem->voice.probe_timerid);
+      modem->voice.probe_timerid = -1;
+    }
+
+  if (ringing_or_active)
+    {
+      /* Voice call incoming, ringing. After ringing call is eventually
+       * disconnected. Report low activity so that we get disconnect URC from
+       * modem after hangup (no ring-indication anymore to wake-up MCU). */
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
+
+      /* Start probing to detect modem hang-ups (low voltage situation etc). */
+
+      modem->voice.probe_timerid = __ubmodem_set_timer(modem,
+                                     VOICE_MODEM_PROBE_SECS * 1000,
+                                     voice_probe_fn, modem);
+      MODEM_DEBUGASSERT(modem, modem->voice.probe_timerid >= 0);
+    }
+  else
+    {
+      /* Voice call disconnected, report change of activity to
+       * power-management. */
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
+    }
+}
+
+static void modem_voice_report_ringing(struct ubmodem_s *modem)
 {
   if (modem->voice.ring_reported)
     {
@@ -170,7 +297,7 @@ void modem_voice_report_ringing(struct ubmodem_s *modem)
   modem->voice.ring_reported = true;
 }
 
-void modem_voice_report_disconnected(struct ubmodem_s *modem)
+static void modem_voice_report_disconnected(struct ubmodem_s *modem)
 {
   if (modem->voice.disconnect_reported)
     {
@@ -186,9 +313,9 @@ void modem_voice_report_disconnected(struct ubmodem_s *modem)
   modem->voice.disconnect_reported = true;
 }
 
-void modem_voice_new_clip(struct ubmodem_s *modem, bool valid,
-                          const char *number, uint16_t number_type,
-                          const char *subaddr, uint16_t sa_type)
+static void modem_voice_new_clip(struct ubmodem_s *modem, bool valid,
+                                 const char *number, uint16_t number_type,
+                                 const char *subaddr, uint16_t sa_type)
 {
   /* Store CLIP. */
 
@@ -215,52 +342,83 @@ void modem_voice_new_clip(struct ubmodem_s *modem, bool valid,
   modem_voice_report_ringing(modem);
 }
 
-void modem_voice_clear_clip(struct ubmodem_s *modem)
+static void modem_voice_clear_clip(struct ubmodem_s *modem)
 {
   modem->voice.got_clip = false;
   memset(&modem->voice.clip, 0, sizeof(modem->voice.clip));
 }
 
-void modem_voice_active(struct ubmodem_s *modem)
+static void modem_voice_active(struct ubmodem_s *modem)
 {
   modem->voice.active = true;
   modem->voice.ring_reported = false;
   modem->voice.disconnect_reported = false;
 
+  modem_voice_pm_activity(modem, true);
+
   /* Report that voice-call is active. */
 
   __ubmodem_publish_event(modem, UBMODEM_EVENT_FLAG_CALL_ACTIVE, NULL, 0);
+
+#ifdef CONFIG_NETUTILS_DNSCLIENT
+  /* Voice-call can block GRPS communication and cause DNS queries
+   * to fail. Clear accumulated fail count in this case. */
+
+  dns_clear_lookup_failed_count();
+
+  /* TODO: We should instead control socket availability, and prevent opening
+   *       new sockets when voice.ringing/active. There is however one catch:
+   *       on 3G modem, voice-call and GRPS can transmit simultaneously. */
+#endif
 }
 
-void modem_voice_ringing(struct ubmodem_s *modem)
+static void modem_voice_ringing(struct ubmodem_s *modem)
 {
   modem->voice.active = false;
   modem->voice.ringing = true;
   modem->voice.disconnect_reported = false;
 
+  modem_voice_pm_activity(modem, true);
+
   /* Report state, generate event if needed. */
 
   modem_voice_report_ringing(modem);
+
+#ifdef CONFIG_NETUTILS_DNSCLIENT
+  /* Voice-call can block GRPS communication and cause DNS queries
+   * to fail. Clear accumulated fail count in this case. */
+
+  dns_clear_lookup_failed_count();
+
+  /* TODO: We should instead control socket availability, and prevent opening
+   *       new sockets when voice.ringing/active. There is however one catch:
+   *       on 3G modem, voice-call and GRPS can transmit simultaneously. */
+#endif
 }
 
-void modem_voice_disconnected(struct ubmodem_s *modem)
+static void modem_voice_disconnected(struct ubmodem_s *modem, bool ctrl_audio)
 {
   modem->voice.ring_reported = false;
   modem->voice.active = false;
   modem->voice.ringing = false;
   modem_voice_clear_clip(modem);
 
-  /* No need to keep audio on if not ringing or active. */
+  if (ctrl_audio)
+    {
+      /* No need to keep audio on if not ringing or active. */
 
-  ubmodem_audio_setup(modem, false, false);
+      ubmodem_audio_setup(modem, false, false);
+    }
 
   /* Report state, generate event if needed. */
 
   modem_voice_report_disconnected(modem);
+
+  modem_voice_pm_activity(modem, false);
 }
 
-void modem_voice_update_ucallstat(struct ubmodem_s *modem,
-                                  enum modem_ucallstat_e stat)
+static void modem_voice_update_ucallstat(struct ubmodem_s *modem,
+                                         enum modem_ucallstat_e stat)
 {
   switch (stat)
     {
@@ -289,7 +447,7 @@ void modem_voice_update_ucallstat(struct ubmodem_s *modem,
       default:
         /* Currently, handle all other as disconnected state. */
 
-        modem_voice_disconnected(modem);
+        modem_voice_disconnected(modem, true);
         break;
     }
 }
@@ -525,6 +683,27 @@ static void urc_voice_clip_handler(struct ubmodem_s *modem,
                        subaddr, sa_type);
 }
 
+static void modem_audio_check_cmee(struct ubmodem_s *modem, bool cmee_ok,
+                                    int cmee_setting, void *priv)
+{
+  if (!cmee_ok)
+    {
+      int err;
+
+      /* Modem hardware stuck or reseted, launch task to restore function. */
+
+      err = __ubmodem_recover_stuck_hardware(modem);
+      MODEM_DEBUGASSERT(modem, err != ERROR);
+    }
+
+  /* Reactions to call state changes are based on +UCALLSTAT. Just complete
+   * task work. */
+
+  /* Update main state machine. */
+
+  __ubmodem_change_state(modem, MODEM_STATE_WAITING);
+}
+
 static void ATA_handler(struct ubmodem_s *modem, const struct at_cmd_def_s *cmd,
                         const struct at_resp_info_s *info,
                         const uint8_t *resp_stream, size_t stream_len,
@@ -534,7 +713,17 @@ static void ATA_handler(struct ubmodem_s *modem, const struct at_cmd_def_s *cmd,
   bool mute_mic = mutepriv >> 1;
   bool mute_speaker = mutepriv & 1;
 
-  if (info->status == RESP_STATUS_OK)
+  if (resp_status_is_error_or_timeout(info->status))
+    {
+      int err;
+
+      /* In case of error, check CMEE setting to detect stuck hardware. */
+
+      err =  __ubmodem_check_cmee_status(modem, modem_audio_check_cmee, modem);
+      MODEM_DEBUGASSERT(modem, err == OK);
+      return;
+    }
+  else if (info->status == RESP_STATUS_OK)
     {
       /* Configure audio. */
 
@@ -542,7 +731,7 @@ static void ATA_handler(struct ubmodem_s *modem, const struct at_cmd_def_s *cmd,
     }
 
   /* Reactions to call state changes are based on +UCALLSTAT. Just complete
-   * task work, regardless of result. */
+   * task work. */
 
   /* Update main state machine. */
 
@@ -572,8 +761,19 @@ static void ATpCHUP_handler(struct ubmodem_s *modem,
                             const uint8_t *resp_stream, size_t stream_len,
                             void *priv)
 {
+  if (resp_status_is_error_or_timeout(info->status))
+    {
+      int err;
+
+      /* In case of error, check CMEE setting to detect stuck hardware. */
+
+      err =  __ubmodem_check_cmee_status(modem, modem_audio_check_cmee, modem);
+      MODEM_DEBUGASSERT(modem, err == OK);
+      return;
+    }
+
   /* Reactions to call state changes are based on +UCALLSTAT. Just complete
-   * task work, regardless of result. */
+   * task work. */
 
   /* Update main state machine. */
 
@@ -670,6 +870,8 @@ void __ubmodem_voice_control_setup(struct ubmodem_s *modem)
 
   memset(&modem->voice, 0, sizeof(modem->voice));
 
+  modem->voice.probe_timerid = -1;
+
   __ubparser_register_response_handler(&modem->parser, &urc_ATpCRING,
                                        urc_voice_cring_handler,
                                        modem, true);
@@ -697,6 +899,9 @@ void __ubmodem_voice_control_cleanup(struct ubmodem_s *modem)
 {
   if (!modem->voice_urcs_registered)
     return;
+
+  modem_voice_disconnected(modem, false);
+  ubmodem_audio_cleanup(modem);
 
   __ubparser_unregister_response_handler(&modem->parser, urc_ATpCRING.name);
   __ubparser_unregister_response_handler(&modem->parser, urc_ATpUCALLSTAT.name);

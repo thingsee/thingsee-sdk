@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_initialize.c
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -159,6 +159,9 @@ struct ubmodem_s *ubmodem_initialize(const struct ubmodem_hw_ops_s *hw_ops,
 
   modem->creg_timer_id = -1;
   modem->poweroff_timer = -1;
+#ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
+  modem->cell_locate_timer_id = -1;
+#endif
 
   modem->force_level = __UBMODEM_LEVEL_MAX;
   modem->intermediate_level = __UBMODEM_LEVEL_MAX;

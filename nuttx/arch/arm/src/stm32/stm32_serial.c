@@ -267,11 +267,13 @@ struct up_dev_s
   uint16_t          ie;        /* Saved interrupt mask bits value */
   uint16_t          sr;        /* Saved status bits */
 
-#ifdef CONFIG_STM32_STM32L15XX
   /* Interrupt mask value stored before suspending for stop mode. */
 
   uint16_t          suspended_ie;
 
+  bool              suspended; /* UART device has been suspended. */
+
+#ifdef CONFIG_STM32_STM32L15XX
   /* Has being initialized and HW is setup. */
 
   bool              initialized;
@@ -328,6 +330,7 @@ struct up_dev_s
 #ifdef SERIAL_HAVE_DMA
   DMA_HANDLE        rxdma;     /* currently-open receive DMA stream */
   bool              rxenable;  /* DMA-based reception en/disable */
+  bool              rxdmasusp; /* Rx DMA suspended */
   uint32_t          rxdmanext; /* Next byte in the DMA buffer to be read */
   char       *const rxfifo;    /* Receive DMA buffer */
 #endif
@@ -343,6 +346,7 @@ struct up_dev_s
  ****************************************************************************/
 
 static void up_set_format(struct uart_dev_s *dev);
+static void up_set_suspend(struct uart_dev_s *dev, bool suspended);
 static int  up_setup(struct uart_dev_s *dev);
 static void up_shutdown(struct uart_dev_s *dev);
 static int  up_attach(struct uart_dev_s *dev);
@@ -366,6 +370,10 @@ static bool up_txready(struct uart_dev_s *dev);
 static int  up_dma_setup(struct uart_dev_s *dev);
 static void up_dma_shutdown(struct uart_dev_s *dev);
 static int  up_dma_receive(struct uart_dev_s *dev, unsigned int *status);
+static void up_dma_reenable(struct up_dev_s *priv);
+#ifdef CONFIG_SERIAL_IFLOWCONTROL
+static bool up_dma_iflow_restart(struct up_dev_s *priv);
+#endif
 static void up_dma_rxint(struct uart_dev_s *dev, bool enable);
 static bool up_dma_rxavailable(struct uart_dev_s *dev);
 
@@ -1369,6 +1377,129 @@ static void up_set_format(struct uart_dev_s *dev)
 #endif /* CONFIG_SUPPRESS_UART_CONFIG */
 
 /****************************************************************************
+ * Name: up_set_suspend
+ *
+ * Description:
+ *   Suspend or resume serial peripheral.
+ *
+ ****************************************************************************/
+
+void up_set_suspend(struct uart_dev_s *dev, bool suspend)
+{
+  struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
+#ifdef SERIAL_HAVE_DMA
+  bool dmarestored = false;
+#endif
+
+  if (priv->suspended == suspend)
+    {
+      return;
+    }
+
+  priv->suspended = suspend;
+
+  if (suspend)
+    {
+#ifdef CONFIG_SERIAL_IFLOWCONTROL
+      if (priv->iflow)
+        {
+          /* Force RTS high to prevent further Rx. */
+
+          stm32_configgpio((priv->rts_gpio & ~GPIO_MODE_MASK)
+                           | (GPIO_OUTPUT | GPIO_OUTPUT_SET));
+        }
+#endif
+
+      /* Disable interrupts to prevent Tx. */
+
+      up_disableusartint(priv, &priv->suspended_ie);
+
+      /* Wait last Tx to complete. */
+
+      while ((up_serialin(priv, STM32_USART_SR_OFFSET) & USART_SR_TC) == 0);
+
+#ifdef SERIAL_HAVE_DMA
+      if (priv->dev.ops == &g_uart_dma_ops && !priv->rxdmasusp)
+        {
+#ifdef CONFIG_SERIAL_IFLOWCONTROL
+          if (priv->iflow && priv->rxdmanext == RXDMA_BUFFER_SIZE)
+            {
+              /* Rx DMA in non-circular iflow mode and already stopped
+               * at end of DMA buffer. No need to suspend. */
+            }
+          else
+#endif
+            {
+              /* Suspend Rx DMA. */
+
+              stm32_dmastop(priv->rxdma);
+              priv->rxdmasusp = true;
+            }
+        }
+#endif
+    }
+  else
+    {
+#ifdef SERIAL_HAVE_DMA
+      if (priv->dev.ops == &g_uart_dma_ops && priv->rxdmasusp)
+        {
+#ifdef CONFIG_SERIAL_IFLOWCONTROL
+          if (priv->iflow)
+            {
+              (void)up_dma_iflow_restart(priv);
+            }
+          else
+#endif
+            {
+              /* This USART does not have HW flow-control. Unconditionally
+               * re-enable DMA (might loss unprocessed bytes received
+               * to DMA buffer before suspending). */
+
+              up_dma_reenable(priv);
+              priv->rxdmasusp = false;
+            }
+
+          dmarestored = true;
+        }
+#endif
+
+      /* Re-enable interrupts to resume Tx. */
+
+      up_restoreusartint(priv, priv->suspended_ie);
+
+#ifdef CONFIG_SERIAL_IFLOWCONTROL
+      if (priv->iflow)
+        {
+          /* Restore peripheral RTS control. */
+
+          stm32_configgpio(priv->rts_gpio);
+        }
+#endif
+    }
+
+#ifdef SERIAL_HAVE_DMA
+  if (dmarestored)
+    {
+      irqstate_t flags;
+
+      flags = irqsave();
+
+      /* Perform initial Rx DMA buffer fetch to wake-up serial device
+       * activity. */
+
+#ifdef CONFIG_USART1_RXDMA
+      if (priv->rxdma != NULL)
+        {
+          up_dma_rxcallback(priv->rxdma, 0, priv);
+        }
+#endif
+
+      irqrestore(flags);
+    }
+#endif
+}
+
+/****************************************************************************
  * Name: up_set_apb_clock
  *
  * Description:
@@ -1564,6 +1695,7 @@ static int up_setup(struct uart_dev_s *dev)
 #ifdef CONFIG_STM32_STM32L15XX
   priv->initialized = true;
 #endif
+  priv->suspended = false;
 
   return OK;
 }
@@ -2094,8 +2226,9 @@ static int up_ioctl(struct file *filep, int cmd, unsigned long arg)
         /* Effect the changes immediately - note that we do not implement
          * TCSADRAIN / TCSAFLUSH
          */
-
+        up_set_suspend(dev, true);
         up_set_format(dev);
+        up_set_suspend(dev, false);
       }
       break;
 #endif /* CONFIG_SERIAL_TERMIOS */
@@ -2364,16 +2497,31 @@ static int up_dma_receive(struct uart_dev_s *dev, unsigned int *status)
  *
  ****************************************************************************/
 
-#if defined(SERIAL_HAVE_DMA) && defined(CONFIG_SERIAL_IFLOWCONTROL)
+#ifdef SERIAL_HAVE_DMA
 static void up_dma_reenable(struct up_dev_s *priv)
 {
-  /* Configure for non-circular DMA reception into the RX fifo */
+#ifdef CONFIG_SERIAL_IFLOWCONTROL
+  if (priv->iflow)
+    {
+      /* Configure for non-circular DMA reception into the RX FIFO */
 
-  stm32_dmasetup(priv->rxdma,
-                 priv->usartbase + STM32_USART_RDR_OFFSET,
-                 (uint32_t)priv->rxfifo,
-                 RXDMA_BUFFER_SIZE,
-                 SERIAL_DMA_IFLOW_CONTROL_WORD);
+      stm32_dmasetup(priv->rxdma,
+                     priv->usartbase + STM32_USART_RDR_OFFSET,
+                     (uint32_t)priv->rxfifo,
+                     RXDMA_BUFFER_SIZE,
+                     SERIAL_DMA_IFLOW_CONTROL_WORD);
+    }
+  else
+#endif
+    {
+      /* Configure for circular DMA reception into the RX FIFO */
+
+      stm32_dmasetup(priv->rxdma,
+                     priv->usartbase + STM32_USART_RDR_OFFSET,
+                     (uint32_t)priv->rxfifo,
+                     RXDMA_BUFFER_SIZE,
+                     SERIAL_DMA_CONTROL_WORD);
+    }
 
   /* Reset our DMA shadow pointer to match the address just
    * programmed above.
@@ -2381,12 +2529,76 @@ static void up_dma_reenable(struct up_dev_s *priv)
 
   priv->rxdmanext = 0;
 
-  /* Start the DMA channel, and arrange for callbacks at the full point in
-   * the FIFO. After buffer gets full, hardware flow-control kicks in and
-   * DMA transfer is stopped.
-   */
+#ifdef CONFIG_SERIAL_IFLOWCONTROL
+  if (priv->iflow)
+    {
+      /* Start the DMA channel, and arrange for callbacks at the full point
+       * in the FIFO. After buffer gets full, hardware flow-control kicks
+       * in and DMA transfer is stopped.
+       */
 
-  stm32_dmastart(priv->rxdma, up_dma_rxcallback, (void *)priv, false);
+      stm32_dmastart(priv->rxdma, up_dma_rxcallback, (void *)priv, false);
+    }
+  else
+#endif
+    {
+      /* Start the DMA channel, and arrange for callbacks at the half and
+       * full points in the FIFO.  This ensures that we have half a FIFO
+       * worth of time to claim bytes before they are overwritten.
+       */
+
+      stm32_dmastart(priv->rxdma, up_dma_rxcallback, (void *)priv, true);
+    }
+
+  /* Clear DMA suspended flag. */
+
+  priv->rxdmasusp = false;
+}
+#endif
+
+/****************************************************************************
+ * Name: up_dma_iflow_restart
+ *
+ * Description:
+ *   Call to restart RX DMA for input flow-controlled USART
+ *
+ ****************************************************************************/
+
+#if defined(SERIAL_HAVE_DMA) && defined(CONFIG_SERIAL_IFLOWCONTROL)
+static bool up_dma_iflow_restart(struct up_dev_s *priv)
+{
+  if (!priv->rxenable)
+    {
+      /* Rx not enabled by upper layer. */
+
+      return false;
+    }
+
+  if (priv->rxdmanext != RXDMA_BUFFER_SIZE)
+    {
+      if (priv->rxdmasusp)
+        {
+          /* Rx DMA in suspended state. */
+
+          if (up_dma_rxavailable(&priv->dev))
+            {
+              /* DMA buffer has unprocessed data, do not re-enable yet. */
+
+              return false;
+            }
+        }
+      else
+        {
+          return false;
+        }
+    }
+
+  /* DMA is stopped or suspended and DMA buffer does not have pending data,
+   * re-enabling without data loss is now safe. */
+
+  up_dma_reenable(priv);
+
+  return true;
 }
 #endif
 
@@ -2414,11 +2626,11 @@ static void up_dma_rxint(struct uart_dev_s *dev, bool enable)
   priv->rxenable = enable;
 
 #ifdef CONFIG_SERIAL_IFLOWCONTROL
-  if (priv->iflow && priv->rxenable && (priv->rxdmanext == RXDMA_BUFFER_SIZE))
+  if (priv->iflow)
     {
       /* Re-enable RX DMA. */
 
-      up_dma_reenable(priv);
+      (void)up_dma_iflow_restart(priv);
     }
 #endif
 }
@@ -2624,13 +2836,28 @@ static void up_dma_rxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
       uart_recvchars(&priv->dev);
 
 #ifdef CONFIG_SERIAL_IFLOWCONTROL
-      if (priv->iflow && priv->rxenable &&
-          (priv->rxdmanext == RXDMA_BUFFER_SIZE))
+      if (priv->iflow)
         {
           /* Re-enable RX DMA. */
 
-          up_dma_reenable(priv);
+          (void)up_dma_iflow_restart(priv);
         }
+#endif
+    }
+
+  /* Get the masked USART status word to check and clear error flags.
+   * If error flag is not cleared, Rx DMA will be stuck. Clearing errors
+   * will release Rx DMA. */
+
+  priv->sr = up_serialin(priv, STM32_USART_SR_OFFSET);
+
+  if ((priv->sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE)) != 0)
+    {
+#if defined(CONFIG_STM32_STM32F30XX) || defined(CONFIG_STM32_STM32F37XX)
+      up_serialout(priv, STM32_USART_ICR_OFFSET,
+                  (USART_ICR_NCF | USART_ICR_ORECF | USART_ICR_FECF));
+#else
+      (void)up_serialin(priv, STM32_USART_RDR_OFFSET);
 #endif
     }
 }
@@ -2781,22 +3008,7 @@ void stm32_serial_set_suspend(bool suspend)
       if (!priv || !priv->initialized)
         continue;
 
-      if (suspend)
-        {
-          /* Disable interrupts to prevent Tx. */
-
-          up_disableusartint(priv, &priv->suspended_ie);
-
-          /* Wait last Tx to complete. */
-
-          while ((up_serialin(priv, STM32_USART_SR_OFFSET) & USART_SR_TC) == 0);
-        }
-      else
-        {
-          /* Re-enable interrupts to resume Tx. */
-
-          up_restoreusartint(priv, priv->suspended_ie);
-        }
+      up_set_suspend(&priv->dev, suspend);
     }
 }
 
@@ -2815,6 +3027,27 @@ bool stm32_is_serial_suspended(void)
 #endif
 
 #ifdef USE_SERIALDRIVER
+
+/****************************************************************************
+ * Name: stm32_serial_get_uart
+ *
+ * Description:
+ *   Get serial driver structure for STM32 USART
+ *
+ ****************************************************************************/
+
+FAR uart_dev_t *stm32_serial_get_uart(int n)
+{
+  n -= 1;
+
+  if (n < 0 || n >= STM32_NUSART || !uart_devs[n])
+    return NULL;
+
+  if (!uart_devs[n]->initialized)
+    return NULL;
+
+  return &uart_devs[n]->dev;
+}
 
 /****************************************************************************
  * Name: up_earlyserialinit
@@ -2942,9 +3175,9 @@ void up_serialinit(void)
 #ifdef SERIAL_HAVE_DMA
 void stm32_serial_dma_poll(void)
 {
-    irqstate_t flags;
+  irqstate_t flags;
 
-    flags = irqsave();
+  flags = irqsave();
 
 #ifdef CONFIG_USART1_RXDMA
   if (g_usart1priv.rxdma != NULL)

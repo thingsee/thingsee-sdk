@@ -1054,6 +1054,15 @@ config ARCH_BOARD_SIM
 		This port does not support interrupts or a real timer (and hence no
 		round robin scheduler)  Otherwise, it is complete.
 
+config ARCH_BOARD_SIM_TSONE
+	bool "User mode simulation for Thingsee One"
+	depends on ARCH_SIM
+	---help---
+		A user-mode port of NuttX to the x86 Linux/Cygwin platform is available.
+		The purpose of this port is primarily to support OS feature development.
+		This port does not support interrupts or a real timer (and hence no
+		round robin scheduler)  Otherwise, it is complete.
+
 config ARCH_BOARD_CUSTOM
 	bool "Custom development board"
 	---help---
@@ -1239,6 +1248,7 @@ config ARCH_BOARD
 	default "zp214xpa"                 if ARCH_BOARD_ZP214XPA
 	default "zkit-arm-1769"            if ARCH_BOARD_ZKITARM
 	default "sim"                      if ARCH_BOARD_SIM
+	default "sim-tsone"                if ARCH_BOARD_SIM_TSONE
 
 comment "Common Board Options"
 

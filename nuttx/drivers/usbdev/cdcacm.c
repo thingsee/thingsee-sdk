@@ -114,7 +114,7 @@ struct cdcacm_dev_s
    */
 
   struct cdcacm_req_s wrreqs[CONFIG_CDCACM_NWRREQS];
-  struct cdcacm_req_s rdreqs[CONFIG_CDCACM_NWRREQS];
+  struct cdcacm_req_s rdreqs[CONFIG_CDCACM_NRDREQS];
 
   /* Serial I/O buffers */
 
@@ -553,11 +553,17 @@ static struct usbdev_req_s *cdcacm_allocreq(FAR struct usbdev_ep_s *ep,
 static void cdcacm_freereq(FAR struct usbdev_ep_s *ep,
                            FAR struct usbdev_req_s *req)
 {
+  if (req != NULL && req->buf != NULL)
+    {
+      DEBUGASSERT(ep != NULL);
+    }
+
   if (ep != NULL && req != NULL)
     {
       if (req->buf != NULL)
         {
           EP_FREEBUFFER(ep, req->buf);
+          req->buf = NULL;
         }
       EP_FREEREQ(ep, req);
     }
@@ -1151,14 +1157,6 @@ static void cdcacm_unbind(FAR struct usbdevclass_driver_s *driver,
           priv->epintin = NULL;
         }
 
-      /* Free the bulk IN endpoint */
-
-      if (priv->epbulkin)
-        {
-          DEV_FREEEP(dev, priv->epbulkin);
-          priv->epbulkin = NULL;
-        }
-
       /* Free the pre-allocated control request */
 
       if (priv->ctrlreq != NULL)
@@ -1208,6 +1206,14 @@ static void cdcacm_unbind(FAR struct usbdevclass_driver_s *driver,
 
       DEBUGASSERT(priv->nwrq == 0);
       irqrestore(flags);
+
+      /* Free the bulk IN endpoint */
+
+      if (priv->epbulkin)
+        {
+          DEV_FREEEP(dev, priv->epbulkin);
+          priv->epbulkin = NULL;
+        }
 
       /* Clear out all data in the circular buffer */
 

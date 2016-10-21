@@ -138,7 +138,7 @@ endif
 endif
 
 ifeq ($(CONFIG_LINK_WHOLE_ARCHIVE),y)
-  LDLIBS = --whole-archive
+  LDLIBS = $(LD_FLAG_PREFIX)--whole-archive
 endif
 
 LDLIBS += $(patsubst %.a,%,$(patsubst lib%,-l%,$(LINKLIBS)))
@@ -147,7 +147,7 @@ ifeq ($(BOARDMAKE),y)
 endif
 
 ifeq ($(CONFIG_LINK_WHOLE_ARCHIVE),y)
-  LDLIBS += --no-whole-archive
+  LDLIBS += $(LD_FLAG_PREFIX)--no-whole-archive
 endif
 
 LIBGCC = "${shell "$(CC)" $(ARCHCPUFLAGS) -print-libgcc-file-name}"
@@ -180,7 +180,9 @@ nuttx$(EXEEXT): $(HEAD_OBJ) board/libboard$(LIBEXT)
 	$(Q) echo "LD: nuttx"
 	$(Q) $(LD) --entry=__start $(LDFLAGS) $(LIBPATHS) $(EXTRA_LIBPATHS) \
 		-o $(NUTTX) $(HEAD_OBJ) $(EXTRA_OBJS) \
-		--start-group $(LDLIBS) $(EXTRA_LIBS) $(LIBGCC) --end-group
+		$(LD_FLAG_PREFIX)--start-group \
+			$(LDLIBS) $(EXTRA_LIBS) $(LIBGCC) \
+		$(LD_FLAG_PREFIX)--end-group
 ifneq ($(CONFIG_WINDOWS_NATIVE),y)
 	$(Q) $(NM) $(NUTTX) | \
 	grep -v '\(compiled\)\|\(\$(OBJEXT)$$\)\|\( [aUw] \)\|\(\.\.ng$$\)\|\(LASH[RL]DI\)' | \

@@ -1,0 +1,42 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "FOTA for Thingsee One"
+config SYSTEM_FOTA
+	bool "FOTA"
+	default n
+	select NETUTILS_WEBCLIENT
+	---help---
+		Enable the simple FOTA example for Thingsee One
+
+if SYSTEM_FOTA
+
+
+config SYSTEM_FOTA_HOST_ADDRESS
+	string "Host IP address"
+	default "www.yourhosthere.com"
+	---help---
+		Fota will check for updates from this address.
+
+config SYSTEM_FOTA_HOST_PATH
+	string "Host path to fota files"
+	default "thingsee"
+	---help---
+		Fota will check for updates from http://[host]/[path]/
+
+config SYSTEM_FOTA_INTERVAL_HOURS
+	int "FOTA interval in hours"
+	default 24
+	---help---
+		The FOTA app firmware check interval in hours.
+
+config SYSTEM_FOTA_DEBUG
+	bool "Enable FOTA debug"
+	default n
+	---help---
+		Enable FOTA debug.
+
+endif
+endmenu

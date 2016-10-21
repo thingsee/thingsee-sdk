@@ -307,6 +307,18 @@ if LED
 source drivers/led/Kconfig
 endif # LED
 
+menuconfig MOTOR
+	bool "Motor control driver support"
+	default n
+	---help---
+		This directory holds implementations of motor controller drivers.
+		This includes such things as drivers for stepper motor controllers.
+		See include/nuttx/motor/*.h for registration.
+
+if MOTOR
+source drivers/motor/Kconfig
+endif # MOTOR
+
 menuconfig LCD
 	bool "LCD Driver Support"
 	default n
@@ -471,6 +483,16 @@ menuconfig USBHOST
 if USBHOST
 source drivers/usbhost/Kconfig
 endif # USBHOST
+
+menuconfig USBMISC
+	bool "USB Miscellaneous drivers"
+	default n
+	---help---
+		USB Miscellaneous drivers.
+
+if USBMISC
+source drivers/usbmisc/Kconfig
+endif # USBMISC
 
 menuconfig WIRELESS
 	bool "Wireless Device Support"

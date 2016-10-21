@@ -648,31 +648,13 @@ static int rtc_interrupt(int irq, void *context)
  ************************************************************************************/
 
 #ifdef CONFIG_RTC_PERIODIC_AUTORELOAD_WAKEUP
-static void rtc_set_wcksel(void)
+static void rtc_set_wcksel(unsigned int wucksel)
 {
-  int tmp = 0;
   uint32_t regval = 0;
 
-#ifdef CONFIG_RTC_WUCKSEL_RTCDIV16
-  tmp = RTC_CR_WUCKSEL_RTCDIV16;
-#elif defined(CONFIG_RTC_WUCKSEL_RTCDIV8)
-  tmp = RTC_CR_WUCKSEL_RTCDIV8;
-#elif defined(CONFIG_RTC_WUCKSEL_RTCDIV4)
-  tmp = RTC_CR_WUCKSEL_RTCDIV4;
-#elif defined(CONFIG_RTC_WUCKSEL_RTCDIV2)
-  tmp = RTC_CR_WUCKSEL_RTCDIV2;
-#elif defined(CONFIG_RTC_WUCKSEL_CKSPRE)
-  tmp = RTC_CR_WUCKSEL_CKSPRE;
-#elif defined(CONFIG_RTC_WUCKSEL_CKSPREADD)
-  tmp = RTC_CR_WUCKSEL_CKSPREADD;
-#else
-#  error "Wakeup clock was not selected"
-#endif
-
   regval = getreg32(STM32_RTC_CR);
-  /* Just in case reset old value of WCKSEL */
   regval &= ~RTC_CR_WUCKSEL_MASK;
-  regval |= tmp;
+  regval |= wucksel;
   putreg32(regval, STM32_RTC_CR);
 }
 #endif
@@ -746,38 +728,42 @@ static int rtc_write_alarm_value(time_t alarm_sec)
  *    Sets RTC periodic autoreload wakeup
  *
  * Input Parameters:
- *   secs     - Time to sleep in seconds before wakeup and auto-reloading.
- *   callback - the function to call when the alarm expires.
+ *   millisecs     - Time to sleep in seconds before wakeup and auto-reloading.
+ *   callback      - the function to call when the alarm expires.
  *
  * Returned Value:
  *   Zero (OK) on success; A negated errno value on failure.
  *
  ************************************************************************************/
 
-int up_rtc_setperiodicwakeup(unsigned int secs, wakeupcb_t callback)
+int up_rtc_setperiodicwakeup(unsigned int millisecs, wakeupcb_t callback)
 {
+  const uint32_t rtc_div16_max_msecs = 16 * 1000 * 0xffffU / STM32_LSE_FREQUENCY;
+  unsigned int wutr_val;
   int ret = OK;
   int timeout = 0;
   uint32_t regval = 0;
+  unsigned int secs = millisecs / 1000;
 
   rtclldbg("Set autoreload wakeup\n");
 
   /* Check input variables for correctness. */
 
-  if (secs == 0)
+  if (millisecs == 0)
     {
       /* Wakeup must be greater than zero. */
 
       return -EINVAL;
     }
 
-  /* Lets use RTC wake-up with 1 sec to ~18 hour range. */
+  /* Lets use RTC wake-up with 0.001 sec to ~18 hour range. */
 
   if (secs > 0xffffU)
     {
       /* More than max. */
 
-      return -EINVAL;
+      secs = 0xffffU;
+      millisecs = secs * 1000;
     }
 
   rtc_wprunlock();
@@ -804,19 +790,42 @@ int up_rtc_setperiodicwakeup(unsigned int secs, wakeupcb_t callback)
         }
     }
 
-  /* Select wake-up with 1hz counter. */
-
-  rtc_set_wcksel();
-
   /* Set callback function pointer. */
 
   g_wakeupcb = callback;
+
+  if (millisecs <= rtc_div16_max_msecs)
+    {
+      unsigned int ticks;
+
+      /* Select wake-up with 32768/16 hz counter. */
+
+      rtc_set_wcksel(RTC_CR_WUCKSEL_RTCDIV16);
+
+      /* Get number of ticks. */
+
+      ticks = millisecs * STM32_LSE_FREQUENCY / (16 * 1000);
+
+      /* Wake-up is after WUT+1 ticks. */
+
+      wutr_val = ticks - 1;
+    }
+  else
+    {
+      /* Select wake-up with 1hz counter. */
+
+      rtc_set_wcksel(RTC_CR_WUCKSEL_CKSPRE);
+
+      /* Wake-up is after WUT+1 ticks. */
+
+      wutr_val = secs - 1;
+    }
 
   /* Program the wakeup auto-reload value WUT[15:0], and the wakeup clock
    * selection.
    */
 
-  putreg32(secs, STM32_RTC_WUTR);
+  putreg32(wutr_val, STM32_RTC_WUTR);
 
   stm32_exti_wakeup(true, false, false, rtc_interrupt);
 
@@ -1192,7 +1201,10 @@ int up_rtc_getdatetime(FAR struct tm *tp)
 
   /* Sample the data time registers.  There is a race condition here... If we sample
    * the time just before midnight on December 31, the date could be wrong because
-   * the day rolled over while were sampling.
+   * the day rolled over while were sampling. Thus loop for checking overflow here
+   * is needed.  There is a race condition with subseconds too. If we sample TR
+   * register just before second rolling and subseconds are read at wrong second,
+   * we get wrong time.
    */
 
   do
@@ -1201,10 +1213,19 @@ int up_rtc_getdatetime(FAR struct tm *tp)
       tr  = getreg32(STM32_RTC_TR);
 #ifdef CONFIG_STM32_HAVE_RTC_SUBSECONDS
       ssr = getreg32(STM32_RTC_SSR);
+      tmp = getreg32(STM32_RTC_TR);
+      if (tmp != tr)
+        {
+          continue;
+        }
 #endif
       tmp = getreg32(STM32_RTC_DR);
+      if (tmp == dr)
+        {
+          break;
+        }
     }
-  while (tmp != dr);
+  while (1);
 
   rtc_dumpregs("Reading Time");
 
@@ -1303,6 +1324,32 @@ int up_rtc_getdatetime(FAR struct tm *tp)
 int up_rtc_getdatetime(FAR struct tm *tp)
 {
   return stm32_rtc_getdatetime_with_subseconds(tp, NULL);
+}
+#endif
+
+/************************************************************************************
+ * Name: up_rtc_getdatetime_with_subseconds
+ *
+ * Description:
+ *   Get the current date and time from the date/time RTC.  This interface
+ *   is only supported by the date/time RTC hardware implementation.
+ *   It is used to replace the system timer.  It is only used by the RTOS during
+ *   initialization to set up the system time when CONFIG_RTC and CONFIG_RTC_DATETIME
+ *   are selected (and CONFIG_RTC_HIRES is not).
+ *
+ * Input Parameters:
+ *   tp - The location to return the high resolution time value.
+ *   nsec - The location to return the subsecond time value.
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno on failure
+ *
+ ************************************************************************************/
+
+#ifdef CONFIG_STM32_HAVE_RTC_SUBSECONDS
+int up_rtc_getdatetime_with_subseconds(FAR struct tm *tp, FAR long *nsec)
+{
+  return stm32_rtc_getdatetime_with_subseconds(tp, nsec);
 }
 #endif
 

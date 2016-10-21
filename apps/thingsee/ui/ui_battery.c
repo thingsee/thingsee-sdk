@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ * Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -50,18 +50,20 @@ static int UI_pressure_init_module(int *fd);
 static int UI_read_temperature_data(int fd, int *temp);
 
 /* Pressure sensor device */
+
 #define LPS25H_DEVPATH "/dev/pres0"
 
-uint32_t UI_get_battery_percentage(void) {
-    int temperature, ret;
-    float voltage = 0.0f;
+uint32_t UI_get_battery_percentage(void)
+{
+  int temperature, ret;
+  float voltage = 0.0f;
 
-    temperature = UI_get_temperature();
-    ret = UI_get_battery_voltage(&voltage);
-    if (ret < 0)
-      dbg("Opening of the VBAT ADC failed in UI.\n");
+  temperature = UI_get_temperature();
+  ret = UI_get_battery_voltage(&voltage);
+  if (ret < 0)
+    dbg("Opening of the VBAT ADC failed in UI.\n");
 
-    return board_get_battery_level(voltage, temperature);
+  return board_get_battery_level(voltage, temperature);
 }
 
 static int UI_get_battery_voltage(float *voltage)
@@ -80,56 +82,66 @@ static int UI_get_battery_voltage(float *voltage)
   return OK;
 }
 
-static int UI_get_temperature(void) {
-    int temperature = 0; /* Set default to 0 degrees. */
-    int lps25hfd = -1;
+static int UI_get_temperature(void)
+{
+  int temperature = 0; /* Set default to 0 degrees. */
+  int lps25hfd = -1;
 
-    if (UI_pressure_init_module(&lps25hfd) == OK) {
-        UI_read_temperature_data(lps25hfd, &temperature);
-        if (lps25hfd >= 0)
-            close(lps25hfd);
-        else
-            dbg("Opening of the temperature sensor failed in UI.\n");
+  if (UI_pressure_init_module(&lps25hfd) == OK)
+    {
+      UI_read_temperature_data(lps25hfd, &temperature);
+      if (lps25hfd >= 0)
+        close(lps25hfd);
+      else
+        dbg("Opening of the temperature sensor failed in UI.\n");
     }
-    return temperature;
+  return temperature;
 }
 
-static int UI_pressure_init_module(int *fd) {
-    int status = OK;
-    *fd = open(LPS25H_DEVPATH, O_RDONLY);
-    if (*fd < 0) {
-        dbg("Failed to open %s (%d).\n", LPS25H_DEVPATH, get_errno());
-        status = ERROR;
+static int UI_pressure_init_module(int *fd)
+{
+  int status = OK;
+  *fd = open(LPS25H_DEVPATH, O_RDONLY);
+  if (*fd < 0)
+    {
+      dbg("Failed to open %s (%d).\n", LPS25H_DEVPATH, get_errno());
+      status = ERROR;
     }
 
-    if (status == OK) {
-        status = ioctl(*fd, LPS25H_PRES_CONFIG_ON, 0);
-        if (status < 0) {
-            dbg("Failed to read pressure & temperature.\n");
+  if (status == OK)
+    {
+      status = ioctl(*fd, LPS25H_PRES_CONFIG_ON, 0);
+      if (status < 0)
+        {
+          dbg("Failed to read pressure & temperature.\n");
         }
     }
 
-    return status;
+  return status;
 }
 
-static int UI_read_temperature_data(int fd, int *temp) {
-    int status = OK;
-    lps25h_temper_data_t t;
-    lps25h_pressure_data_t pt;
+static int UI_read_temperature_data(int fd, int *temp)
+{
+  int status = OK;
+  lps25h_temper_data_t t;
+  lps25h_pressure_data_t pt;
 
-    status = ioctl(fd, LPS25H_PRESSURE_OUT, (long)&pt);
-    if (status < 0) {
-        dbg("Failed to read pressure. Temperature reading might be bogus.\n");
+  status = ioctl(fd, LPS25H_PRESSURE_OUT, (long) &pt);
+  if (status < 0)
+    {
+      dbg("Failed to read pressure. Temperature reading might be bogus.\n");
     }
 
-    status = ioctl(fd, LPS25H_TEMPERATURE_OUT, (long)&t);
-    if (status < 0) {
-        dbg("Failed to read temperature.\n");
+  status = ioctl(fd, LPS25H_TEMPERATURE_OUT, (long) &t);
+  if (status < 0)
+    {
+      dbg("Failed to read temperature.\n");
     }
 
-    if (status == OK) {
-        *temp = t.int_temper / LPS25H_TEMPER_DIVIDER;
+  if (status == OK)
+    {
+      *temp = t.int_temper / LPS25H_TEMPER_DIVIDER;
     }
-    return status;
+  return status;
 }
 

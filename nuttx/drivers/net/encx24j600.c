@@ -228,7 +228,7 @@ struct enc_descr_s
   struct enc_descr_next *flink;
   uint16_t addr;
   uint16_t len;
-  uint32_t ts;                         /* Timestamp of reception for timeout */
+  systime_t ts;                        /* Timestamp of reception for timeout */
 };
 
 /* The enc_driver_s encapsulates all state information for a single hardware
@@ -686,7 +686,7 @@ static void enc_wrreg(FAR struct enc_driver_s *priv, uint16_t ctrlreg,
 static int enc_waitreg(FAR struct enc_driver_s *priv, uint16_t ctrlreg,
                           uint16_t bits, uint16_t value)
 {
-  uint32_t start = clock_systimer();
+  systime_t start = clock_systimer();
   uint32_t elapsed;
   uint16_t rddata;
 

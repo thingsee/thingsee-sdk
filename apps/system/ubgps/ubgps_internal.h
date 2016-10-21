@@ -40,6 +40,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <arch/board/board-reset.h>
 
 #include "ubgps_events.h"
 #include "ubx.h"
@@ -51,6 +52,16 @@
 /* Default navigation rate [ms] */
 
 #define DEFAULT_NAVIGATION_RATE       1000
+
+/* How fast location hint accuracy degrades over time. */
+
+#define HINT_LOCATION_ACCURACY_DEGRADE_SPEED_KPH 50               /* km/h */
+#define HINT_LOCATION_ACCURACY_DEGRADE_SPEED_MPS \
+  (HINT_LOCATION_ACCURACY_DEGRADE_SPEED_KPH * (1000) / (60 * 60)) /* m/s */
+
+/* Minimum accuracy required for location hint. */
+
+#define HINT_LOCATION_MINIMUM_NEW_ACCURACY      1500              /* meters */
 
 /****************************************************************************
  * Public Types
@@ -147,14 +158,9 @@ struct nmea_data_s
   size_t current_len;
 };
 
-
 /* GPS assistance data structure */
 
 struct gps_assistance_s {
-  /* Use system time */
-
-  bool use_time;
-
   /* Allocated AlmanacPlus filename for AssistNow Offline */
 
   char * alp_file;
@@ -163,26 +169,6 @@ struct gps_assistance_s {
 
   uint16_t alp_file_id;
 
-  /* Use location */
-
-  bool use_loc;
-
-  /* Latitude */
-
-  uint32_t latitude;
-
-  /* Longitude */
-
-  uint32_t longitude;
-
-  /* Altitude in centimeters */
-
-  int32_t altitude;
-
-  /* Accuracy in centimeters */
-
-  uint32_t accuracy;
-
   /* Aiding server address */
 
   struct sockaddr_in alp_srv_addr;
@@ -190,6 +176,34 @@ struct gps_assistance_s {
   /* Update time of current aiding data in seconds */
 
   time_t update_time;
+};
+
+/* Additional GPS assistance hint data structure */
+
+struct gps_assist_hint_s {
+  /* Flags */
+
+  bool have_location;
+
+  /* Longitude in 1e7 scale */
+
+  int32_t longitude;
+
+  /* Latitude in 1e7 scale */
+
+  int32_t latitude;
+
+  /* Horizontal accuracy estimate in mm */
+
+  uint32_t accuracy;
+
+  /* Height above mean sea level in mm */
+
+  int32_t altitude;
+
+  /* Date when location data was valid */
+
+  struct timespec location_time;
 };
 
 /* GPS module internal structure */
@@ -239,8 +253,12 @@ struct ubgps_s {
   /* GPS assistance data */
 
   struct gps_assistance_s * assist;
-};
+  struct gps_assist_hint_s * hint;
 
+  /* Override state-machine */
+
+  const struct ubgps_sm_s *override_sm;
+};
 
 /* GPS callback queue entry */
 
@@ -693,6 +711,24 @@ void __ubgps_remove_timer(struct ubgps_s * const gps, uint16_t id);
 void __ubgps_gc_callbacks(struct ubgps_s * const gps);
 
 /****************************************************************************
+ * Name: ubgps_check_alp_file_validity
+ *
+ * Description:
+ *   Check that ALP file contains valid aiding data.
+ *
+ ****************************************************************************/
+
+bool ubgps_check_alp_file_validity(const char *filepath);
+
+/****************************************************************************
+ * Name: __ubgps_full_write
+ ****************************************************************************/
+
+size_t __ubgps_full_write(int gps_fd, const void *buf, size_t writelen);
+
+#ifdef CONFIG_UBGPS_ASSIST_UPDATER
+
+/****************************************************************************
  * Name: ubgps_aid_updater_start
  *
  * Description:
@@ -711,6 +747,14 @@ int ubgps_aid_updater_start(struct gps_assistance_s * const assist);
  ****************************************************************************/
 
 int ubgps_aid_updater_stop(struct gps_assistance_s * const assist);
+
+/****************************************************************************
+ * Name: ubgps_aid_get_alp_filename
+ ****************************************************************************/
+
+const char *ubgps_aid_get_alp_filename(void);
+
+#endif
 
 /****************************************************************************
  * Name: ubgps_psm_timer_cb

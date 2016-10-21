@@ -43,18 +43,24 @@ CSRCS		= ubmodem_main.c ubmodem_initialize.c ubmodem_command.c \
 			  ubmodem_substate_sim.c ubmodem_substate_poweron.c \
 			  ubmodem_substate_poweroff.c ubmodem_substate_network.c \
 			  ubmodem_substate_gprs.c ubmodem_cell_locate.c ubmodem_poll.c \
-			  ubmodem_info.c ubmodem_cmd_task.c
+			  ubmodem_info.c ubmodem_cmd_task.c ubmodem_filesystem.c \
+			  ubmodem_cell_environment.c
 
 ifeq ($(CONFIG_UBMODEM_SMS_ENABLED),y)
 	CSRCS	+= ubmodem_sms_send.c
 	CSRCS	+= ubmodem_pdu_util.c
 endif
 
+ifeq ($(CONFIG_UBMODEM_FTP_ENABLED),y)
+	CSRCS	+= ubmodem_ftp_download.c
+endif
+
 ifeq ($(CONFIG_UBMODEM_VOICE),y)
 	CSRCS	+= ubmodem_voice_config.c
-	CSRCS	+= ubmodem_voice_config_additional.c
 	CSRCS	+= ubmodem_voice_control.c
 	CSRCS	+= ubmodem_voice_audio.c
+	CSRCS	+= ubmodem_voice_audio_additional.c
+	CSRCS	+= ubmodem_voice_config_additional.c
 endif
 
 ifeq ($(CONFIG_UBMODEM_USRSOCK),y)
@@ -65,7 +71,10 @@ ifeq ($(CONFIG_UBMODEM_USRSOCK),y)
 	CSRCS	+= ubmodem_usrsock_sendto.c
 	CSRCS	+= ubmodem_usrsock_recvfrom.c
 	CSRCS	+= ubmodem_usrsock_setgetsock.c
+	CSRCS	+= ubmodem_usrsock_bind.c
 endif
+
+CSRCS		+= $(wildcard ubmodem_external_*.c)
 
 AOBJS		= $(ASRCS:.S=$(OBJEXT))
 COBJS		= $(CSRCS:.c=$(OBJEXT))

@@ -1270,7 +1270,7 @@ static int stm32_ctrl_sendsetup(FAR struct stm32_usbhost_s *priv,
                                 FAR const struct usb_ctrlreq_s *req)
 {
   FAR struct stm32_chan_s *chan;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   int ret;
 
@@ -1434,7 +1434,7 @@ static int stm32_in_transfer(FAR struct stm32_usbhost_s *priv, int chidx,
                              FAR uint8_t *buffer, size_t buflen)
 {
   FAR struct stm32_chan_s *chan;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   int ret = OK;
 
@@ -1551,7 +1551,7 @@ static int stm32_out_transfer(FAR struct stm32_usbhost_s *priv, int chidx,
                               FAR uint8_t *buffer, size_t buflen)
 {
   FAR struct stm32_chan_s *chan;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   size_t xfrlen;
   int ret = OK;
@@ -3673,7 +3673,7 @@ static int stm32_ctrlin(FAR struct usbhost_driver_s *drvr,
 {
   struct stm32_usbhost_s *priv = (struct stm32_usbhost_s *)drvr;
   uint16_t buflen;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   int retries;
   int ret;
@@ -3757,7 +3757,7 @@ static int stm32_ctrlout(FAR struct usbhost_driver_s *drvr,
 {
   struct stm32_usbhost_s *priv = (struct stm32_usbhost_s *)drvr;
   uint16_t buflen;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   int retries;
   int ret;

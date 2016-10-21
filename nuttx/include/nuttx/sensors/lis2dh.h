@@ -137,7 +137,17 @@ extern "C" {
 #define ST_LIS2DH_OUT_Z_H_REG           0x2D
 
 #define ST_LIS2DH_FIFO_CTRL_REG         0x2E
+#define ST_LIS2DH_FIFOCR_THRESHOLD_MASK   0x1F
+#define ST_LIS2DH_FIFOCR_THRESHOLD(x)     ((x) & ST_LIS2DH_FIFOCR_THRESHOLD_MASK)
+#define ST_LIS2DH_FIFOCR_INT1             0x00
+#define ST_LIS2DH_FIFOCR_INT2             0x20
+#define ST_LIS2DH_FIFOCR_MODE_MASK        0xC0
+
 #define ST_LIS2DH_FIFO_SRC_REG          0x2F
+#define ST_LIS2DH_FIFOSR_NUM_SAMP_MASK    0x1F
+#define ST_LIS2DH_FIFOSR_EMPTY            0x20
+#define ST_LIS2DH_FIFOSR_OVRN_FIFO        0x40
+#define ST_LIS2DH_FIFOSR_WTM              0x80
 
 #define ST_LIS2DH_INT1_CFG_REG          0x30
 #define ST_LIS2DH_INT_CFG_AOI            0x80
@@ -150,6 +160,13 @@ extern "C" {
 #define ST_LIS2DH_INT_CFG_XLIE           0x01
 
 #define ST_LIS2DH_INT1_SRC_REG          0x31
+#define ST_LIS2DH_INT_SR_XLOW           0x01
+#define ST_LIS2DH_INT_SR_XHIGH          0x02
+#define ST_LIS2DH_INT_SR_YLOW           0x04
+#define ST_LIS2DH_INT_SR_YHIGH          0x08
+#define ST_LIS2DH_INT_SR_ZLOW           0x10
+#define ST_LIS2DH_INT_SR_ZHIGH          0x20
+#define ST_LIS2DH_INT_SR_ACTIVE         0x40
 
 #define ST_LIS2DH_INT1_THS_REG          0x32    /* 7-bit value for threshold */
 
@@ -354,7 +371,17 @@ struct lis2dh_config_s
   int  (*irq_attach)(FAR struct lis2dh_config_s *state, xcpt_t isr);
   void (*irq_enable)(FAR struct lis2dh_config_s *state, bool enable);
   void (*irq_clear)(FAR struct lis2dh_config_s *state);
+  bool (*read_int1_pin)(void);
+  bool (*read_int2_pin)(void);
 };
+
+struct lis2dh_raw_data_t
+  {
+    uint16_t out_x;
+    uint16_t out_y;
+    uint16_t out_z;
+  } packed_struct;
+typedef struct lis2dh_raw_data_t lis2dh_raw_data_t;
 
 /* IOCTL Commands ***********************************************************/
 

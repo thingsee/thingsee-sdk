@@ -75,9 +75,9 @@
 
 void neighbor_periodic(void)
 {
-  uint32_t now;
-  uint32_t ticks;
-  uint32_t hsecs;
+  systime_t now;
+  systime_t ticks;
+  systime_t hsecs;
   int i;
 
   /* Get the elapsed time in units of half seconds */

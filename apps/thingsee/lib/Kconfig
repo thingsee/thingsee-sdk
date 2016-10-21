@@ -11,6 +11,19 @@ menuconfig THINGSEE_LIB
 
 if THINGSEE_LIB
 
+config THINGSEE_CORE_MAX_POLL_TIMEOUT_MSEC
+	int "Maximum timeout for main-event loop poll"
+	default 2500
+	---help---
+		Shorter timeout value allow faster entry to deep-sleep, but increase
+		application CPU usage when deep-sleep cannot be entered.
+
+config THINGSEE_DEEPSLEEP_DISABLED
+	bool "Thingsee deep-sleep disabled"
+	default n
+	---help---
+		Disable deep-sleep in Thingsee core.
+
 config THINGSEE_DEEPSLEEP_DEBUG
 	bool "Thingsee deep-sleep debugging"
 	default n
@@ -29,6 +42,13 @@ config THINGSEE_DEEPSLEEP_WATCHDOG_TIMEOUT
 	default 1200
 	---help---
 		Deep-sleep watchdog timeout in seconds
+
+config THINGSEE_MAINLOOP_LOCKER
+    bool "Thingsee main event loop locker, for production tester"
+    default false
+    ---help---
+        Production tester thread needs to lock execution of main event loop
+        before changing module state.
 
 config THINGSEE_DISABLE_DEVICE_INFO_TABLE
     bool "Disable MCU UID to device PSN mapping table"

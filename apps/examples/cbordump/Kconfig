@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig EXAMPLES_CBORDUMP
+	bool "CBOR dump tool"
+	default n
+	depends on NETUTILS_TINYCBOR
+	---help---
+		Enable the CBOR dump tool

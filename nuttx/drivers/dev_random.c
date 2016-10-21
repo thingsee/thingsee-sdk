@@ -49,6 +49,9 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/random.h>
+#include <nuttx/board.h>
+
+#include <md5.h>
 
 /************************************************************************************
  * Definitions
@@ -75,6 +78,7 @@ struct rng_dev_s
 {
   sem_t rd_devsem;    /* Threads can only exclusively access the RNG */
   uint32_t rd_addptr;
+  uint32_t rd_newentr;
   uint8_t  rd_rotate;
 };
 
@@ -85,14 +89,15 @@ struct rng_dev_s
 static struct rng_dev_s g_rngdev;
 
 enum {
-  POOL_SIZE = 256, /* in 32-bit integers, must be power of two */
+  POOL_SIZE = 128, /* in 32-bit integers, must be power of two */
   POOL_MASK = (POOL_SIZE - 1)
 };
 
 static uint32_t entropy_pool[POOL_SIZE] __attribute__((section(".nuttx.randomdata")));
 
-/* x^POOL_SIZE + x^205 + x^155 + x^101 + x^52 + x + 1 */
-static const uint32_t pool_stir[] = { POOL_SIZE, 205, 155, 101, 52, 1 };
+/* Polynomial from paper "The Linux Pseudorandom Number Generator Revisited" */
+/* x^POOL_SIZE + x^104 + x^76 + x^51 + x^25 + x + 1 */
+static const uint32_t pool_stir[] = { POOL_SIZE, 104, 76, 51, 25, 1 };
 
 /* Derived from IEEE 802.3 CRC-32 */
 static const uint32_t pool_twist[8] = {
@@ -165,6 +170,8 @@ static void addentropy(const uint32_t *buf, size_t n)
 
       entropy_pool[i] = (w >> 3) ^ pool_twist[w & 7];
       buf++;
+
+      g_rngdev.rd_newentr += sizeof(uint32_t);
    }
 }
 
@@ -175,6 +182,8 @@ static void addentropy(const uint32_t *buf, size_t n)
  *   Fill a small buffer with good-quality randomness. This is an
  *   internal interface for getting cryptographical keys or seeds
  *   from entropy pool.
+ *
+ *   Code is inspired by extract_entropy() function of OpenBSD kernel.
  *
  *   Note that this function cannot fail, other than by asserting.
  *
@@ -194,23 +203,40 @@ static void addentropy(const uint32_t *buf, size_t n)
 
 static void getentropy(void *bytes, size_t nbytes)
 {
-  uint32_t i;
   enum { NMAXENTROPY = 128 };
+  uint8_t buffer[16];
+  unsigned int i;
 
   assert(nbytes <= NMAXENTROPY);
 
-  /* Read starting from last added position and hope that
-   * at least one bit has been changed.
-   */
+  add_sw_randomness(nbytes);
 
-  i = g_rngdev.rd_addptr;
   while (nbytes > 0)
     {
-      size_t need = MIN(nbytes, 4);
-      memcpy(bytes, &entropy_pool[i], need);
-      bytes += need;
-      nbytes -= need;
-      i = (i + 1) & POOL_MASK;
+      /* Hash the pool to get the output */
+
+      md5_sum((void *)entropy_pool, sizeof(entropy_pool), buffer);
+
+      /*
+       * In case the hash function has some recognizable
+       * output pattern, we fold it in half.
+       */
+
+      for (i = 0; i < sizeof(buffer) / 2; i++)
+        {
+          buffer[i] ^= buffer[sizeof(buffer) - 1 - i];
+        }
+
+      /* Copy data to destination buffer */
+
+      i = nbytes > sizeof(buffer) / 2 ? sizeof(buffer) / 2 : nbytes;
+      memcpy(bytes, buffer, i);
+      nbytes -= i;
+      bytes += i;
+
+      /* Modify pool so next hash will produce different results. */
+
+      add_sw_randomness(nbytes);
     }
 
   /* Add something back so repeated calls to this function
@@ -225,6 +251,8 @@ static void getentropy(void *bytes, size_t nbytes)
   uint32_t bogus = ENXIO ^ nbytes;
   addentropy(&bogus, 1);
 #endif
+
+  explicit_bzero(buffer, sizeof(buffer));
 }
 
 /* The spectrandom random number generation algoritm.
@@ -346,6 +374,7 @@ static void speck_counter(speck_ctx_t *ctx, uint32_t *ct)
     {
       speck_reseed(ctx);
     }
+
   speck_encrypt(ctx, (uint32_t []) { ctx->ctr >> 32, (uint32_t)ctx->ctr }, ct);
   ctx->ctr++;
   ctx->reseed_ctr++;
@@ -359,6 +388,14 @@ static void speckrandom_buf_internal(void *bytes, size_t nbytes)
     {
       speck_reseed(&g_ctx);
       initialized = true;
+    }
+
+  if (g_rngdev.rd_newentr >= 1024)
+    {
+      /* Initial entropy is low. Reseed speck when we have accumulated more. */
+
+      speck_reseed(&g_ctx);
+      g_rngdev.rd_newentr = 0;
     }
 
   while (nbytes > 0)
@@ -464,9 +501,10 @@ void up_rngaddint(enum rnd_source_t kindof, int val)
    * receive, just add it all to pool.
    */
 
-  buf[0] = (uint32_t)kindof ^ val;
+  buf[0] = (uint32_t)kindof ^ ROTL_32(val, 27);
   buf[1] = val;
-  addentropy(buf, 2);
+
+  up_rngaddentropy(buf, 2);
 }
 
 /****************************************************************************
@@ -486,7 +524,28 @@ void up_rngaddint(enum rnd_source_t kindof, int val)
 
 void up_rngaddentropy(const uint32_t *buf, size_t n)
 {
-  addentropy(buf, n);
+  uint32_t tbuf[1];
+  struct timespec ts;
+
+  (void)clock_gettime(CLOCK_REALTIME, &ts);
+
+  tbuf[0] = ROTL_32(ts.tv_nsec, 17) ^ ROTL_32(ts.tv_sec, 3);
+
+  if (n == 0)
+    {
+      addentropy(tbuf, 1);
+    }
+  else
+    {
+      tbuf[0] ^= buf[0];
+
+      addentropy(tbuf, 1);
+
+      if (n > 1)
+        {
+          addentropy(&buf[1], n - 1);
+        }
+    }
 }
 
 /****************************************************************************
@@ -527,6 +586,9 @@ void speckrandom_buf(void *bytes, size_t nbytes)
 void up_rnginitialize(void)
 {
   speckrandom_init();
+#ifdef CONFIG_BOARD_INITRNGSEED
+  board_init_rndseed();
+#endif
   register_driver("/dev/random", &g_rngops, 0444, NULL);
 }
 

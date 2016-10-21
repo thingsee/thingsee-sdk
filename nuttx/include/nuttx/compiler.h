@@ -119,12 +119,24 @@
 # define inline_function __attribute__ ((always_inline,no_instrument_function))
 # define noinline_function __attribute__ ((noinline))
 
+/* Functions linked to assembly files need to be marked as externally visible
+ * for LTO linking. */
+
+# define externally_visible_function __attribute__ ((externally_visible))
+
 /* GCC has does not use storage classes to qualify addressing */
 
 # define FAR
 # define NEAR
 # define DSEG
 # define CODE
+
+/* GCC 4.x have __builtin_ctz(|l|ll) and __builtin_clz(|l|ll). */
+
+#if __GNUC__ >= 4
+# define HAVE_BUILTIN_CTZ 1
+# define HAVE_BUILTIN_CLZ 1
+#endif
 
 /* Handle cases where sizeof(int) is 16-bits, sizeof(long) is 32-bits, and
  * pointers are 16-bits.
@@ -269,6 +281,10 @@
 # define inline_function
 # define noinline_function
 
+/* SDCC does not support LTO. */
+
+# define externally_visible_function
+
 /* The reentrant attribute informs SDCC that the function
  * must be reentrant.  In this case, SDCC will store input
  * arguments on the stack to support reentrancy.
@@ -373,6 +389,10 @@
 # define noinline_function
 # define unused_function
 
+/* Zilog does not support LTO. */
+
+# define externally_visible_function
+
 /* REVISIT: */
 
 # define farcall_function
@@ -464,6 +484,7 @@
 # define naked_function
 # define inline_function
 # define noinline_function
+# define externally_visible_function
 
 # define FAR
 # define NEAR

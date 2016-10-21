@@ -45,6 +45,7 @@
 #include <string.h>
 
 #include <nuttx/arch.h>
+#include <nuttx/bits.h>
 
 #include "lib_internal.h"
 
@@ -125,6 +126,10 @@
 #  define FMT_NEXT     src++                        /* Advance to the next character */
 #  define FMT_PREV     src--                        /* Backup to the previous character */
 #endif
+
+#define U8DIVBY3(a)              ((unsigned int)(a) * 0xABU >> 9)
+#define U8DIVBY4(a)              ((unsigned int)(a) >> 2)
+#define U8DIVBY10(a)             ((unsigned int)(a) * 0xCDU >> 11)
 
 /****************************************************************************
  * Private Type Declarations
@@ -216,6 +221,45 @@ static void postjustify(FAR struct lib_outstream_s *obj, uint8_t fmt,
 
 static const char g_nullstring[] = "(null)";
 
+#ifdef CONFIG_HAVE_LONG_LONG
+static const unsigned long long g_powers_of_10[20] =
+{
+  1ULL,
+  10ULL,
+  100ULL,
+  1000ULL,
+  10000ULL,
+  100000ULL,
+  1000000ULL,
+  10000000ULL,
+  100000000ULL,
+  1000000000ULL,
+  10000000000ULL,
+  100000000000ULL,
+  1000000000000ULL,
+  10000000000000ULL,
+  100000000000000ULL,
+  1000000000000000ULL,
+  10000000000000000ULL,
+  100000000000000000ULL,
+  1000000000000000000ULL,
+  10000000000000000000ULL
+};
+#else
+static const unsigned long g_powers_of_10[9] =
+{
+  1UL,
+  10UL,
+  100UL,
+  1000UL,
+  10000UL,
+  100000UL,
+  1000000UL,
+  10000000UL,
+  100000000UL
+}
+#endif
+
 /****************************************************************************
  * Private Variables
  ****************************************************************************/
@@ -294,15 +338,32 @@ static int getpsize(uint8_t flags, FAR void *p)
 
 static void utodec(FAR struct lib_outstream_s *obj, unsigned int n)
 {
-  unsigned int remainder = n % 10;
-  unsigned int dividend  = n / 10;
+  unsigned int msbit;
+  unsigned int len10;
+  unsigned int divider;
 
-  if (dividend)
+  msbit = sizeof(unsigned int) * 8 - clz(n);
+  len10 = U8DIVBY10(msbit * 3) + 1;
+  divider = g_powers_of_10[--len10];
+
+  if (n && n / divider == 0)
     {
-      utodec(obj, dividend);
+      divider = g_powers_of_10[--len10];
     }
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+  do
+    {
+      unsigned int d = n / divider;
+
+      obj->put(obj, d + '0');
+
+      if (len10 == 0)
+        break;
+
+      n -= d * divider;
+      divider = g_powers_of_10[--len10];
+    }
+  while (true);
 }
 
 /****************************************************************************
@@ -311,31 +372,29 @@ static void utodec(FAR struct lib_outstream_s *obj, unsigned int n)
 
 static void utohex(FAR struct lib_outstream_s *obj, unsigned int n, uint8_t a)
 {
-  bool    nonzero = false;
-  uint8_t bits;
+  unsigned int msbit;
+  unsigned int len16;
+  unsigned int shift;
+  unsigned int d;
 
-  for (bits = 8*sizeof(unsigned int); bits > 0; bits -= 4)
+  msbit = sizeof(unsigned int) * 8 - clz(n);
+  len16 = msbit ? U8DIVBY4(msbit - 1) + 1 : 1;
+
+  do
     {
-      uint8_t nibble = (uint8_t)((n >> (bits - 4)) & 0xf);
-      if (nibble || nonzero)
-        {
-          nonzero = true;
+      shift = --len16 * 4;
+      d = (n >> shift) & 0xF;
 
-          if (nibble < 10)
-            {
-              obj->put(obj, nibble + '0');
-            }
-          else
-            {
-              obj->put(obj, nibble + a - 10);
-            }
+      if (d < 10)
+        {
+          obj->put(obj, d + '0');
+        }
+      else
+        {
+          obj->put(obj, d + a - 10);
         }
     }
-
-  if (!nonzero)
-    {
-      obj->put(obj, '0');
-    }
+  while (len16 > 0);
 }
 
 /****************************************************************************
@@ -344,15 +403,22 @@ static void utohex(FAR struct lib_outstream_s *obj, unsigned int n, uint8_t a)
 
 static void utooct(FAR struct lib_outstream_s *obj, unsigned int n)
 {
-  unsigned int remainder = n & 0x7;
-  unsigned int dividend = n >> 3;
+  unsigned int msbit;
+  unsigned int len8;
+  unsigned int shift;
+  unsigned int d;
 
-  if (dividend)
+  msbit = sizeof(unsigned int) * 8 - clz(n);
+  len8 = msbit ? U8DIVBY3(msbit - 1) + 1 : 1;
+
+  do
     {
-      utooct(obj, dividend);
-    }
+      shift = --len8 * 3;
+      d = (n >> shift) & 7;
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+      obj->put(obj, d + '0');
+    }
+  while (len8 > 0);
 }
 
 /****************************************************************************
@@ -361,15 +427,20 @@ static void utooct(FAR struct lib_outstream_s *obj, unsigned int n)
 
 static void utobin(FAR struct lib_outstream_s *obj, unsigned int n)
 {
-  unsigned int remainder = n & 1;
-  unsigned int dividend = n >> 1;
+  const unsigned int ibits = sizeof(unsigned int) * 8;
+  const unsigned int imask = ibits - 1;
+  int shift;
 
-  if (dividend)
+  shift = ibits - clz(n);
+  shift--;
+
+  do
     {
-      utobin(obj, dividend);
-    }
+      unsigned int d = (n >> ((unsigned int)shift & imask)) & 1;
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+      obj->put(obj, d + '0');
+    }
+  while (--shift >= 0);
 }
 
 /****************************************************************************
@@ -562,15 +633,32 @@ static int getdblsize(uint8_t fmt, int trunc, uint8_t flags, double n)
 
 static void lutodec(FAR struct lib_outstream_s *obj, unsigned long n)
 {
-  unsigned int  remainder = n % 10;
-  unsigned long dividend  = n / 10;
+  unsigned int msbit;
+  unsigned int len10;
+  unsigned long divider;
 
-  if (dividend)
+  msbit = sizeof(unsigned long) * 8 - clzl(n);
+  len10 = U8DIVBY10(msbit * 3) + 1;
+  divider = g_powers_of_10[--len10];
+
+  if (n && n / divider == 0)
     {
-      lutodec(obj, dividend);
+      divider = g_powers_of_10[--len10];
     }
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+  do
+    {
+      unsigned int d = n / divider;
+
+      obj->put(obj, d + '0');
+
+      if (len10 == 0)
+        break;
+
+      n -= (unsigned long)d * divider;
+      divider = g_powers_of_10[--len10];
+    }
+  while (true);
 }
 
 /****************************************************************************
@@ -579,31 +667,29 @@ static void lutodec(FAR struct lib_outstream_s *obj, unsigned long n)
 
 static void lutohex(FAR struct lib_outstream_s *obj, unsigned long n, uint8_t a)
 {
-  bool    nonzero = false;
-  uint8_t bits;
+  unsigned int msbit;
+  unsigned int len16;
+  unsigned int shift;
+  unsigned int d;
 
-  for (bits = 8*sizeof(unsigned long); bits > 0; bits -= 4)
+  msbit = sizeof(unsigned long) * 8 - clzl(n);
+  len16 = msbit ? U8DIVBY4(msbit - 1) + 1 : 1;
+
+  do
     {
-      uint8_t nibble = (uint8_t)((n >> (bits - 4)) & 0xf);
-      if (nibble || nonzero)
-        {
-          nonzero = true;
+      shift = --len16 * 4;
+      d = (n >> shift) & 0xF;
 
-          if (nibble < 10)
-            {
-              obj->put(obj, nibble + '0');
-            }
-          else
-            {
-              obj->put(obj, nibble + a - 10);
-            }
+      if (d < 10)
+        {
+          obj->put(obj, d + '0');
+        }
+      else
+        {
+          obj->put(obj, d + a - 10);
         }
     }
-
-  if (!nonzero)
-    {
-      obj->put(obj, '0');
-    }
+  while (len16 > 0);
 }
 
 /****************************************************************************
@@ -612,15 +698,22 @@ static void lutohex(FAR struct lib_outstream_s *obj, unsigned long n, uint8_t a)
 
 static void lutooct(FAR struct lib_outstream_s *obj, unsigned long n)
 {
-  unsigned int  remainder = n & 0x7;
-  unsigned long dividend  = n >> 3;
+  unsigned int msbit;
+  unsigned int len8;
+  unsigned int shift;
+  unsigned int d;
 
-  if (dividend)
+  msbit = sizeof(unsigned long) * 8 - clzl(n);
+  len8 = msbit ? U8DIVBY3(msbit - 1) + 1 : 1;
+
+  do
     {
-      lutooct(obj, dividend);
-    }
+      shift = --len8 * 3;
+      d = (n >> shift) & 7;
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+      obj->put(obj, d + '0');
+    }
+  while (len8 > 0);
 }
 
 /****************************************************************************
@@ -629,15 +722,18 @@ static void lutooct(FAR struct lib_outstream_s *obj, unsigned long n)
 
 static void lutobin(FAR struct lib_outstream_s *obj, unsigned long n)
 {
-  unsigned int  remainder = n & 1;
-  unsigned long dividend  = n >> 1;
+  int shift;
 
-  if (dividend)
+  shift = sizeof(unsigned long) * 8 - clzl(n);
+  shift--;
+
+  do
     {
-      lutobin(obj, dividend);
-    }
+      unsigned int d = (n >> shift) & 1;
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+      obj->put(obj, d + '0');
+    }
+  while (--shift >= 0);
 }
 
 /****************************************************************************
@@ -812,15 +908,32 @@ static int getlusize(uint8_t fmt, uint8_t flags, unsigned long ln)
 
 static void llutodec(FAR struct lib_outstream_s *obj, unsigned long long n)
 {
-  unsigned int remainder = n % 10;
-  unsigned long long dividend = n / 10;
+  unsigned int msbit;
+  unsigned int len10;
+  unsigned long long divider;
 
-  if (dividend)
+  msbit = sizeof(unsigned long long) * 8 - clzll(n);
+  len10 = U8DIVBY10(msbit * 3) + 1;
+  divider = g_powers_of_10[--len10];
+
+  if (n && n / divider == 0)
     {
-      llutodec(obj, dividend);
+      divider = g_powers_of_10[--len10];
     }
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+  do
+    {
+      unsigned int d = n / divider;
+
+      obj->put(obj, d + '0');
+
+      if (len10 == 0)
+        break;
+
+      n -= (unsigned long long)d * divider;
+      divider = g_powers_of_10[--len10];
+    }
+  while (true);
 }
 
 /****************************************************************************
@@ -829,31 +942,29 @@ static void llutodec(FAR struct lib_outstream_s *obj, unsigned long long n)
 
 static void llutohex(FAR struct lib_outstream_s *obj, unsigned long long n, uint8_t a)
 {
-  bool    nonzero = false;
-  uint8_t bits;
+  unsigned int msbit;
+  unsigned int len16;
+  unsigned int shift;
+  unsigned int d;
 
-  for (bits = 8*sizeof(unsigned long long); bits > 0; bits -= 4)
+  msbit = sizeof(unsigned long long) * 8 - clzll(n);
+  len16 = msbit ? U8DIVBY4(msbit - 1) + 1 : 1;
+
+  do
     {
-      uint8_t nibble = (uint8_t)((n >> (bits - 4)) & 0xf);
-      if (nibble || nonzero)
-        {
-          nonzero = true;
+      shift = --len16 * 4;
+      d = (n >> shift) & 0xF;
 
-          if (nibble < 10)
-            {
-              obj->put(obj, (nibble + '0'));
-            }
-          else
-            {
-              obj->put(obj, (nibble + a - 10));
-            }
+      if (d < 10)
+        {
+          obj->put(obj, d + '0');
+        }
+      else
+        {
+          obj->put(obj, d + a - 10);
         }
     }
-
-  if (!nonzero)
-    {
-      obj->put(obj, '0');
-    }
+  while (len16 > 0);
 }
 
 /****************************************************************************
@@ -862,15 +973,22 @@ static void llutohex(FAR struct lib_outstream_s *obj, unsigned long long n, uint
 
 static void llutooct(FAR struct lib_outstream_s *obj, unsigned long long n)
 {
-  unsigned int remainder = n & 0x7;
-  unsigned long long dividend = n >> 3;
+  unsigned int msbit;
+  unsigned int len8;
+  unsigned int shift;
+  unsigned int d;
 
-  if (dividend)
+  msbit = sizeof(unsigned long long) * 8 - clzll(n);
+  len8 = msbit ? U8DIVBY3(msbit - 1) + 1 : 1;
+
+  do
     {
-      llutooct(obj, dividend);
-    }
+      shift = --len8 * 3;
+      d = (n >> shift) & 7;
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+      obj->put(obj, d + '0');
+    }
+  while (len8 > 0);
 }
 
 /****************************************************************************
@@ -879,15 +997,20 @@ static void llutooct(FAR struct lib_outstream_s *obj, unsigned long long n)
 
 static void llutobin(FAR struct lib_outstream_s *obj, unsigned long long n)
 {
-  unsigned int remainder = n & 1;
-  unsigned long long dividend = n >> 1;
+  const unsigned int llbits = sizeof(unsigned long long) * 8;
+  const unsigned int llmask = llbits - 1;
+  int shift;
 
-  if (dividend)
+  shift = llbits - clzll(n);
+  shift--;
+
+  do
     {
-      llutobin(obj, dividend);
-    }
+      unsigned int d = (n >> ((unsigned int)shift & llmask)) & 1;
 
-  obj->put(obj, (remainder + (unsigned int)'0'));
+      obj->put(obj, d + '0');
+    }
+  while (--shift >= 0);
 }
 
 /****************************************************************************
@@ -1169,9 +1292,7 @@ int lib_vsprintf(FAR struct lib_outstream_s *obj, FAR const char *src, va_list a
   FAR char        *ptmp;
 #ifndef CONFIG_NOPRINTF_FIELDWIDTH
   int             width;
-#ifdef CONFIG_LIBC_FLOATINGPOINT
   int             trunc;
-#endif
   uint8_t         fmt;
 #endif
   uint8_t         flags;
@@ -1214,9 +1335,7 @@ int lib_vsprintf(FAR struct lib_outstream_s *obj, FAR const char *src, va_list a
 #ifndef CONFIG_NOPRINTF_FIELDWIDTH
       fmt   = FMT_RJUST;
       width = 0;
-#ifdef CONFIG_LIBC_FLOATINGPOINT
       trunc = 0;
-#endif
 #endif
 
       /* Process each format qualifier. */
@@ -1264,10 +1383,8 @@ int lib_vsprintf(FAR struct lib_outstream_s *obj, FAR const char *src, va_list a
               int value = va_arg(ap, int);
               if (IS_HASDOT(flags))
                 {
-#ifdef CONFIG_LIBC_FLOATINGPOINT
                   trunc = value;
                   SET_HASASTERISKTRUNC(flags);
-#endif
                 }
               else
                 {
@@ -1306,9 +1423,7 @@ int lib_vsprintf(FAR struct lib_outstream_s *obj, FAR const char *src, va_list a
 
               if (IS_HASDOT(flags))
                 {
-#ifdef CONFIG_LIBC_FLOATINGPOINT
                   trunc = n;
-#endif
                 }
               else
                 {
@@ -1360,6 +1475,7 @@ int lib_vsprintf(FAR struct lib_outstream_s *obj, FAR const char *src, va_list a
         {
 #ifndef CONFIG_NOPRINTF_FIELDWIDTH
           int swidth;
+          int left;
 #endif
           /* Get the string to output */
 
@@ -1374,13 +1490,21 @@ int lib_vsprintf(FAR struct lib_outstream_s *obj, FAR const char *src, va_list a
            */
 
 #ifndef CONFIG_NOPRINTF_FIELDWIDTH
-          swidth = strlen(ptmp);
+          swidth = (IS_HASDOT(flags) && trunc >= 0)
+                      ? strnlen(ptmp, trunc) : strlen(ptmp);
           prejustify(obj, fmt, 0, width, swidth);
+          left = swidth;
 #endif
           /* Concatenate the string into the output */
 
           while (*ptmp)
             {
+#ifndef CONFIG_NOPRINTF_FIELDWIDTH
+              if (left-- <= 0)
+                {
+                  break;
+                }
+#endif
               obj->put(obj, *ptmp);
               ptmp++;
             }

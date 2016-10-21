@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_main.c
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,6 +51,7 @@
 #include <apps/system/ubmodem.h>
 
 #include "ubmodem_internal.h"
+#include "ubmodem_hw.h"
 #include "ubmodem_usrsock.h"
 
 /****************************************************************************
@@ -110,7 +111,7 @@ static const int8_t
       [UBMODEM_LEVEL_SIM_ENABLED]        = MODEM_STATE_SETUP_CMD_PROMPT,
       [UBMODEM_LEVEL_NETWORK]            = MODEM_STATE_SETUP_CMD_PROMPT,
       [UBMODEM_LEVEL_GPRS]               = MODEM_STATE_SETUP_CMD_PROMPT,
-      [UBMODEM_LEVEL_STUCK_HARDWARE]     = MODEM_STATE_FAKE_STUCK_HARDWARE,
+      [UBMODEM_LEVEL_STUCK_HARDWARE]     = MODEM_STATE_SETUP_CMD_PROMPT,
     },
   [UBMODEM_LEVEL_CMD_PROMPT] =
     {
@@ -463,6 +464,10 @@ static int wake_timer_handler(struct ubmodem_s *modem, const int timer_id,
   modem->wake_timer_active = false;
 
   modem_do_state_machine(modem);
+
+  /* Wake timer done, decrease HIGH activity. */
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
 
   return OK;
 }
@@ -889,6 +894,23 @@ void __ubmodem_change_state(struct ubmodem_s *modem,
   __ubmodem_publish_event(modem, UBMODEM_EVENT_FLAG_TRACE_STATE_CHANGE, &states,
       sizeof(states));
 
+  /* Inform power-management of activity change. */
+
+  if (was_waiting && new_state != MODEM_STATE_WAITING)
+    {
+      /* From no-activity (waiting/idle) to low-activity (transition, task,
+       * socket work).*/
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
+    }
+  else if (!was_waiting && new_state == MODEM_STATE_WAITING)
+    {
+      /* From low-activity (non-waiting state) to no-activity (waiting/idle).
+       */
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
+    }
+
   /* Update state */
 
   modem->state = new_state;
@@ -925,6 +947,12 @@ void __ubmodem_wake_waiting_state(struct ubmodem_s *modem,
 
   if (modem->wake_timer_active)
     return;
+
+  /* Launching fast wake timer, increase HIGH activity. */
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+
+  /* Launch wake timer. */
 
   modem->wake_timer_active = true;
   err = __ubmodem_set_timer(modem, 1, &wake_timer_handler, modem);

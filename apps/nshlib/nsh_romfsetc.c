@@ -99,7 +99,7 @@ int nsh_romfsetc(void)
 
   /* Create a ROM disk for the /etc filesystem */
 
-  ret = romdisk_register(CONFIG_NSH_ROMFSDEVNO, romfs_img,
+  ret = romdisk_register(CONFIG_NSH_ROMFSDEVNO, (void*)romfs_img,
                          NSECTORS(romfs_img_len), CONFIG_NSH_ROMFSSECTSIZE);
   if (ret < 0)
     {

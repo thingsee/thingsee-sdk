@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/conman/conman_util.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -95,10 +95,10 @@ int __conman_util_block_read(int fd, void *buffer, size_t len)
 
   do
     {
-      ret = recv(fd, buf + len - toread, toread, 0);
+      ret = read(fd, buf + len - toread, toread);
       if (ret < 0)
         {
-          conman_dbg("recv failed %d\n", errno);
+          conman_dbg("read failed %d\n", errno);
           return ERROR;
         }
 
@@ -141,10 +141,10 @@ int __conman_util_block_write(int fd, const void * const buffer, size_t len)
 
   do
     {
-      ret = send(fd, buf + len - towrite, towrite, 0);
+      ret = write(fd, buf + len - towrite, towrite);
       if (ret < 0)
         {
-          conman_dbg("send failed %d\n", errno);
+          conman_dbg("write failed %d\n", errno);
           return ERROR;
         }
 

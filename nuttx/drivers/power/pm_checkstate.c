@@ -108,7 +108,7 @@
 
 enum pm_state_e pm_checkstate(void)
 {
-  uint32_t now;
+  systime_t now;
   irqstate_t flags;
 
   /* Check for the end of the current time slice.  This must be performed

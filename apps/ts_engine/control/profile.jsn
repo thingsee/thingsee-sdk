@@ -1,0 +1,116 @@
+{
+    "initPuId": 0,
+    "apiVersion": 0.17,
+    "pId": "0123456789",
+    "purposes": [
+        {
+            "puId": 0,
+            "name": "My purpose",
+            "initStId": 1,
+            "states": [
+                {
+                    "stId": 1,
+                    "name": "Temperature",
+                    "events": [
+                        {
+                            "evid": 1,
+                            "name": "Temperature",
+                            "eventLog": true,
+                            "actions": {
+                                "cloud": {
+                                    "sendEvent": true
+                                },
+                                "engine": {
+                                    "gotoStId": 2
+                                }
+                            },
+                            "causes": [
+                                {
+                                    "sId": "0x60100",
+                                    "senseLog": true,
+                                    "measurement": {
+                                        "interval": 3000
+                                    },
+                                    "threshold": {
+                                        "count": 2
+                                    },
+                                    "thresholds": {
+                                        "isGt": 20
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "stId": 2,
+                    "name": "Humidity",
+                    "events": [
+                        {
+                            "evId": 1,
+                            "name": "Humidity",
+                            "eventLog": 1,
+                            "actions": {
+                                "cloud": {
+                                    "sendEvent": true
+                                },
+                                "engine": {
+                                    "gotoStId": 3
+                                }
+                            },
+                            "causes": [
+                                {
+                                    "sId": "0x60200",
+                                    "senseLog": true,
+                                    "measurement": {
+                                        "interval": 3000
+                                    },
+                                    "threshold": {
+                                        "count": 2
+                                    },
+                                    "thresholds": {
+                                        "isGt": 10
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "stId": 3,
+                    "name": "Pressure",
+                    "events": [
+                        {
+                            "evId": 1,
+                            "name": "Pressure",
+                            "eventLog": 1,
+                            "actions": {
+                                "cloud": {
+                                    "sendEvent": true
+                                },
+                                "engine": {
+                                    "gotoStId": 1
+                                }
+                            },
+                            "causes": [
+                                {
+                                    "sId": "0x60400",
+                                    "senseLog": true,
+                                    "measurement": {
+                                        "interval": 3000
+                                    },
+                                    "threshold": {
+                                        "count": 2
+                                    },
+                                    "thresholds": {
+                                        "isGt": 10
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

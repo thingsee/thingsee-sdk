@@ -6,6 +6,9 @@
  *   Copyright (C) 2011 Gregory Nutt. All rights reserved.
  *   Ported by: Darcy Gong
  *
+ *   Copyright (c) 2015 Haltian Ltd.
+ *     - Jussi Kivilinna <jussi.kivilinna@haltian.com>
+ *
  * And derives from the cJSON Project which has an MIT license:
  *
  *   Copyright (c) 2009 Dave Gamble
@@ -43,66 +46,32 @@
 #include <ctype.h>
 #include <unistd.h>
 
+#include <nuttx/mm/mm.h>
+
 #include <apps/netutils/cJSON.h>
+
+#include "cJSON_internal.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
+#define cJSON_malloc malloc
+#define cJSON_free free
+#define cJSON_realloc realloc
+#define cJSON_strdup strdup
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
-
-static const char *ep;
-
-static const unsigned char firstByteMark[7] =
-  { 0x00, 0x00, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc };
-
-static void *(*cJSON_malloc)(size_t sz) = malloc;
-static void (*cJSON_free)(void *ptr)    = free;
 
 /****************************************************************************
  * Private Prototypes
  ****************************************************************************/
 
-static const char *parse_value(cJSON *item, const char *value);
-static char *print_value(cJSON *item, int depth, int fmt);
-static const char *parse_array(cJSON *item, const char *value);
-static char *print_array(cJSON *item, int depth, int fmt);
-static const char *parse_object(cJSON *item, const char *value);
-static char *print_object(cJSON *item, int depth, int fmt);
-
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-
-static char *cJSON_strdup(const char *str)
-{
-  size_t len;
-  char *copy;
-
-  len = strlen(str) + 1;
-  if (!(copy = (char *)cJSON_malloc(len)))
-    {
-      return 0;
-    }
-
-  memcpy(copy, str, len);
-  return copy;
-}
-
-/* Internal constructor. */
-
-static cJSON *cJSON_New_Item(void)
-{
-  cJSON *node = (cJSON *) cJSON_malloc(sizeof(cJSON));
-  if (node)
-    {
-      memset(node, 0, sizeof(cJSON));
-    }
-
-  return node;
-}
 
 static int cJSON_strcasecmp(const char *s1, const char *s2)
 {
@@ -127,1003 +96,870 @@ static int cJSON_strcasecmp(const char *s1, const char *s2)
   return tolower(*(const unsigned char *)s1) - tolower(*(const unsigned char *)s2);
 }
 
-/* Parse the input text to generate a number, and populate the result into item. */
+/* Get next pointer of item. */
 
-static const char *parse_number(cJSON *item, const char *num)
+static cJSON *cJSON_GetNextPointer(cJSON *item)
 {
-  double n = 0, sign = 1, scale = 0;
-  int subscale = 0, signsubscale = 1;
+  uint8_t next_type = item->info & JSON_NEXT_MASK;
+  size_t item_len;
 
-  /* Could use sscanf for this? */
-  /* Has sign? */
-
-  if (*num == '-')
+  if (next_type == JSON_NEXT_NULL)
     {
-      sign = -1, num++;
+      return NULL;
     }
 
-  /* is zero */
-
-  if (*num == '0')
+  if (next_type == JSON_NEXT_PTR)
     {
-      num++;
+      struct cJSON_DataNext *field = (void *)item->data;
+
+      return field->next;
     }
 
-  /* Number? */
+  DEBUGASSERT(next_type == JSON_NEXT_MEM);
 
-  if (*num >= '1' && *num <= '9')
-    {
-      do
-        {
-          n = (n * 10.0) + (*num++ - '0');
-        }
-      while (*num >= '0' && *num <= '9');
-    }
-
-  /* Fractional part? */
-
-  if (*num == '.' && num[1] >= '0' && num[1] <= '9')
-    {
-      num++;
-      do
-        {
-          n = (n * 10.0) + (*num++ - '0'), scale--;
-        }
-      while (*num >= '0' && *num <= '9');
-    }
-
-  /* Exponent? */
-
-  if (*num == 'e' || *num == 'E')
-    {
-      num++;
-      if (*num == '+')
-        {
-          num++;
-        }
-
-      /* With sign? */
-
-      else if (*num == '-')
-        {
-          signsubscale = -1;
-          num++;
-        }
-
-      /* Number? */
-
-      while (*num >= '0' && *num <= '9')
-        {
-          subscale = (subscale * 10) + (*num++ - '0');
-        }
-    }
-
-  /* number = +/- number.fraction * 10^+/-exponent */
-
-  n = sign * n * pow(10.0, (scale + subscale * signsubscale));
-  item->valuedouble = n;
-  item->valueint = (int)n;
-  item->type = cJSON_Number;
-  return num;
+  item_len = cJSON_GetFieldPointers(item, NULL, NULL, NULL, NULL, NULL, NULL);
+  return (cJSON *)((uint8_t *)item + item_len);
 }
 
-/* Render the number nicely from the given item into a string. */
+/* Get name-type needed for given name-length. */
 
-static char *print_number(cJSON *item)
+static uint8_t cJSON_NameFieldTypeByLength(size_t name_string_len)
 {
-  char *str;
-  double d = item->valuedouble;
-  double id = item->valueint;
-  size_t slen;
-  int type;
+  if (name_string_len == 0)
+    return JSON_NAME_EMPTY;
 
-  /* Get type and needed length output string. */
+  if (name_string_len + 1 <= UINT8_MAX)
+    return JSON_NAME_SHORT;
 
-  if ((d <= INT_MAX && d >= INT_MIN) &&
-      (fabs(id - d) <= DBL_EPSILON || fabs(floor(d) - d) <= DBL_EPSILON))
+  /* DEBUGASSERT(name_string_len + 1 > UINT16_MAX); */
+
+  return JSON_NAME_LONG;
+}
+
+/* Utility for getting name string pointer of object. */
+
+static const char *cJSON_GetNameString(cJSON *item)
+{
+  void *name_field = NULL;
+  uint8_t name_type = JSON_NAME_EMPTY;
+
+  (void)cJSON_GetFieldPointers(item, NULL, NULL, NULL, NULL, &name_field,
+                               &name_type);
+
+  if (name_type == JSON_NAME_EMPTY)
     {
-      slen = snprintf(NULL, 0, "%d", item->valueint);
-      type = 1;
+      return "";
     }
-  else if (fabs(d) < 1.0e-6 || fabs(d) > 1.0e9)
+
+  DEBUGASSERT(name_field);
+
+  if (name_type == JSON_NAME_SHORT)
     {
-      slen = snprintf(NULL, 0, "%e", d);
-      type = -1;
+      struct cJSON_DataStringShort *ss = name_field;
+
+      return ss->valuestring;
+    }
+
+  if (name_type == JSON_NAME_LONG)
+    {
+      struct cJSON_DataStringLong *sl = name_field;
+
+      return sl->valuestring;
+    }
+
+  DEBUGASSERT(false);
+  return NULL;
+}
+
+/* Utility for getting pointer to array/object data structure. */
+
+static struct cJSON_DataArray *cJSON_ArrayField(cJSON *item)
+{
+  uint8_t data_type = item->info & JSON_DATA_MASK;
+
+  if (data_type == JSON_DATA_ARRAY ||
+      data_type == JSON_DATA_OBJECT)
+    {
+      struct cJSON_DataArray *data = NULL;
+
+      (void)cJSON_GetFieldPointers(item, NULL, NULL, (void **)&data, NULL,
+                                   NULL, NULL);
+
+      return data;
+    }
+
+  return NULL;
+}
+
+/* Utility for getting pointer to next field structure. */
+
+static struct cJSON_DataNext *cJSON_NextField(cJSON *item)
+{
+  uint8_t next_type = item->info & JSON_NEXT_MASK;
+
+  if (next_type == JSON_NEXT_PTR)
+    {
+      struct cJSON_DataNext *next = NULL;
+
+      (void)cJSON_GetFieldPointers(item, &next, NULL, NULL, NULL, NULL, NULL);
+
+      return next;
+    }
+
+  return NULL;
+}
+
+/* Utility for changing name string of object. */
+
+static cJSON *cJSON_ChangeName(cJSON *item, const char *new_name)
+{
+  size_t new_name_len = strlen(new_name);
+  void *name_field = NULL;
+  uint8_t name_type = 0;
+  uint8_t next_type = 0;
+  uint8_t new_name_type;
+  size_t name_field_len = 0;
+  size_t new_name_field_len = 0;
+  cJSON *newitem;
+  size_t objsize;
+  size_t newsize;
+  size_t endsize;
+
+  objsize = cJSON_GetFieldPointers(item, NULL, &next_type, NULL, NULL,
+                                   &name_field, &name_type);
+
+  /* Caller needs to make sure that prev is not in packed format. */
+
+  DEBUGASSERT(next_type == JSON_NEXT_PTR);
+
+  if (name_type != JSON_NAME_EMPTY)
+    {
+      name_field_len = ((uint8_t *)item + objsize) - (uint8_t *)name_field;
+    }
+
+  new_name_type = cJSON_NameFieldTypeByLength(new_name_len);
+  if (new_name_type != JSON_NAME_EMPTY)
+    {
+      new_name_field_len = (new_name_type == JSON_NAME_SHORT) ?
+                            sizeof(struct cJSON_DataStringShort) :
+                            sizeof(struct cJSON_DataStringLong);
+      new_name_field_len += new_name_len + 1;
+    }
+
+  if (name_type == new_name_type && name_field_len == new_name_field_len)
+    {
+      /* Already correct size. */
+
+      newsize = objsize;
     }
   else
     {
-      slen = snprintf(NULL, 0, "%.10f", d);
-      type = 0;
-    }
-
-  /* Allocate and fill output. */
-
-  slen += 1;
-  str = (char *)cJSON_malloc(slen);
-
-  if (!str)
-    return NULL;
-
-  if (type > 0)
-    {
-      snprintf(str, slen, "%d", item->valueint);
-    }
-  else if (type < 0)
-    {
-      snprintf(str, slen, "%e", d);
-    }
-  else
-    {
-      snprintf(str, slen, "%.10f", d);
-
-      if (strchr(str, '.'))
+      if (new_name_field_len > name_field_len)
         {
-          /* Remove trailing zeros. */
+          /* Grow cJSON storage. */
 
-          slen -= 1;
-
-          while (slen > 0)
-            {
-              if (str[--slen] != '0')
-                break;
-
-              str[slen] = '\0';
-            }
-
-          /* Remove trailing dot. */
-
-          if (slen > 0 && str[slen] == '.')
-            str[slen] = '\0';
-        }
-    }
-
-  return str;
-}
-
-/* Parse the input text into an unescaped cstring, and populate item. */
-
-static const char *parse_string(cJSON *item, const char *str)
-{
-  const char *ptr = str + 1;
-  char *ptr2;
-  char *out;
-  int len = 0;
-  unsigned uc;
-  unsigned uc2;
-
-  if (*str != '\"')
-    {
-      /* not a string! */
-
-      ep = str;
-      return 0;
-    }
-
-  while (*ptr != '\"' && *ptr && ++len)
-    {
-      /* Skip escaped quotes. */
-
-      if (*ptr++ == '\\')
-        {
-          ptr++;
-        }
-    }
-
-  /* This is how long we need for the string, roughly. */
-
-  out = (char *)cJSON_malloc(len + 1);
-  if (!out)
-    {
-      return 0;
-    }
-
-  ptr = str + 1;
-  ptr2 = out;
-  while (*ptr != '\"' && *ptr)
-    {
-      if (*ptr != '\\')
-        {
-          *ptr2++ = *ptr++;
+          newsize = objsize + (new_name_field_len - name_field_len);
         }
       else
         {
-          ptr++;
-          switch (*ptr)
-            {
-            case 'b':
-              *ptr2++ = '\b';
-              break;
+          /* Shrink cJSON storage. */
 
-            case 'f':
-              *ptr2++ = '\f';
-              break;
-
-            case 'n':
-              *ptr2++ = '\n';
-              break;
-
-            case 'r':
-              *ptr2++ = '\r';
-              break;
-
-            case 't':
-              *ptr2++ = '\t';
-              break;
-
-            case 'u':
-              /* Transcode utf16 to utf8. */
-              /* Get the unicode char. */
-
-              sscanf(ptr + 1, "%4x", &uc);
-              ptr += 4;
-
-              /* Check for invalid. */
-
-              if ((uc >= 0xdc00 && uc <= 0xdfff) || uc == 0)
-                {
-                  break;
-                }
-
-              if (uc >= 0xd800 && uc <= 0xdbff) /* UTF16 surrogate pairs. */
-                {
-                  /* missing second-half of surrogate. */
-
-                  if (ptr[1] != '\\' || ptr[2] != 'u')
-                    {
-                      break;
-                    }
-
-                  sscanf(ptr + 3, "%4x", &uc2);
-                  ptr += 6;
-                  if (uc2 < 0xdc00 || uc2 > 0xdfff)
-                    {
-                      /* Invalid second-half of surrogate. */
-
-                      break;
-                    }
-
-                  uc = 0x10000 | ((uc & 0x3ff) << 10) | (uc2 & 0x3ff);
-                }
-
-              len = 4;
-              if (uc < 0x80)
-                {
-                  len = 1;
-                }
-              else if (uc < 0x800)
-                {
-                  len = 2;
-                }
-              else if (uc < 0x10000)
-                {
-                  len = 3;
-                }
-
-              ptr2 += len;
-
-              switch (len)
-                {
-                case 4:
-                  *--ptr2 = ((uc | 0x80) & 0xbf);
-                  uc >>= 6;
-                  /* no break */
-                case 3:
-                  *--ptr2 = ((uc | 0x80) & 0xbf);
-                  uc >>= 6;
-                  /* no break */
-                case 2:
-                  *--ptr2 = ((uc | 0x80) & 0xbf);
-                  uc >>= 6;
-                  /* no break */
-                case 1:
-                  *--ptr2 = (uc | firstByteMark[len]);
-                  break;
-                }
-
-              ptr2 += len;
-              break;
-
-            default:
-              *ptr2++ = *ptr;
-              break;
-            }
-          ptr++;
+          newsize = objsize - (name_field_len - new_name_field_len);
         }
-    }
 
-  *ptr2 = 0;
-  if (*ptr == '\"')
-    {
-      ptr++;
-    }
-
-  item->valuestring = out;
-  item->type = cJSON_String;
-  return ptr;
-}
-
-/* Render the cstring provided to an escaped version that can be printed. */
-
-static char *print_string_ptr(const char *str)
-{
-  const char *ptr;
-  char *ptr2, *out;
-  int len = 0;
-  unsigned char token;
-
-  if (!str)
-    {
-      return cJSON_strdup("");
-    }
-
-  ptr = str;
-  while ((token = *ptr) && ++len)
-    {
-      if (strchr("\"\\\b\f\n\r\t", token))
+      newitem = cJSON_realloc(item, newsize);
+      if (!newitem)
         {
-          len++;
+          free(item);
+          return NULL;
         }
-      else if (token < 32)
+
+      if (newsize > objsize)
         {
-          len += 5;
+          memset((uint8_t *)newitem + objsize, 0, newsize - objsize);
         }
+      item = newitem;
 
-      ptr++;
+      item->info &= ~JSON_NAME_MASK;
+      item->info |= new_name_type;
+
+      (void)cJSON_GetFieldPointers(item, NULL, NULL, NULL, NULL, &name_field,
+                                   NULL);
     }
 
-  out = (char *)cJSON_malloc(len + 3);
-  if (!out)
+  /* Copy new name. */
+
+  if (new_name_type == JSON_NAME_SHORT)
     {
-      return 0;
-    }
+      struct cJSON_DataStringShort *ss = name_field;
 
-  ptr2 = out;
-  ptr = str;
-  *ptr2++ = '\"';
-  while (*ptr)
+      memmove(ss->valuestring, new_name, new_name_len + 1);
+      ss->string_size = new_name_len + 1;
+    }
+  else if (new_name_type == JSON_NAME_LONG)
     {
-      if ((unsigned char)*ptr > 31 && *ptr != '\"' && *ptr != '\\')
-        {
-          *ptr2++ = *ptr++;
-        }
-      else
-        {
-          *ptr2++ = '\\';
-          switch (token = *ptr++)
-            {
-            case '\\':
-              *ptr2++ = '\\';
-              break;
+      struct cJSON_DataStringLong *sl = name_field;
 
-            case '\"':
-              *ptr2++ = '\"';
-              break;
-
-            case '\b':
-              *ptr2++ = 'b';
-              break;
-
-            case '\f':
-              *ptr2++ = 'f';
-              break;
-
-            case '\n':
-              *ptr2++ = 'n';
-              break;
-
-            case '\r':
-              *ptr2++ = 'r';
-              break;
-
-            case '\t':
-              *ptr2++ = 't';
-              break;
-
-            default:
-              /* Escape and print */
-
-              sprintf(ptr2, "u%04x", token);
-              ptr2 += 5;
-              break;
-            }
-        }
+      memmove(sl->valuestring, new_name, new_name_len + 1);
+      sl->string_size = new_name_len + 1;
     }
 
-  *ptr2++ = '\"';
-  *ptr2++ = 0;
-  return out;
+  /* Verify object size against calculated. */
+
+  endsize = cJSON_GetFieldPointers(item, NULL, NULL, NULL, NULL, NULL, NULL);
+
+  DEBUGASSERT(endsize == newsize);
+
+  return item;
 }
 
-/* Invote print_string_ptr (which is useful) on an item. */
+/* Utility for creating new cJSON item. */
 
-static char *print_string(cJSON *item)
+static cJSON *cJSON_New_Item(uint8_t info, size_t fields_size)
 {
-  return print_string_ptr(item->valuestring);
-}
+  cJSON *item;
 
-/* Utility to jump whitespace and cr/lf */
-
-static const char *skip(const char *in)
-{
-  while (in && *in && (unsigned char)*in <= 32)
-    {
-      in++;
-    }
-
-  return in;
-}
-
-/* Parser core - when encountering text, process appropriately. */
-
-static const char *parse_value(cJSON *item, const char *value)
-{
-  if (!value)
-    {
-      /* Fail on null. */
-
-      return 0;
-    }
-
-  if (!strncmp(value, "null", 4))
-    {
-      item->type = cJSON_NULL;
-      return value + 4;
-    }
-
-  if (!strncmp(value, "false", 5))
-    {
-      item->type = cJSON_False;
-      return value + 5;
-    }
-
-  if (!strncmp(value, "true", 4))
-    {
-      item->type = cJSON_True;
-      item->valueint = 1;
-      return value + 4;
-    }
-
-  if (*value == '\"')
-    {
-      return parse_string(item, value);
-    }
-
-  if (*value == '-' || (*value >= '0' && *value <= '9'))
-    {
-      return parse_number(item, value);
-    }
-
-  if (*value == '[')
-    {
-      return parse_array(item, value);
-    }
-
-  if (*value == '{')
-    {
-      return parse_object(item, value);
-    }
-
-  /* Failure. */
-
-  ep = value;
-  return 0;
-}
-
-/* Render a value to text. */
-
-static char *print_value(cJSON *item, int depth, int fmt)
-{
-  char *out = 0;
+  item = calloc(1, sizeof(cJSON) + fields_size);
   if (!item)
     {
-      return 0;
+      return NULL;
     }
 
-  switch ((item->type) & 255)
-    {
-    case cJSON_NULL:
-      out = cJSON_strdup("null");
-      break;
+  item->info = info;
 
-    case cJSON_False:
-      out = cJSON_strdup("false");
-      break;
-
-    case cJSON_True:
-      out = cJSON_strdup("true");
-      break;
-
-    case cJSON_Number:
-      out = print_number(item);
-      break;
-
-    case cJSON_String:
-      out = print_string(item);
-      break;
-
-    case cJSON_Array:
-      out = print_array(item, depth, fmt);
-      break;
-
-    case cJSON_Object:
-      out = print_object(item, depth, fmt);
-      break;
-    }
-
-  return out;
+  return item;
 }
 
-/* Build an array from input text. */
+/* Utility for calculating next field size by type. */
 
-static const char *parse_array(cJSON *item, const char *value)
+static size_t cJSON_CalculateNextFieldSize(uint8_t next_type)
 {
-  cJSON *child;
-
-  if (*value != '[')
-    {
-      /* not an array! */
-
-      ep = value;
-      return 0;
-    }
-
-  item->type = cJSON_Array;
-  value = skip(value + 1);
-  if (*value == ']')
-    {
-      /* Empty array. */
-
-      return value + 1;
-    }
-
-  item->child = child = cJSON_New_Item();
-  if (!item->child)
-    {
-      /* Memory fail */
-
-      return 0;
-    }
-
-  /* Skip any spacing, get the value. */
-
-  value = skip(parse_value(child, skip(value)));
-  if (!value)
-    {
-      return 0;
-    }
-
-  while (*value == ',')
-    {
-      cJSON *new_item;
-      if (!(new_item = cJSON_New_Item()))
-        {
-          /* <emory fail */
-
-          return 0;
-        }
-
-      child->next = new_item;
-      new_item->prev = child;
-      child = new_item;
-      value = skip(parse_value(child, skip(value + 1)));
-      if (!value)
-        {
-          /* Memory fail */
-
-          return 0;
-        }
-    }
-
-  if (*value == ']')
-    {
-      /* End of array */
-
-      return value + 1;
-    }
-
-  /* Malformed */
-
-  ep = value;
+  if (next_type == JSON_NEXT_PTR)
+    return sizeof(struct cJSON_DataNext);
   return 0;
 }
 
-/* Render an array to text */
+/* Utility for calculating name field size. */
 
-static char *print_array(cJSON *item, int depth, int fmt)
+static size_t cJSON_CalculateNameFieldSize(const char *name, uint8_t *nametype)
 {
-  char **entries = NULL;
-  char *out = 0;
-  char *ptr;
-  char *ret;
-  int len = 5;
-  cJSON *child = item->child;
-  int numentries = 0;
-  int i = 0;
-  int fail = 0;
+  size_t namelen = name ? strlen(name) : 0;
 
-  /* How many entries in the array? */
+  *nametype = cJSON_NameFieldTypeByLength(namelen);
 
-  while (child)
+  if (*nametype == JSON_NAME_EMPTY)
     {
-      numentries++, child = child->next;
-    }
-
-  if (numentries > 0)
-    {
-      /* Allocate an array to hold the values for each */
-
-      entries = (char **)cJSON_malloc(numentries * sizeof(char *));
-      if (!entries)
-        {
-          return 0;
-        }
-
-      memset(entries, 0, numentries * sizeof(char *));
-
-      /* Retrieve all the results: */
-
-      child = item->child;
-      while (child && !fail)
-        {
-          ret = print_value(child, depth + 1, fmt);
-          entries[i++] = ret;
-          if (ret)
-            {
-              len += strlen(ret) + 2 + (fmt ? 1 : 0);
-            }
-          else
-            {
-              fail = 1;
-            }
-
-          child = child->next;
-        }
-    }
-
-  /* If we didn't fail, try to malloc the output string */
-
-  if (!fail)
-    {
-      out = (char *)cJSON_malloc(len);
-    }
-
-  /* If that fails, we fail. */
-
-  if (!out)
-    {
-      fail = 1;
-    }
-
-  /* Handle failure. */
-
-  if (fail)
-    {
-      for (i = 0; i < numentries; i++)
-        {
-          if (entries[i])
-            {
-              cJSON_free(entries[i]);
-            }
-        }
-
-      cJSON_free(entries);
       return 0;
     }
-
-  /* Compose the output array. */
-
-  *out = '[';
-  ptr = out + 1;
-  *ptr = 0;
-  for (i = 0; i < numentries; i++)
+  else if (*nametype == JSON_NAME_SHORT)
     {
-      strcpy(ptr, entries[i]);
-      ptr += strlen(entries[i]);
-      if (i != numentries - 1)
-        {
-          *ptr++ = ',';
-          if (fmt)
-            {
-              *ptr++ = ' ';
-            }
-
-          *ptr = 0;
-        }
-      cJSON_free(entries[i]);
+      return sizeof(struct cJSON_DataStringShort) + namelen + 1;
     }
-
-  cJSON_free(entries);
-  *ptr++ = ']';
-  *ptr++ = 0;
-  return out;
+  else /* if (*nametype == JSON_NAME_LONG) */
+    {
+      return sizeof(struct cJSON_DataStringShort) + namelen + 1;
+    }
 }
 
-/* Build an object from the text. */
+/* Check if two floating-point numbers are equal. */
 
-static const char *parse_object(cJSON *item, const char *value)
+static bool dbl_equal(double a, double b)
 {
-  cJSON *child;
-  if (*value != '{')
-    {
-      /* Not an object! */
-
-      ep = value;
-      return 0;
-    }
-
-  item->type = cJSON_Object;
-  value = skip(value + 1);
-  if (*value == '}')
-    {
-      /* Empty array. */
-
-      return value + 1;
-    }
-
-  item->child = child = cJSON_New_Item();
-  if (!item->child)
-    {
-      return 0;
-    }
-
-  value = skip(parse_string(child, skip(value)));
-  if (!value)
-    {
-      return 0;
-    }
-
-  child->string = child->valuestring;
-  child->valuestring = 0;
-  if (*value != ':')
-    {
-      ep = value;
-      return 0;
-    }
-
-   /* Skip any spacing, get the value. */
-
-  value = skip(parse_value(child, skip(value + 1)));
-  if (!value)
-    {
-      return 0;
-    }
-
-  while (*value == ',')
-    {
-      cJSON *new_item;
-      if (!(new_item = cJSON_New_Item()))
-        {
-          /* Memory fail */
-
-          return 0;
-        }
-
-      child->next = new_item;
-      new_item->prev = child;
-      child = new_item;
-      value = skip(parse_string(child, skip(value + 1)));
-      if (!value)
-        {
-          return 0;
-        }
-
-      child->string = child->valuestring;
-      child->valuestring = 0;
-      if (*value != ':')
-        {
-          ep = value;
-          return 0;
-        }
-
-     /* Skip any spacing, get the value. */
-
-      value = skip(parse_value(child, skip(value + 1)));
-      if (!value)
-        {
-          return 0;
-        }
-    }
-
-  if (*value == '}')
-    {
-      /* End of array */
-
-      return value + 1;
-    }
-
-  /* Malformed */
-
-  ep = value;
-  return 0;
+  double fabs_a = fabs(a);
+  double fabs_b = fabs(b);
+  return fabs(a - b) <= ((fabs_a > fabs_b ? fabs_b : fabs_a) * DBL_EPSILON);
 }
 
-/* Render an object to text. */
+/* Utility to calculate smallest storage field size for given number. */
 
-static char *print_object(cJSON *item, int depth, int fmt)
+static size_t cJSON_CalculateDataNumberFieldSize(double num,
+                                                 uint8_t *data_type)
 {
-  char **entries = 0;
-  char **names = 0;
-  char *out = 0;
-  char *ptr;
-  char *ret;
-  char *str;
-  int len = 7;
-  int i = 0;
-  int j;
-  cJSON *child = item->child;
-  int numentries = 0;
-  int fail = 0;
+  int32_t s32;
+  float f;
 
-  /* Count the number of entries. */
+  /* Find smallest storage type that can accurately represent value of
+   * 'num'. */
 
-  while (child)
+  if (num == 0.0)
     {
-      numentries++, child = child->next;
-    }
-
-  if (numentries > 0)
-    {
-      /* Allocate space for the names and the objects */
-
-      entries = (char **)cJSON_malloc(numentries * sizeof(char *));
-      if (!entries)
+      if (!signbit(num))
         {
-          return 0;
+          /* Positive zero. Use 8-bit integer storage. */
+
+          *data_type = JSON_DATA_NUM_INT8;
+          return sizeof(struct cJSON_DataInt8);
         }
-
-      names = (char **)cJSON_malloc(numentries * sizeof(char *));
-      if (!names)
+      else
         {
-          cJSON_free(entries);
-          return 0;
-        }
+          /* Negative zero, needs floating point type. */
 
-      memset(entries, 0, sizeof(char *) * numentries);
-      memset(names, 0, sizeof(char *) * numentries);
-
-      /* Collect all the results into our arrays: */
-
-      child = item->child;
-      depth++;
-      if (fmt)
-        {
-          len += depth;
-        }
-
-      while (child)
-        {
-          names[i] = str = print_string_ptr(child->string);
-          entries[i++] = ret = print_value(child, depth, fmt);
-          if (str && ret)
-            {
-              len += strlen(ret) + strlen(str) + 2 + (fmt ? 2 + depth : 0);
-            }
-          else
-            {
-              fail = 1;
-            }
-
-          child = child->next;
+          *data_type = JSON_DATA_NUM_FLOAT;
+          return sizeof(struct cJSON_DataFloat);
         }
     }
 
-  /* Try to allocate the output string */
-
-  if (!fail)
+  s32 = num;
+  if (s32 == num || dbl_equal(num, s32))
     {
-      out = (char *)cJSON_malloc(len);
-    }
-
-  if (!out)
-    {
-      fail = 1;
-    }
-
-  /* Handle failure */
-
-  if (fail)
-    {
-      for (i = 0; i < numentries; i++)
+      if (s32 >= INT8_MIN && s32 <= INT8_MAX)
         {
-          if (names[i])
-            {
-              cJSON_free(names[i]);
-            }
+          /* Number does not have decimals and fits 8-bit integer. */
 
-          if (entries[i])
-            {
-              cJSON_free(entries[i]);
-            }
+          *data_type = JSON_DATA_NUM_INT8;
+          return sizeof(struct cJSON_DataInt8);
         }
 
-      cJSON_free(names);
-      cJSON_free(entries);
+      if (s32 >= INT16_MIN && s32 <= INT16_MAX)
+        {
+          /* Number does not have decimals and fits 16-bit integer. */
+
+          *data_type = JSON_DATA_NUM_INT16;
+          return sizeof(struct cJSON_DataInt16);
+        }
+
+      /* Number does not have decimals and fits 32-bit integer. */
+
+      *data_type = JSON_DATA_NUM_INT32;
+      return sizeof(struct cJSON_DataInt32);
+    }
+
+  f = num;
+  if (f == num || dbl_equal(num, f))
+    {
+      /* Number can be accurately presented using 32-bit floating-point
+       * number. */
+
+      *data_type = JSON_DATA_NUM_FLOAT;
+      return sizeof(struct cJSON_DataFloat);
+    }
+
+  /* Need to stick with double type. */
+
+  *data_type = JSON_DATA_NUM_DOUBLE;
+  return sizeof(struct cJSON_DataDouble);
+}
+
+/* Utility for calculating smallest storage field size for given string
+ * length. */
+
+static size_t cJSON_CalculateDataStringFieldSize(size_t string_len,
+                                                 uint8_t *data_type)
+{
+  if (string_len + 1 <= UINT8_MAX)
+    {
+      *data_type = JSON_DATA_STR_SHORT;
+      return sizeof(struct cJSON_DataStringShort) + string_len + 1;
+    }
+
+  /* DEBUGASSERT(string_len + 1 > UINT16_MAX); */
+
+  *data_type = JSON_DATA_STR_LONG;
+  return sizeof(struct cJSON_DataStringLong) + string_len + 1;
+}
+
+/* Utility for calculating storage size for given buffer length. */
+
+static size_t cJSON_CalculateDataBufferFieldSize(size_t buffer_len)
+{
+  return sizeof(struct cJSON_DataStringLong) + buffer_len;
+}
+
+/* Utility for storing given number to configured data field. */
+
+static void cJSON_SetValueNumber(cJSON *item, double num)
+{
+  uint8_t data_type = 0;
+  void *data = NULL;
+
+  (void)cJSON_GetFieldPointers(item, NULL, NULL, &data, &data_type, NULL, NULL);
+
+  switch (data_type)
+    {
+    case JSON_DATA_NUM_INT8:
+      ((struct cJSON_DataInt8 *)data)->valueint8 = num;
+      break;
+
+    case JSON_DATA_NUM_INT16:
+      ((struct cJSON_DataInt16 *)data)->valueint16 = num;
+      break;
+
+    case JSON_DATA_NUM_INT32:
+      ((struct cJSON_DataInt32 *)data)->valueint32 = num;
+      break;
+
+    case JSON_DATA_NUM_FLOAT:
+      ((struct cJSON_DataFloat *)data)->valuefloat = num;
+      break;
+
+    case JSON_DATA_NUM_DOUBLE:
+      ((struct cJSON_DataDouble *)data)->valuedouble = num;
+      break;
+
+    default:
+      DEBUGASSERT(false);
+      break;
+    }
+}
+
+/* Utility for reading number value as integer from number data field. */
+
+static int cJSON_GetValueInt(cJSON *item)
+{
+  uint8_t data_type = 0;
+  void *data = NULL;
+
+  (void)cJSON_GetFieldPointers(item, NULL, NULL, &data, &data_type, NULL, NULL);
+
+  switch (data_type)
+    {
+    case JSON_DATA_NUM_INT8:
+      return ((struct cJSON_DataInt8 *)data)->valueint8;
+      break;
+
+    case JSON_DATA_NUM_INT16:
+      return ((struct cJSON_DataInt16 *)data)->valueint16;
+      break;
+
+    case JSON_DATA_NUM_INT32:
+      return ((struct cJSON_DataInt32 *)data)->valueint32;
+      break;
+
+    case JSON_DATA_NUM_FLOAT:
+      return ((struct cJSON_DataFloat *)data)->valuefloat;
+      break;
+
+    case JSON_DATA_NUM_DOUBLE:
+      return ((struct cJSON_DataDouble *)data)->valuedouble;
+      break;
+
+    default:
+      DEBUGASSERT(false);
+      return 0;
+    }
+}
+
+/* Utility for reading number value as floating-point from number data
+ * field. */
+
+static double cJSON_GetValueDouble(cJSON *item)
+{
+  uint8_t data_type = 0;
+  void *data = NULL;
+
+  (void)cJSON_GetFieldPointers(item, NULL, NULL, &data, &data_type, NULL, NULL);
+
+  switch (data_type)
+    {
+    case JSON_DATA_NUM_INT8:
+      return ((struct cJSON_DataInt8 *)data)->valueint8;
+      break;
+
+    case JSON_DATA_NUM_INT16:
+      return ((struct cJSON_DataInt16 *)data)->valueint16;
+      break;
+
+    case JSON_DATA_NUM_INT32:
+      return ((struct cJSON_DataInt32 *)data)->valueint32;
+      break;
+
+    case JSON_DATA_NUM_FLOAT:
+      return ((struct cJSON_DataFloat *)data)->valuefloat;
+      break;
+
+    case JSON_DATA_NUM_DOUBLE:
+      return ((struct cJSON_DataDouble *)data)->valuedouble;
+      break;
+
+    default:
+      DEBUGASSERT(false);
+      return 0;
+    }
+}
+
+/* Utility for storing given buffer to configured string/buffer data field. */
+
+static void cJSON_SetValueBuffer(cJSON *item, const void *buf, size_t buflen)
+{
+  uint8_t data_type = 0;
+  void *data = NULL;
+  char *dst = NULL;
+
+  (void)cJSON_GetFieldPointers(item, NULL, NULL, &data, &data_type, NULL, NULL);
+
+  switch (data_type)
+    {
+    case JSON_DATA_STR_SHORT:
+      {
+        struct cJSON_DataStringShort *ss = data;
+
+        ss->string_size = buflen;
+        dst = ss->valuestring;
+
+        DEBUGASSERT(ss->string_size == buflen);
+      }
+      break;
+
+    case JSON_DATA_BUFFER:
+    case JSON_DATA_STR_LONG:
+      {
+        struct cJSON_DataStringLong *sl = data;
+
+        sl->string_size = buflen;
+        dst = sl->valuestring;
+
+        DEBUGASSERT(sl->string_size == buflen);
+      }
+      break;
+
+    default:
+      DEBUGASSERT(false);
+      break;
+    }
+
+  if (buflen)
+    {
+      memmove(dst, buf, buflen);
+    }
+}
+
+/* Utility for reading string/buffer from data field. */
+
+static struct cJSON_buffer_s cJSON_GetValueBuffer(cJSON *item)
+{
+  struct cJSON_buffer_s buf;
+  uint8_t data_type = 0;
+  void *data = NULL;
+
+  (void)cJSON_GetFieldPointers(item, NULL, NULL, &data, &data_type, NULL,
+                               NULL);
+
+  switch (data_type)
+    {
+    case JSON_DATA_STR_SHORT:
+      {
+        struct cJSON_DataStringShort *ss = data;
+
+        buf.ptr = ss->valuestring;
+        buf.len = ss->string_size;
+      }
+      break;
+
+    case JSON_DATA_BUFFER:
+    case JSON_DATA_STR_LONG:
+      {
+        struct cJSON_DataStringLong *sl = data;
+
+        buf.ptr = sl->valuestring;
+        buf.len = sl->string_size;
+      }
+      break;
+
+    default:
+      DEBUGASSERT(false);
+      break;
+    }
+
+  return buf;
+}
+
+/* Utility for storing child pointer to configured array/object data field. */
+
+static void cJSON_SetArrayData(cJSON *item, cJSON *child)
+{
+  struct cJSON_DataArray *data = cJSON_ArrayField(item);
+
+  DEBUGASSERT(data);
+
+  data->child = child;
+}
+
+/* Utility to make unpacked copy of item. */
+
+static cJSON *cJSON_MakeUnpackedCopy(cJSON *src)
+{
+  cJSON *newitem;
+  void *new_data_field;
+  void *new_name_field;
+  uint8_t data_type;
+  uint8_t name_type;
+  void *data_field;
+  void *name_field;
+  size_t data_len;
+  size_t name_len;
+  size_t fields_size;
+
+  (void)cJSON_GetFieldPointers(src, NULL, NULL, &data_field, &data_type,
+                               &name_field, &name_type);
+
+  fields_size = cJSON_CalculateNextFieldSize(JSON_NEXT_PTR);
+  fields_size += data_len = cJSON_DataFieldLength(data_type, data_field);
+  fields_size += name_len = cJSON_NameFieldLength(name_type, name_field);
+
+  newitem = cJSON_New_Item(data_type | JSON_NEXT_PTR | name_type, fields_size);
+  if (!newitem)
+    {
+      return NULL;
+    }
+
+  /* Copy data field. */
+
+  if (data_len)
+    {
+      (void)cJSON_GetFieldPointers(newitem, NULL, NULL, &new_data_field, NULL,
+                                   NULL, NULL);
+      memmove(new_data_field, data_field, data_len);
+    }
+
+  /* Data field complete, now can get name field pointer and copy name. */
+
+  if (name_len)
+    {
+      (void)cJSON_GetFieldPointers(newitem, NULL, NULL, NULL, NULL,
+                                   &new_name_field, NULL);
+      memmove(new_name_field, name_field, name_len);
+    }
+
+  return newitem;
+}
+
+/* Utility to calculate size of packed array. */
+
+static size_t cJSON_PackedArraySize(cJSON *item)
+{
+  size_t total = 0;
+
+  if (!item || !cJSON_IsPacked(item))
+    {
       return 0;
     }
 
-  /* Compose the output: */
-
-  *out = '{';
-  ptr = out + 1;
-  if (fmt)
+  do
     {
-      *ptr++ = '\n';
+      total += cJSON_GetFieldPointers(item, NULL, NULL, NULL, NULL, NULL, NULL);
+
+      item = cJSON_next(item);
     }
-  *ptr = 0;
+  while (item);
 
-  for (i = 0; i < numentries; i++)
+  return total;
+}
+
+/* Utility for copying data from cJSON object to another. */
+
+static void cJSON_CopyFields(cJSON *dst, cJSON *src)
+{
+  struct cJSON_DataNext *nextdata;
+  struct cJSON_DataNext *newnextdata;
+  size_t copysize;
+  size_t objsize;
+  void *data;
+  void *newdata;
+  void *name;
+  void *newname;
+
+  objsize = cJSON_GetFieldPointers(src, &nextdata, NULL, &data, NULL,
+                                   &name, NULL);
+  (void)cJSON_GetFieldPointers(dst, &newnextdata, NULL, &newdata, NULL,
+                               &newname, NULL);
+
+  if (newnextdata)
     {
-      if (fmt)
+      newnextdata->next = nextdata ? nextdata->next : NULL;
+    }
+
+  if (!data)
+    {
+      DEBUGASSERT(!newdata);
+
+      if (!name)
         {
-          for (j = 0; j < depth; j++)
+          DEBUGASSERT(!newname);
+        }
+      else
+        {
+          DEBUGASSERT(newname);
+
+          copysize = ((uint8_t *)src + objsize) - (uint8_t *)name;
+          memmove(newname, name, copysize);
+        }
+    }
+  else
+    {
+      DEBUGASSERT(newdata);
+
+      copysize = ((uint8_t *)src + objsize) - (uint8_t *)data;
+      memmove(newdata, data, copysize);
+    }
+}
+
+/* Utility for adding item at the end of array list. */
+
+static bool suffix_object(cJSON *array, cJSON *prev, cJSON *item)
+{
+  if (cJSON_IsPacked(prev))
+    {
+      struct cJSON_DataArray *adata = cJSON_ArrayField(array);
+      struct cJSON *pack;
+      size_t packsize;
+      size_t itemsize;
+      uint8_t next_type;
+
+      DEBUGASSERT(adata && adata->child);
+
+      /* 'prev' needs to be last item of array. */
+
+      DEBUGASSERT((prev->info & JSON_NEXT_MASK) == JSON_NEXT_NULL);
+
+      /* Current pack-size. */
+
+      pack = adata->child;
+      packsize = cJSON_PackedArraySize(pack);
+
+      /* Item size in packed form. */
+
+      itemsize = cJSON_GetFieldPointers(item, NULL, &next_type, NULL, NULL,
+                                        NULL, NULL);
+      if (next_type == JSON_NEXT_PTR)
+        {
+          itemsize -= sizeof(struct cJSON_DataNext);
+        }
+
+      /* Grow packed array. */
+
+      adata->child = realloc(pack, packsize + itemsize);
+      if (!adata->child)
+        {
+          adata->child = pack;
+          return false;
+        }
+
+      memset((uint8_t *)adata->child + packsize, 0, itemsize);
+
+      /* Adjust 'prev' pointer to new allocation area. */
+
+      prev = (cJSON *)((uint8_t *)prev + ((uint8_t *)adata->child - (uint8_t *)pack));
+
+      /* Setup new last item. */
+
+      pack = (cJSON *)((uint8_t *)adata->child + packsize);
+
+      pack->info = item->info & ~JSON_NEXT_MASK;
+      pack->info |= JSON_NEXT_NULL;
+
+      cJSON_CopyFields(pack, item);
+
+      /* Change previous item next type. */
+
+      prev->info &= ~JSON_NEXT_MASK;
+      prev->info |= JSON_NEXT_MEM;
+
+      cJSON_free(item);
+    }
+  else
+    {
+      struct cJSON_DataNext *prev_next = NULL;
+      uint8_t next_type = 0;
+
+      (void)cJSON_GetFieldPointers(prev, &prev_next, &next_type, NULL, NULL,
+                                   NULL, NULL);
+
+      /* Caller needs to make sure that prev is not in packed format. */
+
+      DEBUGASSERT(next_type == JSON_NEXT_PTR);
+      DEBUGASSERT(prev_next);
+
+      prev_next->next = item;
+    }
+
+  return true;
+}
+
+/* Get allocation size of cJSON object. */
+
+static size_t GetAllocMemSize(cJSON *item, bool check_next)
+{
+  struct mm_allocnode_s *node;
+  size_t total = 0;
+  cJSON *c;
+
+  if (!item)
+    {
+      return total;
+    }
+
+  if (cJSON_IsPacked(item))
+    {
+      size_t allocsize;
+
+      if (check_next)
+        {
+          /* Get allocated memory for item. */
+
+          node = (void *)((char *)item - SIZEOF_MM_ALLOCNODE);
+          total += node->size;
+        }
+      else
+        {
+          /* Cannot know if this is first item in packed array. Do not try to
+           * check node structure, instead add allocation overhead. */
+
+          allocsize = cJSON_GetFieldPointers(item, NULL, NULL, NULL, NULL, NULL,
+                                             NULL);
+          total += MM_ALIGN_UP(allocsize + SIZEOF_MM_ALLOCNODE);
+        }
+
+      do
+        {
+          /* Check if item has child object. If has, get its size. */
+
+          c = cJSON_child(item);
+          if (c)
             {
-            *ptr++ = '\t';
+              total += GetAllocMemSize(c, true);
             }
-        }
 
-      strcpy(ptr, names[i]);
-      ptr += strlen(names[i]);
-      *ptr++ = ':';
-      if (fmt)
-        {
-          *ptr++ = '\t';
-        }
+          if (!check_next)
+            {
+              break;
+            }
 
-      strcpy(ptr, entries[i]);
-      ptr += strlen(entries[i]);
-      if (i != numentries - 1)
-        {
-          *ptr++ = ',';
-        }
+          /* Check next item. */
 
-      if (fmt)
-        {
-          *ptr++ = '\n';
+          item = cJSON_next(item);
         }
-
-      *ptr = 0;
-      cJSON_free(names[i]);
-      cJSON_free(entries[i]);
+      while (item);
     }
-
-  cJSON_free(names);
-  cJSON_free(entries);
-  if (fmt)
+  else
     {
-      for (i = 0; i < depth - 1; i++)
+      do
         {
-          *ptr++ = '\t';
+          /* Get allocated memory for item. */
+
+          node = (void *)((char *)item - SIZEOF_MM_ALLOCNODE);
+          total += node->size;
+
+          /* Check if item has child object. If has, get its size. */
+
+          c = cJSON_child(item);
+          if (c)
+            {
+              total += GetAllocMemSize(c, true);
+            }
+
+          if (!check_next)
+            {
+              break;
+            }
+
+          /* Check next item. */
+
+          item = cJSON_next(item);
         }
+      while (item);
     }
 
-  *ptr++ = '}';
-  *ptr++ = 0;
-  return out;
-}
-
-/* Utility for array list handling. */
-
-static void suffix_object(cJSON *prev, cJSON *item)
-{
-  prev->next = item;
-  item->prev = prev;
-}
-
-/* Utility for handling references. */
-
-static cJSON *create_reference(cJSON *item)
-{
-  cJSON *ref = cJSON_New_Item();
-  if (!ref)
-    {
-      return 0;
-    }
-
-  memcpy(ref, item, sizeof(cJSON));
-  ref->string = 0;
-  ref->type |= cJSON_IsReference;
-  ref->next = ref->prev = 0;
-  return ref;
+  return total;
 }
 
 /****************************************************************************
@@ -1132,22 +968,178 @@ static cJSON *create_reference(cJSON *item)
 
 const char *cJSON_GetErrorPtr(void)
 {
-  return ep;
+  return "";
 }
 
-void cJSON_InitHooks(cJSON_Hooks *hooks)
-{
-  if (!hooks)
-    {
-      /* Reset hooks */
+/* Set the name of object. */
 
-      cJSON_malloc = malloc;
-      cJSON_free   = free;
+cJSON *cJSON_SetItemName(cJSON *item, const char *name)
+{
+  return cJSON_ChangeName(item, name);
+}
+
+/* Check if item is in packed format. */
+
+bool cJSON_IsPacked(cJSON *item)
+{
+  uint8_t next_type = item->info & JSON_NEXT_MASK;
+
+  return next_type != JSON_NEXT_PTR;
+}
+
+/* Convert array of items to packed storage form. */
+
+cJSON *cJSON_PackArray(cJSON *item)
+{
+  size_t packsize;
+  size_t objsize;
+  cJSON *pack;
+  cJSON *curr;
+  cJSON *dst;
+
+  if (!item || cJSON_IsPacked(item))
+    {
+      return item;
+    }
+
+  /* Calculate allocation size. */
+
+  packsize = 0;
+  curr = item;
+  do
+    {
+      uint8_t next_type;
+
+      objsize = cJSON_GetFieldPointers(curr, NULL, &next_type, NULL, NULL,
+                                       NULL, NULL);
+      DEBUGASSERT(next_type == JSON_NEXT_PTR);
+
+      /* Remove size of next_field, not used in packed format. */
+
+      objsize -= sizeof(struct cJSON_DataNext);
+
+      packsize += objsize;
+      curr = cJSON_next(curr);
+    }
+  while (curr);
+
+  /* Allocate pack. */
+
+  pack = calloc(1, packsize);
+  if (!pack)
+    {
+      return NULL;
+    }
+
+  /* Copy unpacked array items to packed array. */
+
+  curr = item;
+  dst = pack;
+  do
+    {
+      cJSON *next;
+
+      /* Setup info field. */
+
+      dst->info = curr->info & ~JSON_NEXT_MASK;
+      dst->info |= JSON_NEXT_MEM;
+
+      /* Copy data & name fields. */
+
+      cJSON_CopyFields(dst, curr);
+
+      /* Get next, free current. */
+
+      next = cJSON_next(curr);
+      cJSON_free(curr);
+      curr = next;
+
+      /* Adjust info field if this is last item of array. */
+
+      if (!curr)
+        {
+          dst->info &= ~JSON_NEXT_MASK;
+          dst->info |= JSON_NEXT_NULL;
+        }
+      else
+        {
+          dst = cJSON_next(dst);
+        }
+    }
+  while (curr);
+
+  return pack;
+}
+
+/* Convert child object of array/object to packed storage form. */
+
+void cJSON_PackChild(cJSON *array)
+{
+  struct cJSON_DataArray *data;
+  cJSON *c;
+
+  if (!array)
+    {
       return;
     }
 
-  cJSON_malloc = (hooks->malloc_fn) ? hooks->malloc_fn : malloc;
-  cJSON_free = (hooks->free_fn) ? hooks->free_fn : free;
+  data = cJSON_ArrayField(array);
+  if (!data || !data->child)
+    {
+      return;
+    }
+
+  c = cJSON_PackArray(data->child);
+  if (c)
+    {
+      data->child = c;
+    }
+}
+
+/* Convert packed array of items to unpacked storage form. */
+
+cJSON *cJSON_UnpackArray(cJSON *item)
+{
+  cJSON *newitem = NULL;
+  cJSON *prev = NULL;
+  cJSON *newcurr;
+  cJSON *curr;
+
+  if (!item || !cJSON_IsPacked(item))
+    {
+      return item;
+    }
+
+  curr = item;
+
+  do
+    {
+      newcurr = cJSON_MakeUnpackedCopy(curr);
+      if (!newcurr)
+        {
+          cJSON_Delete(newitem);
+          return NULL;
+        }
+
+      if (!newitem)
+        {
+          newitem = newcurr;
+        }
+
+      if (prev)
+        {
+          cJSON_NextField(prev)->next = newcurr;
+        }
+
+      prev = newcurr;
+      newcurr = cJSON_next(prev);
+
+      curr = cJSON_next(curr);
+    }
+  while (curr);
+
+  cJSON_Delete(item);
+  return newitem;
 }
 
 /* Delete a cJSON structure. */
@@ -1155,74 +1147,47 @@ void cJSON_InitHooks(cJSON_Hooks *hooks)
 void cJSON_Delete(cJSON *c)
 {
   cJSON *next;
-  while (c)
-    {
-      next = c->next;
-      if (!(c->type & cJSON_IsReference) && c->child)
-        {
-          cJSON_Delete(c->child);
-        }
 
-      if (!(c->type & cJSON_IsReference) && c->valuestring)
-        {
-          cJSON_free(c->valuestring);
-        }
-
-      if (c->string)
-        {
-          cJSON_free(c->string);
-        }
-
-      cJSON_free(c);
-      c = next;
-    }
-}
-
-/* Parse an object - create a new root, and populate. */
-
-cJSON *cJSON_Parse(const char *value)
-{
-  cJSON *c = cJSON_New_Item();
-  ep = 0;
   if (!c)
     {
-      /* Memory fail */
-
-      return 0;
+      return;
     }
 
-  if (!parse_value(c, skip(value)))
+  if (cJSON_IsPacked(c))
     {
-      cJSON_Delete(c);
-      return 0;
+      cJSON *first = c;
+
+      while (c)
+        {
+          cJSON_Delete(cJSON_child(c)); /* No-op if child is NULL. */
+          c = cJSON_next(c);
+        }
+
+      cJSON_free(first);
     }
 
-  return c;
-}
+  while (c)
+    {
+      next = cJSON_next(c);
 
-/* Render a cJSON item/entity/structure to text. */
+      cJSON_Delete(cJSON_child(c)); /* No-op if child is NULL. */
+      cJSON_free(c);
 
-char *cJSON_Print(cJSON *item)
-{
-  return print_value(item, 0, 1);
-}
-
-char *cJSON_PrintUnformatted(cJSON *item)
-{
-  return print_value(item, 0, 0);
+      c = next;
+    }
 }
 
 /* Get Array size/item / object item. */
 
 int cJSON_GetArraySize(cJSON *array)
 {
-  cJSON *c = array->child;
+  cJSON *c = cJSON_child(array);
   int i = 0;
 
   while (c)
     {
       i++;
-      c = c->next;
+      c = cJSON_next(c);
     }
 
   return i;
@@ -1230,12 +1195,12 @@ int cJSON_GetArraySize(cJSON *array)
 
 cJSON *cJSON_GetArrayItem(cJSON *array, int item)
 {
-  cJSON *c = array->child;
+  cJSON *c = cJSON_child(array);
 
   while (c && item > 0)
     {
       item--;
-      c = c->next;
+      c = cJSON_next(c);
     }
 
   return c;
@@ -1243,74 +1208,71 @@ cJSON *cJSON_GetArrayItem(cJSON *array, int item)
 
 cJSON *cJSON_GetObjectItem(cJSON *object, const char *string)
 {
-  cJSON *c = object->child;
+  cJSON *c = cJSON_child(object);
 
-  while (c && cJSON_strcasecmp(c->string, string))
+  while (c && cJSON_strcasecmp(cJSON_GetNameString(c), string))
     {
-      c = c->next;
+      c = cJSON_next(c);
     }
 
   return c;
 }
 
 /* Add item to array/object. */
-void cJSON_AddItemToArray(cJSON *array, cJSON *item)
+bool cJSON_AddItemToArray(cJSON *array, cJSON *item)
 {
-  cJSON *c = array->child;
+  cJSON *c = cJSON_child(array);
 
   if (!item)
     {
-      return;
+      return true;
     }
 
   if (!c)
     {
-      array->child = item;
+      if (cJSON_ArrayField(array))
+        {
+          cJSON_ArrayField(array)->child = item;
+        }
     }
   else
     {
-      while (c && c->next)
+      while (c && cJSON_next(c))
         {
-          c = c->next;
+          c = cJSON_next(c);
         }
 
-      suffix_object(c, item);
+      return suffix_object(array, c, item);
     }
+
+  return true;
 }
 
-void cJSON_AddItemToObject(cJSON *object, const char *string, cJSON *item)
+bool cJSON_AddItemToObject(cJSON *object, const char *string, cJSON *item)
 {
   if (!item)
     {
-      return;
+      return true;
     }
 
-  if (item->string)
+  item = cJSON_ChangeName(item, string);
+  if (!item)
     {
-      cJSON_free(item->string);
+      return false;
     }
 
-  item->string = cJSON_strdup(string);
-  cJSON_AddItemToArray(object, item);
-}
-
-void cJSON_AddItemReferenceToArray(cJSON *array, cJSON *item)
-{
-  cJSON_AddItemToArray(array, create_reference(item));
-}
-
-void cJSON_AddItemReferenceToObject(cJSON *object, const char *string, cJSON *item)
-{
-  cJSON_AddItemToObject(object, string, create_reference(item));
+  return cJSON_AddItemToArray(object, item);
 }
 
 cJSON *cJSON_DetachItemFromArray(cJSON *array, int which)
 {
-  cJSON *c = array->child;
+  cJSON *c = cJSON_child(array);
+  cJSON *prev = NULL;
 
   while (c && which > 0)
     {
-      c = c->next, which--;
+      prev = c;
+      c = cJSON_next(c), which--;
     }
 
   if (!c)
@@ -1318,23 +1280,91 @@ cJSON *cJSON_DetachItemFromArray(cJSON *array, int which)
       return 0;
     }
 
-  if (c->prev)
+  if (cJSON_IsPacked(c))
     {
-      c->prev->next = c->next;
-    }
+      cJSON *copy;
+      size_t tailsize;
+      uint8_t next_type;
 
-  if (c->next)
+      copy = cJSON_MakeUnpackedCopy(c);
+
+      /* Item is in packed format. Detach procedure makes non-packed copy
+       * of item, and moves tail of memory area over the detached object. */
+
+      next_type = c->info & JSON_NEXT_MASK;
+      if (next_type == JSON_NEXT_NULL)
+        {
+          if (prev)
+            {
+              /* This item is the last of array. Mark previous as last
+               * instead. */
+
+              prev->info &= ~JSON_NEXT_MASK;
+              prev->info |= JSON_NEXT_NULL;
+            }
+
+          if (c == cJSON_child(array))
+            {
+              DEBUGASSERT(!prev);
+
+              /* First and last item. Free memory. */
+
+              cJSON_Delete(c);
+              cJSON_ArrayField(array)->child = NULL;
+            }
+        }
+      else if (next_type == JSON_NEXT_MEM)
+        {
+          cJSON *next;
+
+          /* Get length of packed array tail. */
+
+          next = cJSON_next(c);
+          DEBUGASSERT(next);
+
+          tailsize = cJSON_PackedArraySize(next);
+
+          memmove(c, next, tailsize);
+        }
+      else
+        {
+          DEBUGASSERT(false);
+        }
+
+      /* Trim memory. */
+
+      c = cJSON_ArrayField(array)->child;
+      if (c)
+        {
+          tailsize = cJSON_PackedArraySize(c);
+          DEBUGASSERT(tailsize > 0);
+
+          cJSON_ArrayField(array)->child = realloc(c, tailsize);
+          if (!cJSON_ArrayField(array)->child)
+            {
+              /* realloc failed, restore old. */
+
+              cJSON_ArrayField(array)->child = c;
+            }
+        }
+
+      return copy;
+    }
+  else
     {
-      c->next->prev = c->prev;
-    }
+      if (prev)
+        {
+          cJSON_NextField(prev)->next = cJSON_next(c);
+        }
 
-  if (c == array->child)
-    {
-      array->child = c->next;
-    }
+      if (c == cJSON_child(array))
+        {
+          cJSON_ArrayField(array)->child = cJSON_next(c);
+        }
 
-  c->prev = c->next = 0;
-  return c;
+      cJSON_NextField(c)->next = NULL;
+      return c;
+    }
 }
 
 void cJSON_DeleteItemFromArray(cJSON *array, int which)
@@ -1345,12 +1375,12 @@ void cJSON_DeleteItemFromArray(cJSON *array, int which)
 cJSON *cJSON_DetachItemFromObject(cJSON *object, const char *string)
 {
   int i = 0;
-  cJSON *c = object->child;
+  cJSON *c = cJSON_child(object);
 
-  while (c && cJSON_strcasecmp(c->string, string))
+  while (c && cJSON_strcasecmp(cJSON_GetNameString(c), string))
     {
       i++;
-      c = c->next;
+      c = cJSON_next(c);
     }
 
   if (c)
@@ -1358,7 +1388,7 @@ cJSON *cJSON_DetachItemFromObject(cJSON *object, const char *string)
       return cJSON_DetachItemFromArray(object, i);
     }
 
-  return 0;
+  return NULL;
 }
 
 void cJSON_DeleteItemFromObject(cJSON *object, const char *string)
@@ -1368,146 +1398,274 @@ void cJSON_DeleteItemFromObject(cJSON *object, const char *string)
 
 /* Replace array/object items with new ones. */
 
-void cJSON_ReplaceItemInArray(cJSON *array, int which, cJSON *newitem)
+bool cJSON_ReplaceItemInArray(cJSON *array, int which, cJSON *newitem)
 {
-  cJSON *c = array->child;
+  cJSON *c = cJSON_child(array);
+  cJSON *prev = NULL;
+
+  if (c && cJSON_IsPacked(c))
+    {
+      /* TODO: Replacing item in packed array. */
+
+      cJSON *newc;
+
+      /* Child array is in packed format, unpack before modifying. */
+
+      newc = cJSON_UnpackArray(c);
+      if (!newc)
+        {
+          return false;
+        }
+
+      c = newc;
+      cJSON_ArrayField(array)->child = c;
+    }
 
   while (c && which > 0)
     {
-      c = c->next, which--;
+      prev = c;
+      c = cJSON_next(c), which--;
     }
 
   if (!c)
     {
-      return;
+      return true;
     }
 
-  newitem->next = c->next;
-  newitem->prev = c->prev;
-  if (newitem->next)
-    {
-      newitem->next->prev = newitem;
-    }
+  cJSON_NextField(newitem)->next = cJSON_next(c);
 
-  if (c == array->child)
+  if (c == cJSON_child(array))
     {
-      array->child = newitem;
+      /* 'c' is first item of array, c->next and prev might be NULL. */
+
+      cJSON_ArrayField(array)->child = newitem;
     }
   else
     {
-      newitem->prev->next = newitem;
+      /* 'c' is not first item of array, prev should not be NULL. */
+
+      DEBUGASSERT(prev != NULL);
+
+      cJSON_NextField(prev)->next = newitem;
     }
 
-  c->next = c->prev = 0;
+  cJSON_NextField(c)->next = NULL;
   cJSON_Delete(c);
+
+  return true;
 }
 
-void cJSON_ReplaceItemInObject(cJSON *object, const char *string, cJSON *newitem)
+bool cJSON_ReplaceItemInObject(cJSON *object, const char *string,
+                               cJSON *newitem)
 {
   int i = 0;
-  cJSON *c = object->child;
+  cJSON *c = cJSON_child(object);
 
-  while (c && cJSON_strcasecmp(c->string, string))
+  while (c && cJSON_strcasecmp(cJSON_GetNameString(c), string))
     {
       i++;
-      c = c->next;
+      c = cJSON_next(c);
     }
 
   if (c)
     {
-      newitem->string = cJSON_strdup(string);
-      cJSON_ReplaceItemInArray(object, i, newitem);
+      newitem = cJSON_ChangeName(newitem, string);
+      if (!newitem)
+        {
+          return false;
+        }
+
+      return cJSON_ReplaceItemInArray(object, i, newitem);
+    }
+
+  return true;
+}
+
+static void cJSON_SetName(cJSON *item, const char *name)
+{
+  uint8_t name_type;
+  void *name_field;
+
+  (void)cJSON_GetFieldPointers(item, NULL, NULL, NULL, NULL, &name_field,
+                               &name_type);
+
+  if (!name)
+    {
+      DEBUGASSERT(name_type == JSON_NAME_EMPTY);
+    }
+
+  if (name_type == JSON_NAME_SHORT)
+    {
+      struct cJSON_DataStringShort *ss = name_field;
+      size_t name_len = strlen(name);
+
+      memmove(ss->valuestring, name, name_len + 1);
+      ss->string_size = name_len + 1;
+    }
+  else if (name_type == JSON_NAME_LONG)
+    {
+      struct cJSON_DataStringLong *sl = name_field;
+      size_t name_len = strlen(name);
+
+      memmove(sl->valuestring, name, name_len + 1);
+      sl->string_size = name_len + 1;
     }
 }
 
-/* Create basic types: */
+/* Create named basic types: */
 
-cJSON *cJSON_CreateNull(void)
+cJSON *cJSON_CreateNamedNull(const char *name)
 {
-  cJSON *item = cJSON_New_Item();
+  size_t fields_size;
+  uint8_t nametype;
+  cJSON *item;
+
+  /* Unpacked format (next pointer), empty name. */
+
+  fields_size = cJSON_CalculateNextFieldSize(JSON_NEXT_PTR);
+  fields_size += cJSON_CalculateNameFieldSize(name, &nametype);
+
+  item = cJSON_New_Item(JSON_DATA_NULL | JSON_NEXT_PTR | nametype, fields_size);
   if (item)
     {
-      item->type = cJSON_NULL;
-    }
-
-  return item;
-}
-
-cJSON *cJSON_CreateTrue(void)
-{
-  cJSON *item = cJSON_New_Item();
-  if (item)
-    {
-      item->type = cJSON_True;
-    }
-
-  return item;
-}
-
-cJSON *cJSON_CreateFalse(void)
-{
-  cJSON *item = cJSON_New_Item();
-  if (item)
-    {
-      item->type = cJSON_False;
-    }
-
-  return item;
-}
-
-cJSON *cJSON_CreateBool(int b)
-{
-  cJSON *item = cJSON_New_Item();
-  if (item)
-    {
-      item->type = b ? cJSON_True : cJSON_False;
-    }
-
-  return item;
-}
-
-cJSON *cJSON_CreateNumber(double num)
-{
-  cJSON *item = cJSON_New_Item();
-  if (item)
-    {
-      item->type = cJSON_Number;
-      item->valuedouble = num;
-      item->valueint = (int)num;
-    }
-
-  return item;
-}
-
-cJSON *cJSON_CreateString(const char *string)
-{
-  cJSON *item = cJSON_New_Item();
-  if (item)
-    {
-      item->type = cJSON_String;
-      item->valuestring = cJSON_strdup(string);
+      cJSON_SetName(item, name);
     }
 
   return item;
 }
 
-cJSON *cJSON_CreateArray(void)
+cJSON *cJSON_CreateNamedBool(const char *name, bool b)
 {
-  cJSON *item = cJSON_New_Item();
+  uint8_t data_type = b ? JSON_DATA_TRUE : JSON_DATA_FALSE;
+  size_t fields_size;
+  uint8_t nametype;
+  cJSON *item;
+
+  /* Unpacked format (next pointer), empty name. */
+
+  fields_size = cJSON_CalculateNextFieldSize(JSON_NEXT_PTR);
+  fields_size += cJSON_CalculateNameFieldSize(name, &nametype);
+
+  item = cJSON_New_Item(data_type | JSON_NEXT_PTR | nametype, fields_size);
   if (item)
     {
-      item->type = cJSON_Array;
+      cJSON_SetName(item, name);
     }
 
   return item;
 }
 
-cJSON *cJSON_CreateObject(void)
+cJSON *cJSON_CreateNamedTrue(const char *name)
 {
-  cJSON *item = cJSON_New_Item();
+  return cJSON_CreateNamedBool(name, true);
+}
+
+cJSON *cJSON_CreateNamedFalse(const char *name)
+{
+  return cJSON_CreateNamedBool(name, false);
+}
+
+cJSON *cJSON_CreateNamedNumber(const char *name, double num)
+{
+  uint8_t data_type = 0;
+  size_t fields_size;
+  uint8_t nametype;
+  cJSON *item;
+
+  /* Unpacked format (next pointer), empty name. */
+
+  fields_size = cJSON_CalculateNextFieldSize(JSON_NEXT_PTR);
+  fields_size += cJSON_CalculateDataNumberFieldSize(num, &data_type);
+  fields_size += cJSON_CalculateNameFieldSize(name, &nametype);
+
+  item = cJSON_New_Item(data_type | JSON_NEXT_PTR | nametype, fields_size);
   if (item)
     {
-      item->type = cJSON_Object;
+      cJSON_SetValueNumber(item, num);
+      cJSON_SetName(item, name);
+    }
+
+  return item;
+}
+
+cJSON *cJSON_CreateNamedString(const char *name, const char *string)
+{
+  size_t string_len = strlen(string);
+  uint8_t data_type = 0;
+  size_t fields_size;
+  uint8_t nametype;
+  cJSON *item;
+
+  /* Unpacked format (next pointer), empty name. */
+
+  fields_size = cJSON_CalculateNextFieldSize(JSON_NEXT_PTR);
+  fields_size += cJSON_CalculateDataStringFieldSize(string_len, &data_type);
+  fields_size += cJSON_CalculateNameFieldSize(name, &nametype);
+
+  item = cJSON_New_Item(data_type | JSON_NEXT_PTR | nametype, fields_size);
+  if (item)
+    {
+      cJSON_SetValueBuffer(item, string, string_len + 1);
+      cJSON_SetName(item, name);
+    }
+
+  return item;
+}
+
+cJSON *cJSON_CreateNamedBuffer(const char *name, const void *buf, size_t len)
+{
+  size_t fields_size;
+  uint8_t nametype;
+  cJSON *item;
+
+  /* Unpacked format (next pointer), empty name. */
+
+  fields_size = cJSON_CalculateNextFieldSize(JSON_NEXT_PTR);
+  fields_size += cJSON_CalculateDataBufferFieldSize(len);
+  fields_size += cJSON_CalculateNameFieldSize(name, &nametype);
+
+  item = cJSON_New_Item(JSON_DATA_BUFFER | JSON_NEXT_PTR | nametype,
+                        fields_size);
+  if (item)
+    {
+      cJSON_SetValueBuffer(item, buf, len);
+      cJSON_SetName(item, name);
+    }
+
+  return item;
+}
+
+cJSON *cJSON_CreateNamedArray(const char *name)
+{
+  size_t fields_size;
+  uint8_t nametype;
+  cJSON *item;
+
+  /* Unpacked format (next pointer), empty name. */
+
+  fields_size = cJSON_CalculateNextFieldSize(JSON_NEXT_PTR);
+  fields_size += sizeof(struct cJSON_DataArray);
+  fields_size += cJSON_CalculateNameFieldSize(name, &nametype);
+
+  item = cJSON_New_Item(JSON_DATA_ARRAY | JSON_NEXT_PTR | nametype,
+                        fields_size);
+  if (item)
+    {
+      cJSON_SetArrayData(item, NULL);
+      cJSON_SetName(item, name);
+    }
+
+  return item;
+}
+
+cJSON *cJSON_CreateNamedObject(const char *name)
+{
+  cJSON *item = cJSON_CreateNamedArray(name);
+
+  if (item)
+    {
+      item->info &= ~JSON_DATA_MASK;
+      item->info |= JSON_DATA_OBJECT;
     }
 
   return item;
@@ -1517,21 +1675,26 @@ cJSON *cJSON_CreateObject(void)
 
 cJSON *cJSON_CreateIntArray(const int *numbers, int count)
 {
-  cJSON *n = 0;
-  cJSON *p = 0;
+  cJSON *n = NULL;
+  cJSON *p = NULL;
   cJSON *a = cJSON_CreateArray();
   int i;
 
   for (i = 0; a && i < count; i++)
     {
       n = cJSON_CreateNumber(numbers[i]);
-      if (!i)
+      if (i == 0)
         {
-          a->child = n;
+          cJSON_ArrayField(a)->child = n;
         }
       else
         {
-          suffix_object(p, n);
+          if (!suffix_object(a, p, n))
+            {
+              cJSON_Delete(a);
+              cJSON_Delete(n);
+              return NULL;
+            }
         }
 
       p = n;
@@ -1542,21 +1705,26 @@ cJSON *cJSON_CreateIntArray(const int *numbers, int count)
 
 cJSON *cJSON_CreateFloatArray(const float *numbers, int count)
 {
-  cJSON *n = 0;
-  cJSON *p = 0;
+  cJSON *n = NULL;
+  cJSON *p = NULL;
   cJSON *a = cJSON_CreateArray();
   int i;
 
   for (i = 0; a && i < count; i++)
     {
       n = cJSON_CreateNumber(numbers[i]);
-      if (!i)
+      if (i == 0)
         {
-          a->child = n;
+          cJSON_ArrayField(a)->child = n;
         }
       else
         {
-          suffix_object(p, n);
+          if (!suffix_object(a, p, n))
+            {
+              cJSON_Delete(a);
+              cJSON_Delete(n);
+              return NULL;
+            }
         }
 
       p = n;
@@ -1567,21 +1735,26 @@ cJSON *cJSON_CreateFloatArray(const float *numbers, int count)
 
 cJSON *cJSON_CreateDoubleArray(const double *numbers, int count)
 {
-  cJSON *n = 0;
-  cJSON *p = 0;
+  cJSON *n = NULL;
+  cJSON *p = NULL;
   cJSON *a = cJSON_CreateArray();
   int i;
 
   for (i = 0; a && i < count; i++)
     {
       n = cJSON_CreateNumber(numbers[i]);
-      if (!i)
+      if (i == 0)
         {
-          a->child = n;
+          cJSON_ArrayField(a)->child = n;
         }
       else
         {
-          suffix_object(p, n);
+          if (!suffix_object(a, p, n))
+            {
+              cJSON_Delete(a);
+              cJSON_Delete(n);
+              return NULL;
+            }
         }
 
       p = n;
@@ -1592,25 +1765,174 @@ cJSON *cJSON_CreateDoubleArray(const double *numbers, int count)
 
 cJSON *cJSON_CreateStringArray(const char **strings, int count)
 {
-  cJSON *n = 0;
-  cJSON *p = 0;
+  cJSON *n = NULL;
+  cJSON *p = NULL;
   cJSON *a = cJSON_CreateArray();
   int i;
 
   for (i = 0; a && i < count; i++)
     {
       n = cJSON_CreateString(strings[i]);
-      if (!i)
+      if (i == 0)
         {
-          a->child = n;
+          cJSON_ArrayField(a)->child = n;
         }
       else
         {
-          suffix_object(p, n);
+          if (!suffix_object(a, p, n))
+            {
+              cJSON_Delete(a);
+              cJSON_Delete(n);
+              return NULL;
+            }
         }
 
       p = n;
     }
 
   return a;
+}
+
+/* Get allocation size of cJSON object. */
+
+size_t cJSON_GetAllocMemSize(cJSON *item)
+{
+  return GetAllocMemSize(item, false);
+}
+
+/* Return type of cJSON object. */
+
+enum cJSON_type_e cJSON_type(const cJSON *item)
+{
+  if (!item)
+    return cJSON_NULL;
+
+  return cJSON_InfoToType(item->info);
+}
+
+/* Return name of cJSON object. */
+
+const char *cJSON_name(const cJSON *item)
+{
+  if (!item)
+    return "";
+
+  return cJSON_GetNameString((cJSON *)item);
+}
+
+/* Return string value of cJSON object. */
+
+const char *cJSON_string(const cJSON *item)
+{
+  int type = cJSON_type(item);
+
+  if (type != cJSON_String)
+    {
+      return "";
+    }
+  else
+    {
+      struct cJSON_buffer_s buf = cJSON_GetValueBuffer((cJSON *)item);
+
+      return buf.ptr;
+    }
+}
+
+/* Return buffer value of cJSON object. */
+
+struct cJSON_buffer_s cJSON_buffer(const cJSON *item)
+{
+  int type = cJSON_type(item);
+
+  if (type == cJSON_Buffer || type == cJSON_String)
+    {
+      return cJSON_GetValueBuffer((cJSON *)item);
+    }
+  else
+    {
+      struct cJSON_buffer_s ret =
+        {
+          .len = 0,
+          .ptr = NULL
+        };
+      return ret;
+    }
+}
+
+/* Return integer value of cJSON object. */
+
+int cJSON_int(const cJSON *item)
+{
+  int type = cJSON_type(item);
+
+  if (type != cJSON_Number)
+    return 0;
+
+  return cJSON_GetValueInt((cJSON *)item);
+}
+
+/* Return floating-point value of cJSON object. */
+
+double cJSON_double(const cJSON *item)
+{
+  int type = cJSON_type(item);
+
+  if (type != cJSON_Number)
+    return 0.0;
+
+  return cJSON_GetValueDouble((cJSON *)item);
+}
+
+/* Return boolean value of cJSON object. */
+
+bool cJSON_boolean(const cJSON *item)
+{
+  int type = cJSON_type(item);
+
+  switch (type)
+    {
+    default:
+    case cJSON_False:
+    case cJSON_NULL:
+      return false;
+
+    case cJSON_True:
+      return true;
+
+    case cJSON_String:
+      return cJSON_string(item)[0] != 0; /* not empty */
+
+    case cJSON_Number:
+      return cJSON_int(item) != 0;
+
+    case cJSON_Array:
+    case cJSON_Object:
+      return cJSON_child((cJSON *)item) != NULL; /* has child */
+    }
+}
+
+/* Return child object of cJSON object. */
+
+cJSON *cJSON_child(cJSON *item)
+{
+  const struct cJSON_DataArray *data;
+
+  if (!item)
+    return NULL;
+
+  data = cJSON_ArrayField(item);
+  if (!data)
+    return NULL;
+
+  return data->child;
+}
+
+/* Return next object of cJSON object. */
+
+cJSON *cJSON_next(cJSON *item)
+{
+  if (!item)
+    return NULL;
+
+  return cJSON_GetNextPointer(item);
 }

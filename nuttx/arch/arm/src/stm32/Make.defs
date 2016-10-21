@@ -217,6 +217,10 @@ ifeq ($(CONFIG_PWM),y)
 CHIP_CSRCS += stm32_pwm.c
 endif
 
+ifeq ($(CONFIG_STEPPER),y)
+CHIP_CSRCS += stm32_stepper.c
+endif
+
 ifeq ($(CONFIG_QENCODER),y)
 CHIP_CSRCS += stm32_qencoder.c
 endif

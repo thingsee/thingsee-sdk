@@ -1,0 +1,5 @@
+# run conman
+conman &
+
+# run example_app
+example_app &

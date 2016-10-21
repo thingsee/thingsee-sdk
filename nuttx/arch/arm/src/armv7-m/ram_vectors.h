@@ -100,7 +100,7 @@ void up_ramvec_initialize(void);
  *
  ****************************************************************************/
 
-void exception_common(void);
+void exception_common(void) externally_visible_function;
 
 /****************************************************************************
  * Name: up_ramvec_attach

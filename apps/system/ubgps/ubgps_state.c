@@ -117,18 +117,46 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
 
 /* GPS state machine states */
 
-const gps_sm_t gps_sm[__GPS_STATE_MAX] =
+const struct ubgps_sm_s ubgps_state_machines[__GPS_STATE_MAX] =
 {
-  [GPS_STATE_POWER_OFF] = ubgps_sm_poweroff,
-  [GPS_STATE_INITIALIZATION] = ubgps_sm_initialization,
-  [GPS_STATE_COLD_START] = ubgps_sm_cold_start,
-  [GPS_STATE_SEARCHING_FIX] = ubgps_sm_global,
-  [GPS_STATE_FIX_ACQUIRED] = ubgps_sm_global,
+#define SM(x, fn) [x] = { .func = fn, .name = #x }
+  SM(GPS_STATE_POWER_OFF, ubgps_sm_poweroff),
+  SM(GPS_STATE_INITIALIZATION, ubgps_sm_initialization),
+  SM(GPS_STATE_COLD_START, ubgps_sm_cold_start),
+  SM(GPS_STATE_SEARCHING_FIX, ubgps_sm_global),
+  SM(GPS_STATE_FIX_ACQUIRED, ubgps_sm_global),
+#undef SM
 };
 
 /****************************************************************************
- * Public Data
+ * Public Internal Functions
  ****************************************************************************/
+
+/* Return current state-machine for given 'state'. */
+
+const struct ubgps_sm_s *ubgps_sm(struct ubgps_s * const gps, gps_state_t state)
+{
+  if (gps->override_sm)
+    {
+      return gps->override_sm;
+    }
+
+  return &ubgps_state_machines[state];
+}
+
+/* Interface for overriding internal state-machine, useful for low-level access
+ * for ie. production testing. */
+
+void ubgps_set_override_sm(struct ubgps_s * const gps,
+                           const struct ubgps_sm_s *override_sm)
+{
+  gps->override_sm = override_sm;
+}
+
+void ubgps_clear_override_sm(struct ubgps_s * const gps)
+{
+  ubgps_set_override_sm(gps, NULL);
+}
 
 /****************************************************************************
  * Private Functions
@@ -221,6 +249,7 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
 
           dbg_sm("SM_EVENT_TARGET_STATE -> %u\n", target->target_state);
 
+#ifdef CONFIG_UBGPS_PSM_MODE
           /* Stop PSM timer */
 
           if (gps->state.psm_timer_id > 0)
@@ -228,6 +257,7 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
               ts_core_timer_stop(gps->state.psm_timer_id);
               gps->state.psm_timer_id = -1;
             }
+#endif
 
           if (target->target_state != GPS_STATE_POWER_OFF)
             {
@@ -450,7 +480,7 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
 
               /* Construct power save mode event */
 
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   struct sm_event_psm_event_s psm;
 
@@ -577,23 +607,14 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
             {
               /* Start SW controlled power save mode (PSM). */
 
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   struct timespec ts = {};
 
                   clock_gettime(CLOCK_MONOTONIC, &ts);
-                  ts.tv_sec += gps->state.navigation_rate/1000;
+                  ts.tv_sec += gps->state.navigation_rate / 1000;
                   gps->state.psm_timer_id = ts_core_timer_setup_date(&ts,
                       ubgps_psm_timer_cb, gps);
-
-                  /* Update assist params */
-
-                  gps->assist->use_time = true;
-                  gps->assist->use_loc = true;
-                  gps->assist->latitude = gps->location.latitude;
-                  gps->assist->longitude = gps->location.longitude;
-                  gps->assist->altitude = gps->location.height;
-                  gps->assist->accuracy = gps->location.horizontal_accuracy;
 
                   dbg_sm("gps->state.psm_timer_id:%d, set POWER_OFF\n",
                       gps->state.psm_timer_id);
@@ -1008,7 +1029,7 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
               /* Set GPS navigation rate */
 
 #ifdef CONFIG_UBGPS_PSM_MODE
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD*1000)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   /* Use default navigation rate for SW controlled PSM */
 

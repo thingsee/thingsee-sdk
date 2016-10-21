@@ -128,6 +128,7 @@
 #define MMCSD_DELAY_250MS            (CLK_TCK/4    + 1)
 #define MMCSD_DELAY_500MS            (CLK_TCK/2    + 1)
 #define MMCSD_DELAY_1SEC             (CLK_TCK      + 1)
+#define MMCSD_DELAY_4SEC             (4 * CLK_TCK  + 1)
 #define MMCSD_DELAY_10SEC            (10 * CLK_TCK + 1)
 
 #define ELAPSED_TIME(t)              (clock_systimer()-(t))
@@ -138,6 +139,10 @@
 #define SD_READACCESS                MMCSD_DELAY_100MS
 #define SD_WRITEACCESS               MMCSD_DELAY_250MS
 
+/* SD card PM guard time: ~50msec.  Units of clock ticks */
+
+#define SD_PM_GUARD                  MMCSD_DELAY_50MS
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -147,7 +152,8 @@
 struct mmcsd_slot_s
 {
   FAR struct spi_dev_s *spi; /* SPI port bound to this slot */
-  sem_t  sem;                /* Assures mutually exclusive access to card and SPI */
+  sem_t    sem;              /* Assures mutually exclusive access to card and SPI */
+  systime_t last_access;     /* Time when last accessed card. */
   uint8_t  state;            /* State of the slot (see MMCSD_SLOTSTATUS_* definitions) */
   uint8_t  type;             /* Disk type */
   uint8_t  csd[16];          /* Copy of card CSD */
@@ -383,6 +389,8 @@ static void mmcsd_semtake(FAR struct mmcsd_slot_s *slot)
 
       ASSERT(errno == EINTR);
     }
+
+  slot->last_access = START_TIME;
 }
 
 /****************************************************************************
@@ -393,6 +401,7 @@ static void mmcsd_semgive(FAR struct mmcsd_slot_s *slot)
 {
   /* Relinquish the lock on the MMC/SD device */
 
+  slot->last_access = START_TIME;
   sem_post(&slot->sem);
 
   /* Relinquish the lock on the SPI bus */
@@ -444,7 +453,7 @@ static int mmcsd_waitready(FAR struct mmcsd_slot_s *slot)
 {
   FAR struct spi_dev_s *spi = slot->spi;
   uint8_t response;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
 
   /* Wait until the card is no longer busy (up to 500MS) */
@@ -492,10 +501,13 @@ static uint32_t mmcsd_sendcmd(FAR struct mmcsd_slot_s *slot,
    * this check makes it work also without the pull-up.
    */
 
-  ret = mmcsd_waitready(slot);
-  if (ret != OK && cmd != &g_cmd0)
+  if (cmd != &g_cmd0)
     {
-      return ret;
+      ret = mmcsd_waitready(slot);
+      if (ret != OK)
+        {
+          return ret;
+        }
     }
 
   /* Send command code */
@@ -549,7 +561,7 @@ static uint32_t mmcsd_sendcmd(FAR struct mmcsd_slot_s *slot,
     case MMCSD_CMDRESP_R1B:
       {
         uint32_t busy = 0;
-        uint32_t start;
+        systime_t start;
         uint32_t elapsed;
 
         start = START_TIME;
@@ -964,7 +976,7 @@ static int mmcsd_recvblock(FAR struct mmcsd_slot_s *slot, uint8_t *buffer,
                            int nbytes)
 {
   FAR struct spi_dev_s *spi = slot->spi;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   uint8_t  token;
 
@@ -1624,7 +1636,7 @@ static int mmcsd_mediainitialize(FAR struct mmcsd_slot_s *slot)
   FAR struct spi_dev_s *spi = slot->spi;
   uint8_t csd[16];
   uint32_t result = MMCSD_SPIR1_IDLESTATE;
-  uint32_t start;
+  systime_t start;
   uint32_t elapsed;
   int i;
   int j;
@@ -1665,7 +1677,7 @@ static int mmcsd_mediainitialize(FAR struct mmcsd_slot_s *slot)
    * command (CMD0) and the card is in IDLE state.
    */
 
-  for (i = 0; i < 2; i++)
+  for (start = START_TIME, i = 0; ELAPSED_TIME(start) <= MMCSD_DELAY_4SEC; i++)
     {
       /* After power up at least 74 clock cycles are required prior to
        * starting bus communication
@@ -1696,6 +1708,10 @@ static int mmcsd_mediainitialize(FAR struct mmcsd_slot_s *slot)
 
       SPI_SELECT(spi, SPIDEV_MMCSD, false);
     }
+
+  fvdbg("SDcard wake-up took: %d msecs, %d retries => %s.\n",
+        (int)TICK2MSEC(ELAPSED_TIME(start)), i + 1,
+        (result != MMCSD_SPIR1_IDLESTATE) ? "Failed" : "OK");
 
   /* Verify that we exit the above loop with the card reporting IDLE state */
 
@@ -2087,6 +2103,9 @@ bool mmcsd_is_card_in_slot(int slotno)
 {
   struct mmcsd_slot_s *slot;
 
+  DEBUGASSERT(slotno >= 0 &&
+              slotno < sizeof(g_mmcsdslot) / sizeof(g_mmcsdslot[0]));
+
   /* Select the slot structure */
 
   slot = &g_mmcsdslot[slotno];
@@ -2108,6 +2127,9 @@ void mmcsd_slot_pm_suspend(int slotno)
 {
   struct mmcsd_slot_s *slot;
 
+  DEBUGASSERT(slotno >= 0 &&
+              slotno < sizeof(g_mmcsdslot) / sizeof(g_mmcsdslot[0]));
+
   slot = &g_mmcsdslot[slotno];
 
   slot->state |= MMCSD_SLOTSTATUS_PM_SUSPEND;
@@ -2128,6 +2150,9 @@ void mmcsd_slot_pm_resume(int slotno)
 {
   struct mmcsd_slot_s *slot;
 
+  DEBUGASSERT(slotno >= 0 &&
+              slotno < sizeof(g_mmcsdslot) / sizeof(g_mmcsdslot[0]));
+
   slot = &g_mmcsdslot[slotno];
 
   if (slot->state & (MMCSD_SLOTSTATUS_NODISK | MMCSD_SLOTSTATUS_NOTREADY))
@@ -2144,22 +2169,83 @@ void mmcsd_slot_pm_resume(int slotno)
    * after suspend. */
 }
 
-void mmcsd_check_media(int slotno, uint8_t try_to_reinit)
+/****************************************************************************
+ * Name: mmcsd_slot_pm_allowed
+ *
+ * Description:
+ *   Check if MMC/SD device is ready for power-management suspend
+ *
+ * Input Parameters:
+ *   slotno - The slot number to use.
+ *
+ ****************************************************************************/
+
+bool mmcsd_slot_pm_allowed(int slotno)
+{
+  struct mmcsd_slot_s *slot;
+  bool retval;
+
+  DEBUGASSERT(slotno >= 0 &&
+              slotno < sizeof(g_mmcsdslot) / sizeof(g_mmcsdslot[0]));
+
+  slot = &g_mmcsdslot[slotno];
+
+  if (!slot->spi)
+    {
+      return true; /* Slot not initialized, PM "allowed". */
+    }
+
+  if (!mmcsd_is_card_in_slot(slotno))
+    {
+      return true; /* Slot not used, PM allowed. */
+    }
+
+  if (sem_trywait(&slot->sem) != OK)
+    {
+      return false; /* Slot is locked, PM disallowed. */
+    }
+
+  /* Check if slot was locked recently, disallow PM if too close. */
+
+  retval = (ELAPSED_TIME(slot->last_access) > SD_PM_GUARD);
+
+  sem_post(&slot->sem);
+  return retval;
+}
+
+/****************************************************************************
+ * Name: mmcsd_check_media
+ ****************************************************************************/
+
+void mmcsd_check_media(int slotno, bool try_to_reinit)
 {
     struct mmcsd_slot_s *slot;
 
+    DEBUGASSERT(slotno >= 0 &&
+                slotno < sizeof(g_mmcsdslot) / sizeof(g_mmcsdslot[0]));
+
     slot = &g_mmcsdslot[slotno];
 
-    if (!try_to_reinit) {
+    if (!try_to_reinit)
+      {
         slot->state |= (MMCSD_SLOTSTATUS_NODISK|MMCSD_SLOTSTATUS_NOTREADY|MMCSD_SLOTSTATUS_MEDIACHGD);
-    } else {
+      }
+    else
+      {
         mmcsd_mediachanged((void *)slot);
-    }
+      }
 }
+
+/****************************************************************************
+ * Name: mmcsd_get_slot_card_status
+ ****************************************************************************/
 
 void mmcsd_get_slot_card_status(int slotno, uint8_t *status)
 {
     struct mmcsd_slot_s *slot;
+
+    DEBUGASSERT(slotno >= 0 &&
+                slotno < sizeof(g_mmcsdslot) / sizeof(g_mmcsdslot[0]));
 
     slot = &g_mmcsdslot[slotno];
 

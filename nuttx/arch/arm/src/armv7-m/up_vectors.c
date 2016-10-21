@@ -56,11 +56,11 @@
 
 /* Chip-specific entrypoint */
 
-extern void __start(void);
+extern void __start(void) externally_visible_function;
 
 /* Common exception entrypoint */
 
-extern void exception_common(void);
+extern void exception_common(void) externally_visible_function;
 
 /************************************************************************************
  * Public data

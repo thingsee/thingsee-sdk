@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menuconfig EXAMPLES_COAP_CLIENT
+	bool "CoAP client"
+	default n
+	depends on NETUTILS_LIBCOAP
+	---help---
+		Enable the CoAP client util

@@ -67,6 +67,42 @@
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: dns_gethostip_multi
+ *
+ * Descriptions:
+ *   Combines the operations of dns_bind_sock(), dns_query_sock_multi(), and
+ *   dns_free_sock() to obtain the the IP addresses ('ipaddr') associated with
+ *   the 'hostname' in one operation. Allows fetching multiple IP-addresses
+ *   from single DNS query response. Returns number of addresses read.
+ *
+ ****************************************************************************/
+
+int dns_gethostip_multi(FAR const char *hostname, FAR in_addr_t *ipaddr,
+                        size_t nipaddr)
+{
+  int sockfd = -1;
+  int ret = ERROR;
+  int err;
+
+  if (nipaddr == 0 || !ipaddr)
+    {
+      errno = EINVAL;
+      return ret;
+    }
+
+  dns_bind_sock(&sockfd);
+  if (sockfd >= 0)
+    {
+      ret = dns_query_sock_multi(sockfd, hostname, ipaddr, nipaddr);
+      err = errno;
+      dns_free_sock(&sockfd);
+      errno = err;
+    }
+
+  return ret;
+}
+
+/****************************************************************************
  * Name: dns_gethostip
  *
  * Descriptions:
@@ -78,18 +114,8 @@
 
 int dns_gethostip(FAR const char *hostname, FAR in_addr_t *ipaddr)
 {
-  int sockfd = -1;
-  int ret = ERROR;
-  int err;
+  if (dns_gethostip_multi(hostname, ipaddr, 1) <= 0)
+    return ERROR;
 
-  dns_bind_sock(&sockfd);
-  if (sockfd >= 0)
-    {
-      ret = dns_query_sock(sockfd, hostname, ipaddr);
-      err = errno;
-      dns_free_sock(&sockfd);
-      errno = err;
-    }
-
-  return ret;
+  return OK;
 }

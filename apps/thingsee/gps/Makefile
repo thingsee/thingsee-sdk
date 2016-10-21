@@ -37,6 +37,7 @@
 -include $(TOPDIR)/Make.defs
 include $(APPDIR)/Make.defs
 
+# Thingsee tester
 
 ASRCS  =
 CSRCS  = ts_gps.c

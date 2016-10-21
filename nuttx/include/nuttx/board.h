@@ -490,4 +490,17 @@ void board_crashdump(uint32_t currentsp, void *tcb, const uint8_t *filename,
                      int lineno);
 #endif
 
+/****************************************************************************
+ * Name: board_initrndseed
+ *
+ * Description:
+ *   If CONFIG_BOARD_INITRNGSEED is selected then board_init_rndseed is called
+ *   at up_rnginitialize() to feed initial random seed to RNG.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_BOARD_INITRNGSEED
+void board_init_rndseed(void);
+#endif
+
 #endif /* __INCLUDE_NUTTX_BOARD_H */

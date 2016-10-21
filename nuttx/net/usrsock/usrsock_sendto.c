@@ -348,7 +348,7 @@ ssize_t usrsock_sendto(FAR struct socket *psock, FAR const void *buf,
                 {
                   ndbg("sendto timedout\n");
 
-                  ret = -ETIMEDOUT;
+                  ret = -EAGAIN;
                 }
               else if (ret == EINTR)
                 {
@@ -358,6 +358,7 @@ ssize_t usrsock_sendto(FAR struct socket *psock, FAR const void *buf,
                 }
               else
                 {
+                  dbg("net_timedwait errno: %d\n", ret);
                   DEBUGASSERT(false);
                 }
             }

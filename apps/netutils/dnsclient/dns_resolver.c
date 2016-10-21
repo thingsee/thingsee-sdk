@@ -105,6 +105,24 @@ int dns_query(FAR const char *hostname, FAR in_addr_t *ipaddr)
 }
 
 /****************************************************************************
+ * Name: dns_query
+ *
+ * Description:
+ *   Using the internal DNS resolver socket, look up the the 'hostname', and
+ *   return its IP addresses in 'ipaddr' array.
+ *
+ * Returned Value:
+ *   Returns number of addresses read if the query was successful.
+ *
+ ****************************************************************************/
+
+int dns_query_multi(FAR const char *hostname, FAR in_addr_t *ipaddr,
+                    size_t nipaddr)
+{
+  return dns_query_sock_multi(g_sockfd, hostname, ipaddr, nipaddr);
+}
+
+/****************************************************************************
  * Name: dns_whois
  *
  * Description:
@@ -113,11 +131,7 @@ int dns_query(FAR const char *hostname, FAR in_addr_t *ipaddr)
  *
  ****************************************************************************/
 
-#ifdef CONFIG_NETUTILS_DNSCLIENT_IPv6
-int dns_whois(FAR const char *name, FAR struct sockaddr_in6 *addr)
-#else
 int dns_whois(FAR const char *name, FAR struct sockaddr_in *addr)
-#endif
 {
   return dns_whois_socket(g_sockfd, name, addr);
 }

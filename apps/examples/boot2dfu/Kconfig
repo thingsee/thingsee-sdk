@@ -1,0 +1,10 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config EXAMPLES_BOOT2DFU
+	bool "Boot-to-DFU-mode util"
+	default n
+	---help---
+		Enable Boot-to-DFU-mode util

@@ -3,8 +3,9 @@
  *
  * LIS2DH accelerometer driver
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
  *   Authors: Timo Voutilainen <timo.voutilainen@haltian.com>
+ *            Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,6 +35,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
+
 
 /****************************************************************************
  * Included Files
@@ -69,16 +71,18 @@
 #  define lis2dh_lldbg(x, ...)
 #endif
 
-//#define LIS2DH_SELFTEST
-#ifdef LIS2DH_SELFTEST
-#define SELFTEST_BUF_SIZE           5
-#define SELFTEST_MAX_READ_ATTEMPTS  100
-#define SELFTEST_ABS_DIFF_MIN       17
-#define SELFTEST_ABS_DIFF_MAX       360
-#define SELFTEST_0                  0
-#define SELFTEST_1                  1
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
+#define LSB_AT_10BIT_RESOLUTION       4
+#define LSB_AT_12BIT_RESOLUTION       1
+#define SELFTEST_BUF_SIZE             5
+#define SELFTEST_MAX_READ_ATTEMPTS    200
+#define SELFTEST_ABS_DIFF_MIN_10BIT   17
+#define SELFTEST_ABS_DIFF_MAX_10_BIT  360
+#define SELFTEST_ABS_DIFF_MIN_12BIT   (LSB_AT_10BIT_RESOLUTION * SELFTEST_ABS_DIFF_MIN_10BIT)
+#define SELFTEST_ABS_DIFF_MAX_12BIT   (LSB_AT_10BIT_RESOLUTION * SELFTEST_ABS_DIFF_MAX_10_BIT)
+#define SELFTEST_0                    0
+#define SELFTEST_1                    1
 #endif
-
 /* Other macros */
 
 #define LIS2DH_I2C_RETRIES  10
@@ -99,8 +103,10 @@ struct lis2dh_dev_s
   FAR struct lis2dh_config_s  *config;    /* Platform specific configuration */
   struct lis2dh_setup         *setup;     /* User defined device operation mode setup */
   struct lis2dh_vector_s      vector_data;/* Latest read data read from lis2dh */
+  int                         scale;      /* Full scale in milliG */
   sem_t                       devsem;     /* Manages exclusive access to this structure */
   bool                        fifo_used;  /* LIS2DH configured to use FIFO */
+  bool                        fifo_stopped;/* FIFO got full and has stopped. */
 #ifdef LIS2DH_COUNT_INTS
   volatile int16_t            int_pending;/* Interrupt received but data not read, yet */
 #else
@@ -108,10 +114,6 @@ struct lis2dh_dev_s
 #endif
 #ifndef CONFIG_DISABLE_POLL
   struct pollfd               *fds[CONFIG_LIS2DH_NPOLLWAITERS];
-#endif
-#ifdef LIS2DH_SELFTEST
-  bool                        selftest_mode;
-  uint8_t                     selftest_read_count;
 #endif
 };
 
@@ -125,19 +127,24 @@ static ssize_t           lis2dh_read(FAR struct file *, FAR char *, size_t);
 static ssize_t           lis2dh_write(FAR struct file *filep, FAR const char *buffer, size_t buflen);
 static int               lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
 static int               lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr, FAR uint8_t *buf, int length);
-static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err);
+static int               lis2dh_get_reading(FAR struct lis2dh_dev_s * dev, struct lis2dh_vector_s *res, bool force_read);
 static int               lis2dh_powerdown(FAR struct lis2dh_dev_s * dev);
+static int               lis2dh_reboot(FAR struct lis2dh_dev_s * dev);
 static int               lis2dh_poll(FAR struct file *filep, FAR struct pollfd *fds, bool setup);
 static void              lis2dh_notify(FAR struct lis2dh_dev_s *priv);
 static int               lis2dh_int_handler(int irq, FAR void *context);
 static int               lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_setup);
-static int16_t           lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte);
+static inline int16_t    lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte, int scale);
 static int               lis2dh_read_temp(FAR struct lis2dh_dev_s *dev, int16_t *temper);
 static int               lis2dh_clear_interrupts(FAR struct lis2dh_dev_s *priv, uint8_t interrupts);
-#ifdef LIS2DH_SELFTEST
+static unsigned int      lis2dh_get_fifo_readings(FAR struct lis2dh_dev_s *priv,
+                                             FAR struct lis2dh_result *res,
+                                             unsigned int readcount,
+                                             int *perr);
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
 static int               lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv);
 static int16_t           lis2dh_raw_convert_to_12bit(uint8_t raw_hibyte, uint8_t raw_lobyte);
-static FAR const struct  lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err);
+static FAR const struct lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, int *err);
 #endif
 
 /****************************************************************************
@@ -238,6 +245,46 @@ static int lis2dh_close(FAR struct file *filep)
 }
 
 /****************************************************************************
+ * Name: lis2dh_fifo_start
+ *
+ * Description:
+ *   This function restarts FIFO reading.
+ *
+ ****************************************************************************/
+
+static int lis2dh_fifo_start(FAR struct lis2dh_dev_s *priv)
+{
+  uint8_t buf;
+  int err = OK;
+
+  buf =  0x00 | priv->setup->trigger_selection |
+      priv->setup->fifo_trigger_threshold;
+  if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
+    {
+      lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
+      err = -EIO;
+    }
+  else
+    {
+      buf =  priv->setup->fifo_mode | priv->setup->trigger_selection |
+          priv->setup->fifo_trigger_threshold;
+      if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
+        {
+          lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
+          err = -EIO;
+        }
+      else
+        {
+          priv->fifo_stopped = false;
+
+          lis2dh_dbg("lis2dh: FIFO restarted\n");
+        }
+    }
+
+  return err;
+}
+
+/****************************************************************************
  * Name: lis2dh_read
  * Description:
  *   This routine is called when the LIS2DH device is read.
@@ -247,16 +294,14 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 {
   FAR struct inode              *inode = filep->f_inode;
   FAR struct lis2dh_dev_s       *priv  = inode->i_private;
-  const struct lis2dh_vector_s  *results;
   FAR struct lis2dh_result      *ptr;
   int readcount = (buflen - sizeof(struct lis2dh_res_header)) / sizeof(struct lis2dh_vector_s);
-  int i;
   uint8_t buf;
   uint8_t int1_src = 0, int2_src = 0;
   irqstate_t flags;
   int err;
 
-  if (buflen <  sizeof(struct lis2dh_result ) ||
+  if (buflen <  sizeof(struct lis2dh_result) ||
       (buflen - sizeof(struct lis2dh_res_header)) % sizeof(struct lis2dh_vector_s) != 0)
     {
       lis2dh_dbg("lis2dh: Illegal amount of bytes to read: %d\n", buflen);
@@ -281,83 +326,126 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 
   err = sem_wait(&priv->devsem);
   if (err < 0)
-  {
-    return -EINTR;
-  }
-
-  /* If FIFO is used - read until FIFO is empty - or receive buffer (readcount) is reached */
-
-  for (i = 0; i < readcount; i++)
     {
-      results = lis2dh_get_readings(priv, true, &err);
-      if (results == NULL)
-        {
-          lis2dh_dbg("lis2dh: Failed to read xyz\n");
-          break;
-        }
-      if (priv->setup->xy_axis_fixup)
-        {
-          ptr->measurements[i].x = results->y;
-          ptr->measurements[i].y = -results->x;
-        }
-      else
-        {
-          ptr->measurements[i].x = results->x;
-          ptr->measurements[i].y = results->y;
-        }
-      ptr->measurements[i].z = results->z;
+      return -EINTR;
+    }
 
-      if (priv->fifo_used)
+  ptr->header.meas_count = 0;
+
+  if (!priv->fifo_used)
+    {
+      /* FIFO not used, read only one sample. */
+
+      if (readcount > 0)
         {
-          /* Check if there is data left in FIFO */
+          err = lis2dh_get_reading(priv, &ptr->measurements[0], true);
+          if (err < 0)
+            {
+              lis2dh_dbg("lis2dh: Failed to read xyz\n");
+            }
+          else
+            {
+              ptr->header.meas_count = 1;
+            }
+        }
+    }
+  else /* FIFO modes */
+    {
+      uint8_t fifo_mode = priv->setup->fifo_mode & ST_LIS2DH_FIFOCR_MODE_MASK;
+      bool fifo_empty = false;
+      uint8_t fifo_num_samples;
+
+      ptr->header.meas_count = 0;
+
+      do
+        {
+          /* Check if FIFO needs to be restarted after being read empty.
+           * We need to read SRC_REG before reading measurement, as reading
+           * sample from FIFO clears OVRN_FIFO flag.
+           */
 
           if (lis2dh_access(priv, ST_LIS2DH_FIFO_SRC_REG, &buf, 1) != 1)
             {
               lis2dh_dbg("lis2dh: Failed to read FIFO source register\n");
-              err = -EIO;
+              return -EIO;
+            }
+
+          if (fifo_mode != LIS2DH_STREAM_MODE)
+            {
+              /* FIFO is full and has stopped. */
+
+              priv->fifo_stopped |= !!(buf & ST_LIS2DH_FIFOSR_OVRN_FIFO);
+            }
+
+          if (buf & ST_LIS2DH_FIFOSR_OVRN_FIFO)
+            lis2dh_dbg("lis2dh: FIFO overrun\n");
+          if (buf & ST_LIS2DH_FIFOSR_EMPTY)
+            {
+              lis2dh_dbg("lis2dh: FIFO empty\n");
+
+              fifo_empty = true;
+
+              if (fifo_mode != LIS2DH_STREAM_MODE)
+                {
+                  priv->fifo_stopped = true;
+                }
+
+              /* FIFO is empty, skip reading. */
+
               break;
             }
-          if (buf & 0x20)
+
+          /* How many samples available in FIFO? */
+
+          fifo_num_samples = (buf & ST_LIS2DH_FIFOSR_NUM_SAMP_MASK) + 1;
+
+          if (fifo_num_samples > readcount)
             {
-              /* FIFO is empty - stop reading but reset FIFO first */
-
-              buf =  0x00 | priv->setup->trigger_selection |
-                  priv->setup->fifo_trigger_threshold;
-              if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
-                {
-                  lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
-                  err = -EIO;
-                  break;
-                }
-
-              buf =  priv->setup->fifo_mode | priv->setup->trigger_selection |
-                  priv->setup->fifo_trigger_threshold;
-              if (lis2dh_access(priv, ST_LIS2DH_FIFO_CTRL_REG, &buf, -1) != 1)
-                {
-                  lis2dh_dbg("lis2dh: Failed to write FIFO control register\n");
-                  err = -EIO;
-                  break;
-                }
-              readcount = 1;
+              fifo_num_samples = readcount;
             }
 
+          ptr->header.meas_count +=
+              lis2dh_get_fifo_readings(priv, ptr, fifo_num_samples, &err);
         }
-      else
+      while (!fifo_empty && ptr->header.meas_count < readcount);
+
+      if (!fifo_empty && fifo_mode != LIS2DH_TRIGGER_MODE)
         {
-          /* FIFO not used stop reading after first read*/
-          readcount = 1;
+          /* FIFO was not read empty, more data available. */
+
+          flags = irqsave();
+
+#ifdef LIS2DH_COUNT_INTS
+          lis2dh_data->int_pending++;
+#else
+          lis2dh_data->int_pending = true;
+#endif
+
+#ifndef CONFIG_DISABLE_POLL
+          lis2dh_notify(lis2dh_data);
+#endif
+
+          irqrestore(flags);
+        }
+      else if (fifo_mode != LIS2DH_STREAM_MODE && priv->fifo_stopped)
+        {
+          /* FIFO is empty and has stopped by overrun event. Reset FIFO for
+           * further reading. */
+
+          err = lis2dh_fifo_start(priv);
         }
     }
-  ptr->header.meas_count = i;
 
-  /* Make sure interrupt will get cleared (by reading this register) in case of latched configuration */
+  /* Make sure interrupt will get cleared (by reading this register) in case of
+   * latched configuration */
+
   buf = 0;
   if (lis2dh_access(priv, ST_LIS2DH_INT1_SRC_REG, &buf, 1) != 1)
     {
       lis2dh_dbg("lis2dh: Failed to read INT1_SRC_REG\n");
       err = -EIO;
     }
-  if (buf & 0x40)
+  if (buf & ST_LIS2DH_INT_SR_ACTIVE)
     {
       /* Interrupt has happened */
 
@@ -369,14 +457,16 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
       ptr->header.int1_occurred = false;
     }
 
-  /* Make sure interrupt will get cleared (by reading this register) in case of latched configuration */
+  /* Make sure interrupt will get cleared (by reading this register) in case of
+   * latched configuration */
+
   buf = 0;
   if (lis2dh_access(priv, ST_LIS2DH_INT2_SRC_REG, &buf, 1) != 1)
     {
       lis2dh_dbg("lis2dh: Failed to read INT2_SRC_REG\n");
       err = -EIO;
     }
-  if (buf & 0x40)
+  if (buf & ST_LIS2DH_INT_SR_ACTIVE)
     {
       /* Interrupt has happened */
 
@@ -394,7 +484,8 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 
   /* 'err' was just for debugging, we do return partial reads here. */
 
-  return sizeof(ptr->header) + i * sizeof(struct lis2dh_vector_s);
+  return sizeof(ptr->header) +
+      ptr->header.meas_count * sizeof(struct lis2dh_vector_s);
 }
 
 /****************************************************************************
@@ -446,13 +537,6 @@ static int lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       /* Make sure interrupt will get cleared (by reading this register) in case of latched configuration */
 
       lis2dh_clear_interrupts(priv, LIS2DH_INT1 | LIS2DH_INT2);
-
-#ifdef LIS2DH_SELFTEST
-      /* After this, currently selftest is not allowed anymore */
-
-      priv->selftest_mode = false;
-      priv->selftest_read_count = 0;
-#endif
     }
     break;
 
@@ -499,17 +583,12 @@ static int lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
     break;
 
   case SNIOC_START_SELFTEST:
-#ifdef LIS2DH_SELFTEST
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
     {
-      if (priv->selftest_mode == false)
-        {
-          ret = -EINVAL;
-        }
-      else
-        {
-          lis2dh_clear_interrupts(priv, LIS2DH_INT1 | LIS2DH_INT2);
-          ret = lis2dh_handle_selftest(priv);
-        }
+      priv->config->irq_enable(priv->config, false);
+      lis2dh_clear_interrupts(priv, LIS2DH_INT1 | LIS2DH_INT2);
+      ret = lis2dh_handle_selftest(priv);
+      priv->config->irq_enable(priv->config, true);
     }
 #else
     {
@@ -681,34 +760,126 @@ static int lis2dh_int_handler(int irq, FAR void *context)
   return OK;
 }
 
-#ifdef LIS2DH_SELFTEST
+#ifdef CONFIG_LIS2DH_DRIVER_SELFTEST
+/****************************************************************************
+ * Name: lis2dh_clear_registers
+ *
+ * Description:
+ *   Clear lis2dh registers
+ *
+ * Input Parameters:
+ *   priv   - pointer to LIS2DH Private Structure
+ *
+ * Returned Value:
+ *   Returns OK in case of success, otherwise ERROR
+ ****************************************************************************/
+static int lis2dh_clear_registers(FAR struct lis2dh_dev_s *priv)
+{
+  uint8_t i, buf = 0;
 
+  DEBUGASSERT(priv);
+
+  for (i = ST_LIS2DH_TEMP_CFG_REG; i <= ST_LIS2DH_ACT_DUR_REG; i++)
+    {
+      /* Skip read only registers */
+      if ((i <= 0x1E) || (i >= 0x27 && i <= 0x2D) || (i == 0x2F) || (i == 0x31))
+        {
+          continue;
+        }
+      if (lis2dh_access(priv, i, &buf, -1) != 1)
+        {
+          lis2dh_dbg("lis2dh: Failed to clear register 0x%02x\n", i);
+          return ERROR;
+        }
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: lis2dh_write_register
+ *
+ * Description:
+ *   Clear lis2dh registers
+ *
+ * Input Parameters:
+ *   priv   - pointer to LIS2DH Private Structure
+ *   reg    - target register
+ *   value  - value to write
+ *
+ * Returned Value:
+ *   Returns OK in case of success, otherwise ERROR
+ ****************************************************************************/
+static int lis2dh_write_register(FAR struct lis2dh_dev_s *priv, uint8_t reg, uint8_t value)
+{
+  DEBUGASSERT(priv);
+
+  if (lis2dh_access(priv, reg, &value, -1) != 1)
+    {
+      lis2dh_dbg("lis2dh: Failed to write %d to register 0x%02x\n", value, reg);
+      return ERROR;
+    }
+  return OK;
+}
+
+/****************************************************************************
+ * Name: lis2dh_read_register
+ *
+ * Description:
+ *   read lis2dh register
+ *
+ * Input Parameters:
+ *   priv   - pointer to LIS2DH Private Structure
+ *   reg    - register to read
+ *
+ * Returned Value:
+ *   Returns positive register value in case of success, otherwise ERROR ( < 0)
+ ****************************************************************************/
+static int lis2dh_read_register(FAR struct lis2dh_dev_s *priv, uint8_t reg)
+{
+  uint8_t buf;
+
+  DEBUGASSERT(priv);
+
+  if (lis2dh_access(priv, reg, &buf, sizeof(buf)) == sizeof(buf))
+    {
+      return buf;
+    }
+    return ERROR;
+}
 /****************************************************************************
  * Name: lis2dh_handle_selftest
  *
  * Description:
- *   Handle selftest
+ *   Handle selftest. Note, that after running selftest lis2dh is left in shutdown
+ *   mode without valid setup. Therefore SNIOC_WRITESETUP must be
+ *   sent again to proceed with normal operations.
  *
  ****************************************************************************/
 static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
 {
   const struct lis2dh_vector_s *results;
   uint8_t i, j, buf;
-  int8_t attempt;
   int16_t avg_x_no_st = 0, avg_y_no_st = 0, avg_z_no_st = 0;
   int16_t avg_x_with_st = 0, avg_y_with_st = 0, avg_z_with_st = 0;
   int16_t abs_st_x_value,abs_st_y_value, abs_st_z_value;
   int ret = OK;
   int err = OK;
 
+  DEBUGASSERT(priv);
+
   lis2dh_powerdown(priv);
 
+  if (lis2dh_clear_registers(priv) != OK)
+    {
+      ret = -EIO;
+      goto out;
+    }
   /* Set the control register (23h) to ±2g FS, normal mode with BDU (Block Data Update)
    * and HR (High Resolution) bits enabled.
    */
 
-  buf = 0x88;
-  if (lis2dh_access(priv, ST_LIS2DH_CTRL_REG4, &buf, -1) != 1)
+  if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG4, 0x88) != OK)
     {
       lis2dh_dbg("lis2dh: Failed to write CTRL4 REG for selftest\n");
       ret = -EIO;
@@ -717,8 +888,7 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
 
   /* Set the control register (20h) to 50Hz ODR (Output Data Rate) with X/Y/Z axis enabled. */
 
-  buf = 0x47;
-  if (lis2dh_access(priv, ST_LIS2DH_CTRL_REG1, &buf, -1) != 1)
+  if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG1, 0x47) != OK)
     {
       lis2dh_dbg("lis2dh: Failed to write CTRL1 REG for selftest\n");
       ret = -EIO;
@@ -728,21 +898,20 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
   /* Dummy reads so that values have stabilized */
   for (i = 0; i < 20; i++)
     {
-      results = NULL;
-      attempt = SELFTEST_MAX_READ_ATTEMPTS;
-      while (results == NULL && --attempt > 0)
+      if (lis2dh_get_raw_readings(priv, &err) == NULL)
         {
-          results = lis2dh_get_raw_readings(priv, false, &err);
+          ret = -EIO;
+          goto out;
         }
     }
 
   for (i = 0; i < SELFTEST_BUF_SIZE; i++)
     {
-      results = NULL;
-      attempt = SELFTEST_MAX_READ_ATTEMPTS;
-      while (results == NULL && --attempt > 0)
+      results = lis2dh_get_raw_readings(priv, &err);
+      if (results == NULL)
         {
-          results = lis2dh_get_raw_readings(priv, false, &err);
+          ret = -EIO;
+          goto out;
         }
       avg_x_no_st += results->x;
       avg_y_no_st += results->y;
@@ -754,11 +923,15 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
 
   for (i = SELFTEST_0; i <= SELFTEST_1; i++)
     {
+      avg_x_with_st = 0;
+      avg_y_with_st = 0;
+      avg_z_with_st = 0;
+
       /* Enable self-test 0 or 1 at +/-2g FS with BDU and HR bits enabled. */
 
       buf = (i == SELFTEST_0) ? 0x8A : 0x8C;
 
-      if (lis2dh_access(priv, ST_LIS2DH_CTRL_REG4, &buf, -1) != 1)
+      if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG4, buf) != OK)
         {
           lis2dh_dbg("lis2dh: Failed to write CTRL4 REG for selftest\n");
           ret = -EIO;
@@ -766,23 +939,22 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
         }
 
       /* Dummy reads so that values have stabilized */
-      for (j = 0; j < 10; j++)
+      for (i = 0; i < 10; i++)
         {
-          results = NULL;
-          attempt = SELFTEST_MAX_READ_ATTEMPTS;
-          while (results == NULL && --attempt > 0)
+          if (lis2dh_get_raw_readings(priv, &err) == NULL)
             {
-              results = lis2dh_get_raw_readings(priv, false, &err);
+              ret = -EIO;
+              goto out;
             }
         }
 
       for (j = 0; j < SELFTEST_BUF_SIZE; j++)
         {
-          results = NULL;
-          attempt = SELFTEST_MAX_READ_ATTEMPTS;
-          while (results == NULL && --attempt > 0)
+          results = lis2dh_get_raw_readings(priv, &err);
+          if (results == NULL)
             {
-              results = lis2dh_get_raw_readings(priv, false, &err);
+              ret = -EIO;
+              goto out;
             }
           avg_x_with_st += results->x;
           avg_y_with_st += results->y;
@@ -792,28 +964,112 @@ static int lis2dh_handle_selftest(FAR struct lis2dh_dev_s *priv)
       avg_y_with_st = avg_y_with_st / SELFTEST_BUF_SIZE;
       avg_z_with_st = avg_z_with_st / SELFTEST_BUF_SIZE;
 
-      /* FIXME: Why do we need to divide by 2 to get proper results? */
-
-      abs_st_x_value = abs(avg_x_with_st - avg_x_no_st) / 2;
-      abs_st_y_value = abs(avg_y_with_st - avg_y_no_st) / 2;
-      abs_st_z_value = abs(avg_z_with_st - avg_z_no_st) / 2;
+      abs_st_x_value = abs(avg_x_with_st - avg_x_no_st);
+      abs_st_y_value = abs(avg_y_with_st - avg_y_no_st);
+      abs_st_z_value = abs(avg_z_with_st - avg_z_no_st);
 
       dbg ("ST %d, ABSX: %d, ABSY: %d, ABSZ: %d\n", i, abs_st_x_value, abs_st_y_value, abs_st_z_value);
 
-      if (abs_st_x_value < SELFTEST_ABS_DIFF_MIN || abs_st_x_value > SELFTEST_ABS_DIFF_MAX ||
-          abs_st_y_value < SELFTEST_ABS_DIFF_MIN || abs_st_y_value > SELFTEST_ABS_DIFF_MAX ||
-          abs_st_z_value < SELFTEST_ABS_DIFF_MIN || abs_st_z_value > SELFTEST_ABS_DIFF_MAX)
+      if (abs_st_x_value < SELFTEST_ABS_DIFF_MIN_12BIT || abs_st_x_value > SELFTEST_ABS_DIFF_MAX_12BIT ||
+          abs_st_y_value < SELFTEST_ABS_DIFF_MIN_12BIT || abs_st_y_value > SELFTEST_ABS_DIFF_MAX_12BIT ||
+          abs_st_z_value < SELFTEST_ABS_DIFF_MIN_12BIT || abs_st_z_value > SELFTEST_ABS_DIFF_MAX_12BIT)
         {
           dbg("Selftest %d fail! Limits (%d <= value <= %d). Results: x: %d, y: %d, z: %d ",
               i,
-              SELFTEST_ABS_DIFF_MIN, SELFTEST_ABS_DIFF_MAX,
+              SELFTEST_ABS_DIFF_MIN_12BIT, SELFTEST_ABS_DIFF_MAX_12BIT,
               abs_st_x_value, abs_st_y_value, abs_st_z_value);
+          ret = -ERANGE;
+          goto out;
+        }
+    }
+
+  /* Verify INT1 and INT2 lines */
+  if (lis2dh_clear_registers(priv) != OK)
+    {
+      ret = -EIO;
+      goto out;
+    }
+
+  /* Both INT lines should be low */
+  if (priv->config->read_int1_pin() != 0)
+    {
+      dbg("INT1 line is HIGH - expected LOW\n");
+      ret = -ENXIO;
+      goto out;
+    }
+  if (priv->config->read_int2_pin)
+    {
+      if (priv->config->read_int2_pin() != 0)
+        {
+          dbg("INT2 line is HIGH - expected LOW\n");
+          ret = -ENODEV;
+          goto out;
+        }
+    }
+  /* 400Hz ODR all axes enabled
+     FIFO overrun & DATA READY on INT1
+     FIFO enabled and INT1 & INT2 latched
+     FIFO mode, INT1 , THS 0
+     OR combination, all events enabled */
+
+  if ((lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG1, 0x77) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG3, 0x12) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG5, 0x4A) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_FIFO_CTRL_REG, 0x40) != OK) ||
+      (lis2dh_write_register(priv, ST_LIS2DH_INT1_CFG_REG, 0x3F) != OK))
+    {
+      dbg("Writing registers for INT line check failed\n");
+      ret = -EIO;
+      goto out;
+    }
+
+  /* Clear INT1 & INT2*/
+  if ((lis2dh_read_register(priv, ST_LIS2DH_INT1_SRC_REG) == ERROR) ||
+      (lis2dh_read_register(priv, ST_LIS2DH_INT2_SRC_REG) == ERROR))
+    {
+      dbg("Failed to clear INT1 / INT2 registers\n");
+      ret = -EIO;
+      goto out;
+    }
+
+  usleep(20000);
+
+  /* Now INT1 should have been latched high and INT2 should be still low */
+  if (priv->config->read_int1_pin() != 1)
+    {
+      dbg("INT1 line is LOW - expected HIGH\n");
+      ret = -ENXIO;
+      goto out;
+    }
+  if (priv->config->read_int2_pin)
+    {
+      if (priv->config->read_int2_pin() != 0)
+        {
+          dbg("INT2 line is HIGH - expected LOW\n");
+          ret = -ENODEV;
+          goto out;
+        }
+
+      /* Enable interupt 1 on INT2 pin */
+      if (lis2dh_write_register(priv, ST_LIS2DH_CTRL_REG6, 0x40) != OK)
+        {
+          dbg("Failed to enable interrupt 1 on INT2 pin");
           ret = -EIO;
+          goto out;
+        }
+
+      usleep(20000);
+
+      if (priv->config->read_int2_pin() != 1)
+        {
+          dbg("INT2 line is LOW - expected HIGH\n");
+          ret = -ENODEV;
           goto out;
         }
     }
 
 out:
+  (void)lis2dh_clear_registers(priv);
   lis2dh_powerdown(priv);
 
   return ret;
@@ -852,6 +1108,31 @@ static int16_t lis2dh_raw_convert_to_12bit(uint8_t raw_hibyte, uint8_t raw_lobyt
 }
 
 /****************************************************************************
+ * Name: lis2dh_data_available
+ *
+ * Description:
+ *   Check if new data is available to read
+ *
+ * Input Parameters:
+ *   dev        - pointer to LIS2DH Private Structure
+ *
+ * Returned Value:
+ *   Return true if new data is available. Otherwise returns false
+ ****************************************************************************/
+static bool lis2dh_data_available(FAR struct lis2dh_dev_s * dev)
+{
+  uint8_t retval;
+
+  DEBUGASSERT(dev);
+
+  if (lis2dh_access(dev, ST_LIS2DH_STATUS_REG, &retval, sizeof(retval)) == sizeof(retval))
+    {
+      return ((retval & ST_LIS2DH_SR_ZYXDA) != 0);
+    }
+  return false;
+}
+
+/****************************************************************************
  * Name: lis2dh_get_raw_readings
  *
  * Description:
@@ -859,49 +1140,38 @@ static int16_t lis2dh_raw_convert_to_12bit(uint8_t raw_hibyte, uint8_t raw_lobyt
  *
  * Input Parameters:
  *   dev        - pointer to LIS2DH Private Structure
- *   force_read - Read even if new data is not available (old data)
  *
  * Returned Value:
  *   Returns acceleration vectors (High resolution = 12bit values) on success, NULL otherwise.
  ****************************************************************************/
-static FAR const struct lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err)
+static FAR const struct lis2dh_vector_s * lis2dh_get_raw_readings(FAR struct lis2dh_dev_s * dev, int *err)
 {
   uint8_t retval[6];
+  uint8_t retries_left = SELFTEST_MAX_READ_ATTEMPTS;
 
-  DEBUGASSERT(dev != NULL);
+  DEBUGASSERT(dev);
 
   *err = 0;
 
-  if (force_read == false)
+  while (--retries_left > 0)
     {
-      /* Check if there is new data available */
-      if (lis2dh_access(dev, ST_LIS2DH_STATUS_REG, retval, 1) == 1)
+      usleep(20000);
+      if (lis2dh_data_available(dev))
         {
-          /* If result is not yet ready, return NULL */
-
-          if (!(retval[0] & ST_LIS2DH_SR_ZYXDA))
+          if (lis2dh_access(dev, ST_LIS2DH_OUT_X_L_REG, retval, sizeof(retval)) == sizeof(retval))
             {
-              lis2dh_dbg("lis2dh: Results were not ready\n");
-              *err = -EAGAIN;
-              return NULL;
+              dev->vector_data.x = lis2dh_raw_convert_to_12bit(retval[1], retval[0]);
+              dev->vector_data.y = lis2dh_raw_convert_to_12bit(retval[3], retval[2]);
+              dev->vector_data.z = lis2dh_raw_convert_to_12bit(retval[5], retval[4]);
+              return &dev->vector_data;
             }
+          return NULL;
         }
     }
-
-  if (lis2dh_access(dev, ST_LIS2DH_OUT_X_L_REG, retval, 6) == 6)
-    {
-      dev->vector_data.x = lis2dh_raw_convert_to_12bit(retval[1], retval[0]);
-      dev->vector_data.y = lis2dh_raw_convert_to_12bit(retval[3], retval[2]);
-      dev->vector_data.z = lis2dh_raw_convert_to_12bit(retval[5], retval[4]);
-      return &dev->vector_data;
-    }
-
-  lis2dh_dbg("Cannot get raw readings!\n");
-
   return NULL;
 }
 
-#endif /* LIS2DH_SELFTEST */
+#endif /* CONFIG_LIS2DH_DRIVER_SELFTEST */
 
 /****************************************************************************
  * Name: lis2dh_clear_interrupts
@@ -939,25 +1209,25 @@ static int lis2dh_clear_interrupts(FAR struct lis2dh_dev_s *priv, uint8_t interr
 }
 
 /****************************************************************************
- * Name: lis2dh_get_readings
+ * Name: lis2dh_get_reading
  *
  * Description:
- *   Read X, Y, Z - acceleration values from chip
+ *   Read X, Y, Z - acceleration value from chip
  *
  * Input Parameters:
  *   dev        - pointer to LIS2DH Private Structure
  *   force_read - Read even if new data is not available (old data)
  *
  * Returned Value:
- *   Returns acceleration vectors on success, NULL otherwise.
+ *   Returns OK if success, negative error code otherwise
  ****************************************************************************/
-static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_dev_s * dev, bool force_read, int *err)
+static int lis2dh_get_reading(FAR struct lis2dh_dev_s * dev,
+                              struct lis2dh_vector_s *res,
+                              bool force_read)
 {
+  int scale = dev->scale;
   uint8_t retval[7];
-
-  DEBUGASSERT(dev != NULL);
-
-  *err = 0;
+  int16_t x, y, z;
 
   if (lis2dh_access(dev, ST_LIS2DH_STATUS_REG, retval, 7) == 7)
     {
@@ -966,23 +1236,101 @@ static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_
       if (!force_read && !(retval[0] & ST_LIS2DH_SR_ZYXDA))
         {
           lis2dh_dbg("lis2dh: Results were not ready\n");
-          *err = -EAGAIN;
-          return NULL;
+          return -EAGAIN;
         }
-
-      dev->vector_data.x = lis2dh_raw_to_mg(retval[2], retval[1]);
-      dev->vector_data.y = lis2dh_raw_to_mg(retval[4], retval[3]);
-      dev->vector_data.z = lis2dh_raw_to_mg(retval[6], retval[5]);
 
       /* Add something to entropy pool. */
 
-      add_sensor_randomness(((uint32_t)dev->vector_data.z << 16)
-                            | (dev->vector_data.x ^ dev->vector_data.y));
+      add_sensor_randomness((((uint32_t)retval[6] << 25) |
+                             ((uint32_t)retval[6] >> 7)) ^
+                            ((uint32_t)retval[5] << 20) ^
+                            ((uint32_t)retval[4] << 15) ^
+                            ((uint32_t)retval[3] << 10) ^
+                            ((uint32_t)retval[2] << 5) ^
+                            ((uint32_t)retval[1] << 0));
 
-      return &dev->vector_data;
+      x = lis2dh_raw_to_mg(retval[2], retval[1], scale);
+      y = lis2dh_raw_to_mg(retval[4], retval[3], scale);
+      z = lis2dh_raw_to_mg(retval[6], retval[5], scale);
+
+      if (dev->setup->xy_axis_fixup)
+        {
+          res->x = y;
+          res->y = -x;
+        }
+      else
+        {
+          res->x = x;
+          res->y = y;
+        }
+      res->z = z;
+
+      return OK;
     }
 
-  return NULL;
+  return -EIO;
+}
+
+/****************************************************************************
+ * Name: lis2dh_get_fifo_readings
+ *
+ * Description:
+ *   Bulk read from FIFO
+ ****************************************************************************/
+
+static unsigned int lis2dh_get_fifo_readings(FAR struct lis2dh_dev_s *priv,
+                                             FAR struct lis2dh_result *res,
+                                             unsigned int readcount,
+                                             int *perr)
+{
+  int scale = priv->scale;
+  union
+    {
+      uint8_t                raw[6];
+      struct lis2dh_vector_s sample;
+    } *buf = (void *)&res->measurements[res->header.meas_count];
+  bool xy_axis_fixup = priv->setup->xy_axis_fixup;
+  size_t buflen = readcount * 6;
+  int16_t x, y, z;
+  unsigned int i;
+
+  if (readcount == 0)
+    return 0;
+
+  if (lis2dh_access(priv, ST_LIS2DH_OUT_X_L_REG, (void *)buf, buflen) != buflen)
+    {
+      lis2dh_dbg("lis2dh: Failed to read FIFO (%d bytes, %d samples)\n",
+                 buflen, readcount);
+      *perr = -EIO;
+      return 0;
+    }
+
+  /* Add something to entropy pool. */
+
+  up_rngaddentropy((void *)buf, buflen / 4);
+
+  /* Convert raw values to mG */
+
+  for (i = 0; i < readcount; i++)
+    {
+      x = lis2dh_raw_to_mg(buf[i].raw[1], buf[i].raw[0], scale);
+      y = lis2dh_raw_to_mg(buf[i].raw[3], buf[i].raw[2], scale);
+      z = lis2dh_raw_to_mg(buf[i].raw[5], buf[i].raw[4], scale);
+
+      if (xy_axis_fixup)
+        {
+          buf[i].sample.x = y;
+          buf[i].sample.y = -x;
+        }
+      else
+        {
+          buf[i].sample.x = x;
+          buf[i].sample.y = y;
+        }
+      buf[i].sample.z = z;
+    }
+
+  return readcount;
 }
 
 /****************************************************************************
@@ -994,42 +1342,23 @@ static FAR const struct lis2dh_vector_s * lis2dh_get_readings(FAR struct lis2dh_
  * Input Parameters:
  *   raw_hibyte   - Hi byte of raw data
  *   raw_lobyte   - Lo byte of raw data
+ *   scale        - full scale in milliG
  *
  * Returned Value:
  *   Returns acceleration value in mg
  ****************************************************************************/
-static int16_t lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte)
+static inline int16_t lis2dh_raw_to_mg(uint8_t raw_hibyte, uint8_t raw_lobyte,
+                                       int scale)
 {
   int16_t value;
 
-  value = (raw_hibyte << 8) |  raw_lobyte;
-  //value = value >> 4;
-  switch(lis2dh_data->setup->fullscale)
-  {
-  case ST_LIS2DH_CR4_FULL_SCALE_2G:
-  default:
-    value = value >> 4;
-    break;
-  case ST_LIS2DH_CR4_FULL_SCALE_4G:
-    value = value >> 3;
-    break;
-  case ST_LIS2DH_CR4_FULL_SCALE_8G:
-    value = value / 62; // FIXME
-    break;
-  case ST_LIS2DH_CR4_FULL_SCALE_16G:
-    value = value / 186; // FIXME
-    break;
-  }
-  value &= 0xfff;
-  if (value & 0x800)
-    {
-      value = ~value;
-      value &= 0xfff;
-      value +=1;
-      value = -value;
-    }
+  /* Value is signed integer, range INT16_MIN..INT16_MAX. */
 
-  return value;
+  value = (raw_hibyte << 8) |  raw_lobyte;
+
+  /* Scale to mg, INT16_MIN..INT16_MAX => -scale..scale */
+
+  return (int32_t)value * scale / INT16_MAX;
 }
 
 static int lis2dh_read_temp(FAR struct lis2dh_dev_s *dev, int16_t *temper)
@@ -1105,9 +1434,20 @@ static int lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr,
 
   else if (subaddr >= ST_LIS2DH_TEMP_CFG_REG && subaddr <= ST_LIS2DH_ACT_DUR_REG)
     {
-      if (length > (ST_LIS2DH_ACT_DUR_REG + 1 - subaddr))
+      if (subaddr == ST_LIS2DH_OUT_X_L_REG)
         {
-          length = ST_LIS2DH_ACT_DUR_REG + 1 - subaddr;
+          /* FIFO bulk read, length maximum 6*32 = 192 bytes. */
+          if (length > 6 * 32)
+            {
+              length = 6 * 32;
+            }
+        }
+      else
+        {
+          if (length > (ST_LIS2DH_ACT_DUR_REG + 1 - subaddr))
+            {
+              length = ST_LIS2DH_ACT_DUR_REG + 1 - subaddr;
+            }
         }
     }
   else
@@ -1160,7 +1500,58 @@ static int lis2dh_access(FAR struct lis2dh_dev_s *dev, uint8_t subaddr,
         }
     }
 
+  lis2dh_dbg("failed, error: %d\n", retval);
   return retval;
+}
+
+static int lis2dh_reboot(FAR struct lis2dh_dev_s * dev)
+{
+  struct timespec start, curr;
+  int32_t diff_msec;
+  uint8_t value;
+
+  (void)clock_gettime(CLOCK_MONOTONIC, &start);
+
+  /* Reboot to reset chip. */
+
+  value = ST_LIS2DH_CR5_BOOT;
+  if (lis2dh_access(dev, ST_LIS2DH_CTRL_REG5, &value, -1) != 1)
+    {
+      return -EIO;
+    }
+
+  /* Reboot is completed when reboot bit is cleared. */
+
+  do
+    {
+      value = 0;
+      if (lis2dh_access(dev, ST_LIS2DH_CTRL_REG5, &value, 1) != 1)
+        {
+          return -EIO;
+        }
+
+      if (!(value & ST_LIS2DH_CR5_BOOT))
+        {
+          break;
+        }
+
+      (void)clock_gettime(CLOCK_MONOTONIC, &curr);
+
+      diff_msec = (curr.tv_sec - start.tv_sec) * 1000;
+      diff_msec += (curr.tv_nsec - start.tv_nsec) / (1000 * 1000);
+
+      if (diff_msec > 100)
+        {
+          return -ETIMEDOUT;
+        }
+
+       usleep(1);
+    }
+  while (true);
+
+  /* Reboot completed, chip is now in power-down state. */
+
+  return OK;
 }
 
 static int lis2dh_powerdown(FAR struct lis2dh_dev_s * dev)
@@ -1196,6 +1587,11 @@ static int lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_
   uint8_t value;
 
   dev->setup = new_setup;
+
+  /* Clear old configuration. On first boot after power-loss, reboot bit does
+   * not get cleared, and lis2dh_reboot() times out. Anyway, chip accepts
+   * new configuration and functions correctly. */
+  (void)lis2dh_reboot(dev);
 
   /* TEMP_CFG_REG */
   value = dev->setup->temp_enable ? (0x3 << 6): 0;
@@ -1356,9 +1752,31 @@ static int lis2dh_setup(FAR struct lis2dh_dev_s * dev, struct lis2dh_setup *new_
       goto error;
     }
 
+  switch (dev->setup->fullscale & 0x30)
+    {
+    default:
+    case ST_LIS2DH_CR4_FULL_SCALE_2G:
+      dev->scale = 2000;
+      break;
+    case ST_LIS2DH_CR4_FULL_SCALE_4G:
+      dev->scale = 4000;
+      break;
+    case ST_LIS2DH_CR4_FULL_SCALE_8G:
+      dev->scale = 8000;
+      break;
+    case ST_LIS2DH_CR4_FULL_SCALE_16G:
+      dev->scale = 16000;
+      break;
+    }
+
   if (dev->setup->fifo_enable)
     {
       dev->fifo_used = true;
+
+      if (lis2dh_fifo_start(dev) < 0)
+        {
+          goto error;
+        }
     }
   else
     {
@@ -1405,13 +1823,6 @@ int lis2dh_register(FAR const char *devpath,
   priv->int_pending = 0;
 #else
   priv->int_pending = false;
-#endif
-
-#ifdef LIS2DH_SELFTEST
-  /* Selftest is currently supported only right after boot */
-
-  priv->selftest_mode = true;
-  priv->selftest_read_count = 0;
 #endif
 
   /* Set static pointer to priv data */

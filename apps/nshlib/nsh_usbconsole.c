@@ -187,11 +187,12 @@ restart:
       fd = open(CONFIG_NSH_USBCONDEV, O_RDWR);
       if (fd < 0)
         {
-          /* ENOTCONN means that the USB device is not yet connected. Anything
-           * else is bad.
+          /* ENOTCONN means that the USB device is not yet connected and ENOENT
+           * means that USB driver is not yet registered. ENOENT is returned
+           * momentarily when reinitializing CDC/ACM driver. Anything else is bad.
            */
 
-          DEBUGASSERT(errno == ENOTCONN);
+          DEBUGASSERT(errno == ENOTCONN || errno == ENOENT);
 
           /* Sleep a bit and try again */
 

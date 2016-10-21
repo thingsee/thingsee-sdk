@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ * Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,9 +35,10 @@
 #ifndef UI_CALIBRATION_H_
 #define UI_CALIBRATION_H_
 
-typedef enum ui_calib_sens_id_e {
-    UI_CALIB_SENS_GYROSCOPE = 0x0,
-    UI_CALIB_SENS_MAGN
+typedef enum ui_calib_sens_id_e
+{
+  UI_CALIB_SENS_GYROSCOPE = 0x0,
+  UI_CALIB_SENS_MAGN
 } ui_calib_sens_id_t;
 
 /****************************************************************************
@@ -53,6 +54,7 @@ typedef enum ui_calib_sens_id_e {
  *  OK on calibration succeeded
  *
  ****************************************************************************/
+
 int ui_calib_lsm9ds1_calibrate(int sens_id);
 
 #endif /* UI_CALIBRATION_H_ */

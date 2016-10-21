@@ -12,26 +12,12 @@ config NETUTILS_NTPCLIENT
 
 if NETUTILS_NTPCLIENT
 
-config NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-	bool "Use hostname for NTP server IP address"
-	depends on NETUTILS_DNSCLIENT
-	default n
-
-if NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-
 config NETUTILS_NTPCLIENT_SERVERHOSTNAME
-	string "NTP server hostname"
-	default "0.pool.ntp.org"
-
-endif #NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-
-if !NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
-
-config NETUTILS_NTPCLIENT_SERVERIP
-	hex "NTP server IP address"
-	default 0x0a000001
-
-endif #NETUTILS_NTPCLIENT_USE_SERVERHOSTNAME
+	string "NTP server hostnames"
+	default "0.pool.ntp.org;1.pool.ntp.org;2.pool.ntp.org"
+	---help---
+		List of NTP server hostnames to use. Server names need to be separated
+		by ';'.
 
 config NETUTILS_NTPCLIENT_PORTNO
 	int "NTP server port number"
@@ -52,6 +38,10 @@ config NETUTILS_NTPCLIENT_POLLDELAYSEC
 config NETUTILS_NTPCLIENT_RETRIES
 	int "NTP client retry seconds to wait for network up"
 	default 60
+
+config NETUTILS_NTPCLIENT_NUM_SAMPLES
+	int "NTP client number of samples collected for filter"
+	default 5
 
 config NETUTILS_NTPCLIENT_SIGWAKEUP
 	int "NTP client wakeup signal number"

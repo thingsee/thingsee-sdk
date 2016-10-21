@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_usrsock.h
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,6 +52,11 @@
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+/* Number of failed consecutive DNS requests, after which attempt to
+ * reinitialize GRPS connection. */
+
+#define UBMODEM_MAX_GPRS_DNS_FAILED_COUNT 10
 
 /****************************************************************************
  * Type Declarations
@@ -136,7 +141,7 @@ enum modem_socket_state_e
   MODEM_SOCKET_STATE_SENDING,
   MODEM_SOCKET_STATE_RECEIVING,
   MODEM_SOCKET_STATE_CHECKING_TXFULL,
-  MODEM_SOCKET_STATE_SETGETSOCK,
+  MODEM_SOCKET_STATE_SOCKET_CONFIG,
   MODEM_SOCKET_STATE_FREE,
 };
 
@@ -157,7 +162,7 @@ struct modem_socket_s
   bool is_closing:1;                /* Socket waiting to be closed. */
   bool tx_buf_full:1;               /* Outgoing buffer is full. */
   bool tx_buf_full_recheck:1;       /* Rechecking if tx-buffer is full.*/
-  bool is_setgetsock_pending:1;     /* Pending get/setsock operation. */
+  bool is_socket_config_pending:1;  /* Pending getsock/setsock/bind operation. */
   bool is_freeing_pending:1;        /* Pending socket freeing operation. */
 
   struct usrsock_request_common_s req;
@@ -187,14 +192,24 @@ struct modem_socket_s
     uint16_t max_buflen;
   } recv;
 
-  /* getsockopt/setsockopt/getsockname state */
-
-  struct
+  union
   {
-    uint16_t level;
-    uint16_t option;
-    uint16_t valuesize;
-  } setgetsock;
+    /* bind state for socket */
+
+    struct
+    {
+      struct sockaddr_in addr;
+    } bind;
+
+    /* getsockopt/setsockopt/getsockname state */
+
+    struct
+    {
+      uint16_t level;
+      uint16_t option;
+      uint16_t valuesize;
+    } setgetsock;
+  };
 };
 
 /****************************************************************************
@@ -396,13 +411,31 @@ void __ubmodem_check_txfull_socket(struct modem_socket_s *sock);
 void __ubmodem_handle_sendto_buffer_full(struct modem_socket_s *sock);
 
 /****************************************************************************
- * Name: __ubmodem_do_setgetsock_socket
+ * Name: __ubmodem_setsockopt_socket
  *
  * Description:
- *   Prepare set or get socket option.
+ *   Prepare setting socket option.
  ****************************************************************************/
 
-void __ubmodem_do_setgetsock_socket(struct modem_socket_s *sock);
+void __ubmodem_setsockopt_socket(struct modem_socket_s *sock);
+
+/****************************************************************************
+ * Name: __ubmodem_getsockopt_socket
+ *
+ * Description:
+ *   Prepare getting socket option.
+ ****************************************************************************/
+
+void __ubmodem_getsockopt_socket(struct modem_socket_s *sock);
+
+/****************************************************************************
+ * Name: __ubmodem_bind_socket
+ *
+ * Description:
+ *   Prepare binding socket.
+ ****************************************************************************/
+
+void __ubmodem_bind_socket(struct modem_socket_s *sock);
 
 /****************************************************************************
  * Name: __ubmodem_usrsock_handle_socket_request
@@ -477,6 +510,17 @@ int __ubmodem_usrsock_handle_setsockopt_request(struct ubmodem_s *modem,
 
 int __ubmodem_usrsock_handle_getsockopt_request(struct ubmodem_s *modem,
                                                 void *reqbuf);
+
+/****************************************************************************
+ * Name: __ubmodem_usrsock_handle_bind_request
+ *
+ * Description:
+ *   Handle bind request for sockets
+ *
+ ****************************************************************************/
+
+int __ubmodem_usrsock_handle_bind_request(struct ubmodem_s *modem,
+                                          void *reqbuf);
 
 #endif /* CONFIG_UBMODEM_USRSOCK */
 

@@ -40,7 +40,7 @@ include $(APPDIR)/Make.defs
 # Thingsee library
 
 ASRCS  =
-CSRCS  = ts_devinfo.c ts_core.c
+CSRCS  = ts_devinfo.c ts_core.c ts_mainloop_locker.c
 
 AOBJS		= $(ASRCS:.S=$(OBJEXT))
 COBJS		= $(CSRCS:.c=$(OBJEXT))

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_command.c
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,6 +55,7 @@
 #include "ubmodem_command.h"
 #include "ubmodem_parser.h"
 #include "ubmodem_internal.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -203,6 +204,8 @@ static int modem_delayed_command_callback(struct ubmodem_s *modem, int timer_id,
   MODEM_DEBUGASSERT(modem, modem->delayed_cmd.active);
   MODEM_DEBUGASSERT(modem, modem->delayed_cmd.cmd_buf);
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+
   modem->delayed_cmd.active = false;
   modem->delayed_cmd.cmd_buf = NULL;
 
@@ -292,6 +295,8 @@ int __ubmodem_send_cmd(struct ubmodem_s *modem,
                                   &modem_delayed_command_callback, modem);
           if (ret == ERROR)
             return ERROR;
+
+          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
 
           return OK;
         }

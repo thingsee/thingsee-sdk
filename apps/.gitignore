@@ -1,5 +1,5 @@
 /bin
-/external
+#/external
 /.context
 /.config
 /.depend

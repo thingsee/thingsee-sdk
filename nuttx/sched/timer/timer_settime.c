@@ -297,7 +297,7 @@ int timer_settime(timer_t timerid, int flags, FAR const struct itimerspec *value
 {
   FAR struct posix_timer_s *timer = (FAR struct posix_timer_s *)timerid;
   irqstate_t state;
-  int delay;
+  ssystime_t delay;
   int ret = OK;
 
   /* Some sanity checks */

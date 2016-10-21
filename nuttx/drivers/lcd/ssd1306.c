@@ -451,11 +451,9 @@ static const struct lcd_planeinfo_s g_planeinfo =
   .bpp    = SSD1306_DEV_BPP,         /* Bits-per-pixel */
 };
 
-/* This is the OLED driver instance (only a single device is supported for now) */
+/* This is the outside visible interface for the OLED driver */
 
-static struct ssd1306_dev_s g_oleddev =
-{
-  .dev =
+static const struct lcd_dev_s g_oleddev_dev =
   {
     /* LCD Configuration */
 
@@ -471,8 +469,11 @@ static struct ssd1306_dev_s g_oleddev =
     .setpower     = ssd1306_setpower,
     .getcontrast  = ssd1306_getcontrast,
     .setcontrast  = ssd1306_setcontrast,
-  },
-};
+  };
+
+/* This is the OLED driver instance (only a single device is supported for now) */
+
+static struct ssd1306_dev_s g_oleddev;
 
 /**************************************************************************************
  * Private Functions
@@ -1360,6 +1361,8 @@ FAR struct lcd_dev_s *ssd1306_initialize(FAR struct spi_dev_s *spi,
                                          unsigned int devno)
 {
   FAR struct ssd1306_dev_s *priv = &g_oleddev;
+
+  priv->dev = g_oleddev_dev;
 
   lcdvdbg("Initializing\n");
   DEBUGASSERT(spi && devno == 0);

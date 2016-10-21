@@ -1,9 +1,10 @@
 /****************************************************************************
  * apps/system/conman/conman_ctl.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Authors: Pekka Ervasti <pekka.ervasti@haltian.com>
  *            Jussi Kivilinna <jussi.kivilinna@haltian.com>
+ *            Sila Kayo <sila.kayo@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -525,6 +526,19 @@ void __conman_ctl_handle_pollin(struct conman_s *conman, struct pollfd *pfd)
       }
       break;
 
+    case CONMAN_MSG_REQUEST_CELL_ENVIRONMENT:
+      {
+        DEBUGASSERT(hdr.len == 0);
+
+        ret = __conman_ubmodem_request_cell_environment(conman);
+        if (ret < 0)
+          {
+            conman_dbg("__conman_ubmodem_request_cell_environment failed\n");
+            resp = CONMAN_RESP_ERROR;
+          }
+        break;
+      }
+
     case CONMAN_MSG_SEND_SMS:
       {
         struct conman_msg_send_sms_s *sms = (void *)data;
@@ -546,6 +560,60 @@ void __conman_ctl_handle_pollin(struct conman_s *conman, struct pollfd *pfd)
 
         __conman_send_resp(conman, hdr.id, resp, NULL, 0);
         return;
+      }
+      break;
+
+    case CONMAN_MSG_FTP_DOWNLOAD:
+      {
+        struct conman_msg_ftp_download_s *ftp = (void *)data;
+        size_t size;
+
+        size = sizeof(struct conman_msg_ftp_download_s);
+        DEBUGASSERT(size < hdr.len);
+
+        DEBUGASSERT(ftp->hostname_len > 0);
+        size += ftp->hostname_len;
+        DEBUGASSERT(size < hdr.len);
+
+        DEBUGASSERT(ftp->username_len > 0);
+        size += ftp->username_len;
+        DEBUGASSERT(size < hdr.len);
+
+        DEBUGASSERT(ftp->password_len > 0);
+        size += ftp->password_len;
+        DEBUGASSERT(size < hdr.len);
+
+        DEBUGASSERT(ftp->filepath_src_len > 0);
+        size += ftp->filepath_src_len;
+        DEBUGASSERT(size < hdr.len);
+
+        DEBUGASSERT(ftp->filepath_dst_len > 0);
+        size += ftp->filepath_dst_len;
+        DEBUGASSERT(size <= hdr.len);
+
+        ret = __conman_ubmodem_ftp_download(conman, ftp);
+        if (ret < 0)
+          {
+            conman_dbg("conman_ubmodem_ftp_download failed\n");
+            resp = CONMAN_RESP_ERROR;
+          }
+
+        __conman_send_resp(conman, hdr.id, resp, NULL, 0);
+        return;
+      }
+      break;
+
+    case CONMAN_MSG_FILESYSTEM_DELETE:
+      {
+        DEBUGASSERT(hdr.len > 0);
+        DEBUGASSERT(data[hdr.len - 1] == '\0');
+
+        ret = __conman_ubmodem_filesystem_delete(conman, data);
+        if (ret < 0)
+          {
+            conman_dbg("__conman_config_set_connections failed\n");
+            resp = CONMAN_RESP_ERROR;
+          }
       }
       break;
 
@@ -590,6 +658,52 @@ void __conman_ctl_handle_pollin(struct conman_s *conman, struct pollfd *pfd)
             resp = CONMAN_RESP_ERROR;
           }
       }
+      break;
+
+    case CONMAN_MSG_START_CELLLOCATE:
+      {
+        struct conman_msg_start_celllocate_s *ctl = (void *)data;
+
+        DEBUGASSERT(hdr.len >= sizeof(*ctl));
+
+        ret = __conman_ubmodem_start_celllocate(conman, ctl);
+        if (ret < 0)
+          {
+            conman_dbg("__conman_ubmodem_start_celllocate failed\n");
+            resp = CONMAN_RESP_ERROR;
+          }
+      }
+      break;
+
+    case CONMAN_MSG_AID_CELLLOCATE:
+      {
+        struct conman_msg_aid_celllocate_s *ctl = (void *)data;
+
+        DEBUGASSERT(hdr.len >= sizeof(*ctl));
+
+        ret = __conman_ubmodem_aid_celllocate(conman, ctl);
+        if (ret < 0)
+          {
+            conman_dbg("__conman_ubmodem_aid_celllocate failed\n");
+            resp = CONMAN_RESP_ERROR;
+          }
+      }
+      break;
+
+    case CONMAN_MSG_WIFI_SCAN:
+      {
+        DEBUGASSERT(hdr.len == 0);
+
+        ret = __conman_cc3000_wifi_scan(conman);
+        if (ret < 0)
+          {
+            conman_dbg("__conman_cc3000_wifi_scan failed\n");
+            resp = CONMAN_RESP_ERROR;
+          }
+      }
+      break;
+
+    case CONMAN_MSG_PING:
       break;
 
     default:

@@ -1,8 +1,9 @@
 /****************************************************************************
  * apps/system/conman/conman_internal.h
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
+ *   Author: Sila Kayo <sila.kayo@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -163,13 +164,16 @@ struct conman_s
     char imei[15 + 1];
     char imsi[15 + 1];
     char udopn[32 + 1];
+    char mcc_mnc[7 + 1];
 
     bool info_requested:1;
     bool imei_requested:1;
     bool imsi_requested:1;
     bool udopn_requested:1;
+    bool mcc_mnc_requested:1;
     bool sms_connection_requested:1;
     bool sms_sending_active:1;
+    bool establishing_lost:1;
 
     sq_queue_t sms_queue;
     uint32_t sms_connid;
@@ -179,14 +183,25 @@ struct conman_s
 enum conman_msgs_ids
 {
   CONMAN_MSG_ENABLE_EVENTS = 1,
+  CONMAN_MSG_PING,
+  /* Connection control commands: */
   CONMAN_MSG_SET_CONNECTIONS_CONFIG,
   CONMAN_MSG_CREATE_CONNECTION,
   CONMAN_MSG_DESTROY_CONNECTION,
   CONMAN_MSG_GET_CONNECTION_STATUS,
+  /* Modem specific commands: */
+  CONMAN_MSG_REQUEST_CELL_ENVIRONMENT,
   CONMAN_MSG_SEND_SMS,
   CONMAN_MSG_CALL_ANSWER,
   CONMAN_MSG_CALL_HANGUP,
   CONMAN_MSG_CALL_AUDIO_CONTROL,
+  /* u-blox modem specific commands: */
+  CONMAN_MSG_START_CELLLOCATE,
+  CONMAN_MSG_AID_CELLLOCATE,
+  CONMAN_MSG_FTP_DOWNLOAD,
+  CONMAN_MSG_FILESYSTEM_DELETE,
+  /* Wifi specific commands: */
+  CONMAN_MSG_WIFI_SCAN,
 };
 
 struct conman_hdr
@@ -231,6 +246,38 @@ struct conman_msg_call_audioctl_s
   bool audio_out_on;
 } packed_struct;
 
+struct conman_msg_start_celllocate_s
+{
+  int timeout;
+  int target_accuracy;
+} packed_struct;
+
+struct conman_msg_aid_celllocate_s
+{
+  time_t time;
+  double latitude;
+  double longitude;
+  int altitude;
+  unsigned int accuracy;
+  uint16_t speed;
+  uint16_t direction;
+} packed_struct;
+
+struct conman_msg_wifi_scan_s
+{
+  int32_t max_scan_secs;
+} packed_struct;
+
+struct conman_msg_ftp_download_s
+{
+  uint16_t hostname_len;
+  uint16_t username_len;
+  uint16_t password_len;
+  uint16_t filepath_src_len;
+  uint16_t filepath_dst_len;
+  char msg_data[];
+} packed_struct;
+
 int __conman_ubmodem_initialize(struct conman_s *conman, int *maxfds);
 
 int __conman_ubmodem_request_connection(struct conman_s *conman, enum conman_connection_type_e type);
@@ -249,6 +296,8 @@ void __conman_ubmodem_handle_pollfds(struct conman_s *conman,
 
 bool __conman_ubmodem_is_destroying(struct conman_s *conman);
 
+int __conman_ubmodem_request_cell_environment(struct conman_s *conman);
+
 int __conman_ubmodem_send_sms(struct conman_s *conman,
                               struct conman_msg_send_sms_s *sms);
 
@@ -260,6 +309,18 @@ int __conman_ubmodem_call_hangup(struct conman_s *conman);
 int __conman_ubmodem_call_audioctl(struct conman_s *conman,
                                    const struct conman_msg_call_audioctl_s *ctl);
 
+int __conman_ubmodem_start_celllocate(struct conman_s *conman,
+                                const struct conman_msg_start_celllocate_s *ctl);
+
+int __conman_ubmodem_aid_celllocate(struct conman_s *conman,
+                                 const struct conman_msg_aid_celllocate_s *ctl);
+
+int __conman_ubmodem_ftp_download(struct conman_s *conman,
+                                  struct conman_msg_ftp_download_s *ftp);
+
+int __conman_ubmodem_filesystem_delete(struct conman_s *conman,
+                                       const char *filename);
+
 int __conman_cc3000_initialize(struct conman_s *conman);
 
 int __conman_cc3000_request_connection(struct conman_s *conman, enum conman_connection_type_e type);
@@ -268,6 +329,17 @@ int __conman_cc3000_get_status_connection(struct conman_s *conman,
                                           struct conman_status_s *status);
 
 bool __conman_cc3000_is_destroying(struct conman_s *conman);
+
+int __conman_cc3000_wifi_scan(struct conman_s *conman);
+
+unsigned int __conman_cc3000_get_max_pollfds(struct conman_s *conman);
+
+void __conman_cc3000_setup_pollfds(struct conman_s *conman,
+                                   struct pollfd *pfds, int maxfds,
+                                   int *fds_pos, int *min_timeout);
+
+void __conman_cc3000_handle_pollfds(struct conman_s *conman,
+                                    struct pollfd *pfds);
 
 void __conman_config_init(struct conman_s *conman);
 

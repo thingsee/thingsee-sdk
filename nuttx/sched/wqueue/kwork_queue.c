@@ -162,7 +162,7 @@ static void work_qqueue(FAR struct kwork_wqueue_s *wqueue,
  ****************************************************************************/
 
 int work_queue(int qid, FAR struct work_s *work, worker_t worker,
-               FAR void *arg, uint32_t delay)
+               FAR void *arg, systime_t delay)
 {
 #ifdef CONFIG_SCHED_HPWORK
   if (qid == HPWORK)

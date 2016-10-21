@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_internal.h
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -72,8 +72,11 @@
 
 /* Limit for UDP packet payload size. */
 
-#define UBMODEM_USRSOCK_UDP_MAX_PACKET_PAYLOAD 548
+#define UBMODEM_USRSOCK_UDP_MAX_PACKET_PAYLOAD 1024
 
+/* How many times to retry configure setting. */
+
+#define UBMODEM_CONFIGURE_RETRIES 5
 
 #define MODEM_DEBUGASSERT(modem, a) ({ \
     if (!(a)) \
@@ -149,6 +152,31 @@ enum ubmodem_network_state_e
   NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION
 };
 
+/* Modem models */
+
+enum ubmodem_model_e
+{
+  UBMODEM_MODEL_UNKNOWN = 0,
+  UBMODEM_MODEL_SARA_G_UNKNOWN,
+  UBMODEM_MODEL_SARA_G300,
+  UBMODEM_MODEL_SARA_G310,
+  UBMODEM_MODEL_SARA_G340,
+  UBMODEM_MODEL_SARA_G350,
+  UBMODEM_MODEL_SARA_U_UNKNOWN,
+  UBMODEM_MODEL_SARA_U260,
+  UBMODEM_MODEL_SARA_U270,
+  UBMODEM_MODEL_SARA_U280,
+};
+
+/* CellLocate ULOCAID support status */
+
+enum ubmodem_cell_locate_aid_support_e
+{
+  UBMODEM_CELL_LOCATE_SUPPORT_UNKNOWN = 0,
+  UBMODEM_CELL_LOCATE_SUPPORT_OK,
+  UBMODEM_CELL_LOCATE_SUPPORT_NOK,
+};
+
 /* Timer callback function type. */
 
 typedef int (* ubmodem_timer_fn_t)(struct ubmodem_s *modem, int timer_id,
@@ -175,6 +203,11 @@ typedef void (* ubmodem_send_config_func_t)(struct ubmodem_s *modem);
 typedef const ubmodem_send_config_func_t *(* ubmodem_configs_func_t)(
     struct ubmodem_s *modem, size_t *ncmds);
 
+/* Check CMEE setting result function type. */
+
+typedef void (*modem_check_cmee_func_t)(struct ubmodem_s *modem, bool cmee_ok,
+                                        int cmee_setting, void *priv);
+
 /* Modem module data structure */
 
 struct ubmodem_s {
@@ -199,8 +232,10 @@ struct ubmodem_s {
                             /* +CREG URC registered. */
   bool uupsdd_urc_registered:1;
                             /* +UUPSDD URC registered. */
+#ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
   bool cell_locate_urc_registered:1;
                             /* CellLocate URC registered. */
+#endif
 #ifdef CONFIG_UBMODEM_USRSOCK
   bool socket_urcs_registered:1;
                             /* Socket URCs registered. */
@@ -209,6 +244,8 @@ struct ubmodem_s {
   bool voice_urcs_registered:1;
                             /* Voice-call URCs registered. */
 #endif
+  enum ubmodem_cell_locate_aid_support_e support_cell_locate_aid:2;
+                            /* +ULOCAID support flag. */
 
   /* HW control (serial port initialization, gpio & power control) */
 
@@ -218,6 +255,11 @@ struct ubmodem_s {
     void *priv;
   } hw;
 
+  /* Gathered modem info */
+
+  enum ubmodem_model_e model;
+  char order_code[20];
+
   /* Serial port file descriptor for modem I/O */
 
   int serial_fd;
@@ -225,6 +267,12 @@ struct ubmodem_s {
   /* Network registration timer */
 
   int creg_timer_id;
+
+  /* CellLocate timeout timer */
+
+#ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
+  int cell_locate_timer_id;
+#endif
 
   /* Timer for full power off */
 
@@ -246,6 +294,7 @@ struct ubmodem_s {
       int try_count;
       int configure_group_pos;
       int configure_cmd_pos;
+      int configure_retries;
     } setup_cmd_prompt;
 
     struct modem_sub_setup_sim_s
@@ -259,7 +308,8 @@ struct ubmodem_s {
       const char *fail_reason;
       bool keep_creg_urc:1;
       enum ubmodem_network_state_e network_state:3;
-      int8_t received_creg_while_retrying;
+      int8_t received_creg_while_retrying:8;
+      struct timespec net_reg_start_ts;
     } setup_network;
 
     struct modem_sub_gprs_s
@@ -280,6 +330,7 @@ struct ubmodem_s {
       };
     } gprs;
   } sub;
+  unsigned int cmd_prompt_ate0_attempts;
 
   /* Callback functions for events/operations */
 
@@ -312,8 +363,26 @@ struct ubmodem_s {
     bool active:1;
     bool ring_reported:1;
     bool disconnect_reported:1;
+    bool pm_activity_enabled:1;
+    bool probe_task_queued:1;
+    unsigned int probe_fails:3;
+    int probe_timerid:20;
     struct ubmodem_voice_call_ringing_s clip;
   } voice;
+
+  /* Audio handling */
+
+  struct modem_audio_s
+  {
+    bool in_enabled:1;
+    bool out_enabled:1;
+  } audio;
+#endif
+
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+  /* FTP download handling */
+
+  void *ftp_current_operation;
 #endif
 
   /* Timer for timed state changes */
@@ -387,26 +456,37 @@ void __ubmodem_do_cell_locate_work(struct ubmodem_s *modem);
  *
  * Input Parameters:
  *   modem : Modem private structure.
+ *   got_celllocate_event : True if CellLocate succeeded. Generate
+ *                          CellLocate failed event if this is set to 'false'.
  *
  ****************************************************************************/
 
-void __ubmodem_cell_locate_cleanup(struct ubmodem_s *modem);
+void __ubmodem_cell_locate_cleanup(struct ubmodem_s *modem,
+                                   bool got_celllocate_event);
 
 /****************************************************************************
- * Name: __ubmodem_has_cell_locate_work
+ * Name: __ubmodem_ftp_download_cleanup
  *
  * Description:
- *   Check if CellLocate is active
+ *   Clean-up and free FTP-download state.
  *
  * Input Parameters:
  *   modem : Modem private structure.
  *
- * Return value:
- *   true if there is work waiting.
- *
  ****************************************************************************/
 
-bool __ubmodem_has_cell_locate_work(struct ubmodem_s *modem);
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+
+void __ubmodem_ftp_download_cleanup(struct ubmodem_s *modem);
+
+#else
+
+static inline void __ubmodem_ftp_download_cleanup(struct ubmodem_s *modem)
+{
+  /*_*/
+}
+
+#endif /* CONFIG_UBMODEM_FTP_ENABLED */
 
 /****************************************************************************
  * Name: __ubmodem_socket_cleanup_all
@@ -855,6 +935,24 @@ __ubmodem_cmdprompt_generic_config_handler(struct ubmodem_s *modem,
                                            const uint8_t *resp_stream,
                                            size_t stream_len, void *priv);
 
+/****************************************************************************
+ * Name: __ubmodem_celllocate_get_config_cmds
+ *
+ * Description:
+ *   Get configuration command list for CellLocate.
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *   ncmds    : Number of commands in array
+ *
+ * Return value:
+ *   Pointer to command array
+ *
+ ****************************************************************************/
+
+const ubmodem_send_config_func_t *
+__ubmodem_celllocate_get_config_cmds(struct ubmodem_s *modem, size_t *ncmds);
+
 #ifdef CONFIG_UBMODEM_VOICE
 
 /****************************************************************************
@@ -922,5 +1020,83 @@ void __ubmodem_voice_control_cleanup(struct ubmodem_s *modem);
 
 #endif /* CONFIG_UBMODEM_VOICE */
 
-#endif /* __SYSTEM_UBMODEM_UBMODEM_INTERNAL_H_ */
+/****************************************************************************
+ * Name: __ubmodem_recover_stuck_hardware
+ *
+ * Description:
+ *   Recover/reset stuck modem hardware
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
 
+int __ubmodem_recover_stuck_hardware(struct ubmodem_s *modem);
+
+/****************************************************************************
+ * Name: __ubmodem_reinitialize_gprs
+ *
+ * Description:
+ *   Reinitialize GPRS connection
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+int __ubmodem_reinitialize_gprs(struct ubmodem_s *modem);
+
+/****************************************************************************
+ * Name: __ubmodem_check_cmee_status
+ *
+ * Description:
+ *   Check current CMEE setting
+ *
+ * Input Parameters:
+ *   callback_fn    : callback result function
+ *   callback_priv  : callback private data
+ *
+ * Returned Values:
+ *   OK: If success
+ *   ERROR: If failed
+ *
+ ****************************************************************************/
+
+int __ubmodem_check_cmee_status(struct ubmodem_s *modem,
+                                modem_check_cmee_func_t callback_fn,
+                                void *callback_priv);
+
+/****************************************************************************
+ * Public Inline Functions
+ ****************************************************************************/
+
+static inline bool __ubmodem_is_model_sara_u(struct ubmodem_s *modem)
+{
+  switch (modem->model)
+    {
+      case UBMODEM_MODEL_SARA_U260:
+      case UBMODEM_MODEL_SARA_U270:
+      case UBMODEM_MODEL_SARA_U280:
+      case UBMODEM_MODEL_SARA_U_UNKNOWN:
+        return true;
+      default:
+        return false;
+    }
+}
+
+static inline bool __ubmodem_is_model_sara_g(struct ubmodem_s *modem)
+{
+  switch (modem->model)
+    {
+      case UBMODEM_MODEL_SARA_G300:
+      case UBMODEM_MODEL_SARA_G310:
+      case UBMODEM_MODEL_SARA_G340:
+      case UBMODEM_MODEL_SARA_G350:
+      case UBMODEM_MODEL_SARA_G_UNKNOWN:
+        return true;
+      default:
+        return false;
+    }
+}
+
+#endif /* __SYSTEM_UBMODEM_UBMODEM_INTERNAL_H_ */

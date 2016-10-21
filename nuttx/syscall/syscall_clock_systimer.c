@@ -74,7 +74,7 @@
  *
  ****************************************************************************/
 
-uint32_t syscall_clock_systimer(void)
+systime_t syscall_clock_systimer(void)
 {
   return clock_systimer();
 }

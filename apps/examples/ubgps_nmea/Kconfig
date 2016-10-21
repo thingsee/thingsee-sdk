@@ -1,0 +1,11 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config EXAMPLES_UBGPS_NMEA
+	bool "u-blox GPS NMEA console output util"
+	default n
+	depends on NET
+	---help---
+		Enable ubgps NMEA to console util

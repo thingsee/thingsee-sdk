@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_substate_gprs.c
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,6 +55,7 @@
 
 #include "ubmodem_internal.h"
 #include "ubmodem_usrsock.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -62,6 +63,8 @@
 
 #define CGATT_TRY_DELAY_MSEC 1000
 #define CGATT_TRY_COUNT 5
+
+#define GPRS_DISCONNECT_CGATT_ABORT_RETRIES 20
 
 /****************************************************************************
  * Type Declarations
@@ -79,6 +82,14 @@ static const struct at_cmd_def_s cmd_ATpCGATT =
   .timeout_dsec = MODEM_CMD_NETWORK_TIMEOUT,
 };
 
+static const struct at_cmd_def_s cmd_ATpCGATT_disable =
+{
+  .name         = "+CGATT",
+  .resp_format  = NULL,
+  .resp_num     = 0,
+  .timeout_dsec = 10 * 10, /* 10 seconds timeout */
+};
+
 static const struct at_cmd_def_s cmd_ATpUPSND_query_int8 =
 {
   .name         = "+UPSND",
@@ -89,6 +100,7 @@ static const struct at_cmd_def_s cmd_ATpUPSND_query_int8 =
       RESP_FMT_INT8,
     },
   .resp_num     = 3,
+  .timeout_dsec = 10 * 10, /* 10 seconds timeout */
 };
 
 static const struct at_cmd_def_s cmd_ATpUPSND_query_string =
@@ -101,6 +113,7 @@ static const struct at_cmd_def_s cmd_ATpUPSND_query_string =
       RESP_FMT_QUOTED_STRING,
     },
   .resp_num     = 3,
+  .timeout_dsec = 10 * 10, /* 10 seconds timeout */
 };
 
 static const struct at_cmd_def_s cmd_ATpUPSD =
@@ -130,21 +143,32 @@ static const struct at_cmd_def_s cmd_ATpUPSDA_deactivate =
   .name         = "+UPSDA",
   .resp_format  = NULL,
   .resp_num     = 0,
-  .timeout_dsec = 40 * 10,
+  .timeout_dsec = MODEM_CMD_NETWORK_TIMEOUT,
 };
 
 static const struct at_cmd_def_s cmd_ATpUUPSDD_urc =
 {
- .name         = "+UUPSDD",
- .resp_format  = (const uint8_t[]){ RESP_FMT_INT8 },
- .resp_num     = 1,
+  .name         = "+UUPSDD",
+  .resp_format  = (const uint8_t[]){ RESP_FMT_INT8 },
+  .resp_num     = 1,
 };
 
-static int8_t apn_conf_type[4] = { 1, 2, 3, 7 };
+static const struct at_cmd_def_s cmd_abort =
+{
+  .name         = "ABORTED",
+  .resp_format  = NULL,
+  .resp_num     = 0,
+  .timeout_dsec = 10, /* 1 second */
+};
 
-static const char *apn_conf_type_name[4] =
+static int8_t apn_conf_type[5] = { 1, 6, 2, 3, 7 };
+
+static int8_t apn_conf_format[5] = { 's', 'i', 's', 's', 's' };
+
+static const char *apn_conf_type_name[5] =
 {
   "modem.apn_name",
+  "modem.apn_authentication",
   "modem.apn_user",
   "modem.apn_password",
   "modem.apn_ipaddr"
@@ -165,6 +189,9 @@ static void set_ATpCGATT_handler(struct ubmodem_s *modem,
                                  const struct at_resp_info_s *info,
                                  const uint8_t *resp_stream,
                                  size_t stream_len, void *priv);
+
+static int retry_check_cgatt(struct ubmodem_s *modem, const int timer_id,
+                             void * const arg);
 
 /****************************************************************************
  * Private Functions
@@ -433,8 +460,24 @@ static void send_next_apn_configuration(struct ubmodem_s *modem)
       if (buf[0] == '\0')
         continue;
 
-      snprintf(sub->apn_conf.value, sizeof(sub->apn_conf.value), "=0,%d,\"%s\"",
-               apn_conf_type[sub->apn_conf.pos], buf);
+      if (apn_conf_format[sub->apn_conf.pos] == 's')
+        {
+          /* Text string in buffer. */
+
+          snprintf(sub->apn_conf.value, sizeof(sub->apn_conf.value), "=0,%d,\"%s\"",
+                   apn_conf_type[sub->apn_conf.pos], buf);
+        }
+      else if (apn_conf_format[sub->apn_conf.pos] == 'i')
+        {
+          /* Integer string in buffer. */
+
+          snprintf(sub->apn_conf.value, sizeof(sub->apn_conf.value), "=0,%d,%s",
+                   apn_conf_type[sub->apn_conf.pos], buf);
+        }
+      else
+        {
+          MODEM_DEBUGASSERT(modem, false);
+        }
 
       err = __ubmodem_send_cmd(modem, &cmd_ATpUPSD, ATpUPSD_handler, sub, "%s",
                            sub->apn_conf.value);
@@ -615,6 +658,7 @@ static int modem_set_cgatt_retry_timer_handler(struct ubmodem_s *modem,
   int err;
   struct modem_sub_gprs_s *sub = &modem->sub.gprs;
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
   err = __ubmodem_send_cmd(modem, &cmd_ATpCGATT, set_ATpCGATT_handler,
                        sub, "%s", "=1");
   MODEM_DEBUGASSERT(modem, err == OK);
@@ -643,6 +687,7 @@ static void set_ATpCGATT_handler(struct ubmodem_s *modem,
 
           /* Retry few times before giving up. */
 
+          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
           err = __ubmodem_set_timer(modem, CGATT_TRY_DELAY_MSEC,
                                   &modem_set_cgatt_retry_timer_handler,
                                   sub);
@@ -705,8 +750,12 @@ static void check_ATpCGATT_handler(struct ubmodem_s *modem,
 
   if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &val))
     {
-      /* Should not happen. */
-      MODEM_DEBUGASSERT(modem, false);
+      /* Happens when received 'OK' for previous command. Retry after short
+       * wait. */
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+      err = __ubmodem_set_timer(modem, 500, retry_check_cgatt, sub);
+      MODEM_DEBUGASSERT(modem, err != ERROR);
       return;
     }
 
@@ -727,15 +776,60 @@ static void check_ATpCGATT_handler(struct ubmodem_s *modem,
   MODEM_DEBUGASSERT(modem, err == OK);
 }
 
-static void disable_ATpUPSDA_handler(struct ubmodem_s *modem,
+static int retry_check_cgatt(struct ubmodem_s *modem, const int timer_id,
+                             void * const arg)
+{
+  int err;
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+
+  /* Check +CGATT. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCGATT, check_ATpCGATT_handler, arg,
+                           "%s", "?");
+  MODEM_DEBUGASSERT(modem, err == OK);
+  return OK;
+}
+
+static void disable_ATpCGATT_handler(struct ubmodem_s *modem,
                                      const struct at_cmd_def_s *cmd,
                                      const struct at_resp_info_s *info,
                                      const uint8_t *resp_stream,
                                      size_t stream_len, void *priv)
 {
+  struct modem_sub_gprs_s *sub = &modem->sub.gprs;
+  int err;
+
   /*
-   * Response handler for 'AT+UPSDA=0,4'
+   * Response handler for 'AT+CGATT=0'
    */
+
+  if (info->status == RESP_STATUS_TIMEOUT)
+    {
+      if (cmd != &cmd_abort ||
+          sub->retry++ < GPRS_DISCONNECT_CGATT_ABORT_RETRIES)
+        {
+          /* Attempt to abort command. Modem responds with "OK" (Sara-G) or
+           * "ABORTED" (Sara-U). */
+
+          err = __ubmodem_send_raw(modem, &cmd_abort, disable_ATpCGATT_handler,
+                                   priv, "\r\n", 2);
+          MODEM_DEBUGASSERT(modem, err == OK);
+
+          return;
+        }
+      else
+        {
+          /* Drop from network level to stuck hardware, need clean-up. */
+
+          __ubmodem_network_cleanup(modem);
+
+          /* Could not abort, assume stuck HW. */
+
+          __ubmodem_reached_level(modem, UBMODEM_LEVEL_STUCK_HARDWARE);
+          return;
+        }
+    }
 
   if (resp_status_is_error_or_timeout(info->status))
     {
@@ -752,6 +846,25 @@ static void disable_ATpUPSDA_handler(struct ubmodem_s *modem,
    */
 
   __ubmodem_reached_level(modem, UBMODEM_LEVEL_NETWORK);
+}
+
+static int reinitialize_gprs_task(struct ubmodem_s *modem, void *privptr)
+{
+  if (modem->level < UBMODEM_LEVEL_GPRS)
+    {
+      /* Need to be in GRPS state to be able to reinitialize. */
+
+      return ERROR;
+    }
+
+  /* Go to network level from GRPS level and then retry GPRS. */
+
+  __ubmodem_retry_current_level(modem, UBMODEM_LEVEL_NETWORK);
+
+  /* Return error to tell task starter that task did not start new work on
+   * state machine. */
+
+  return ERROR;
 }
 
 /****************************************************************************
@@ -830,9 +943,13 @@ void __ubmodem_gprs_cleanup(struct ubmodem_s *modem)
   __ubmodem_usrsock_uninitialize(modem);
 #endif
 
-  /* Disable call location callback. */
+  /* Disable cell location callback and generate CellLocate-failed event. */
 
-  __ubmodem_cell_locate_cleanup(modem);
+  __ubmodem_cell_locate_cleanup(modem, false);
+
+  /* Cancel FTP download and generate FTP failed event. */
+
+  __ubmodem_ftp_download_cleanup(modem);
 }
 
 /****************************************************************************
@@ -858,7 +975,7 @@ void __ubmodem_substate_start_close_gprs(struct ubmodem_s *modem)
   /*
    * Close sequence is:
    *
-   * 1. Send "AT+UPSDA=0,4".
+   * 1. Send "AT+CGATT=0".
    * 10. Done.
    */
 
@@ -868,7 +985,25 @@ void __ubmodem_substate_start_close_gprs(struct ubmodem_s *modem)
 
   /* Deactivate internal context. */
 
-  err = __ubmodem_send_cmd(modem, &cmd_ATpUPSDA_deactivate,
-                       disable_ATpUPSDA_handler, sub, "%s", "=0,4");
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCGATT_disable,
+                           disable_ATpCGATT_handler, sub, "%s", "=0");
   MODEM_DEBUGASSERT(modem, err == OK);
+}
+
+/****************************************************************************
+ * Name: __ubmodem_reinitialize_gprs
+ *
+ * Description:
+ *   Reinitialize GPRS connection
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+int __ubmodem_reinitialize_gprs(struct ubmodem_s *modem)
+{
+  /* Add modem task. */
+
+  return __ubmodem_add_task(modem, reinitialize_gprs_task, NULL);
 }

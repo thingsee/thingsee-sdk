@@ -65,4 +65,30 @@
 
 void up_modem_initialize_gpios(void);
 
+/************************************************************************************
+ * Name: up_modem_gpio_suspend
+ *
+ * Description:
+ *   Set modem GPIOs to suspended state
+ *
+ ************************************************************************************/
+
+void up_modem_gpio_suspend(bool suspend);
+
+/************************************************************************************
+ * Name: up_modem_deep_sleep_readiness
+ *
+ * Description:
+ *   Check current modem activity and adjust deep-sleep accordingly.
+ *
+ * Input Parameters:
+ *   deepsleep_msecs:   Pointer to deep-sleep wake-up interval
+ *
+ * Return:
+ *   Return true if deep-sleep allowed.
+ *
+ ************************************************************************************/
+
+bool up_modem_deep_sleep_readiness(uint32_t *deepsleep_msecs);
+
 #endif /*__UP_MODEM_H__*/

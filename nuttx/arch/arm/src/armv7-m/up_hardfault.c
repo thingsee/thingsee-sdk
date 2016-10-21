@@ -39,6 +39,7 @@
 
 #include <nuttx/config.h>
 
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
@@ -187,6 +188,21 @@ int up_hardfault(int irq, FAR void *context)
 
   (void)irqsave();
   lldbg("PANIC!!! Hard fault: %08x\n", getreg32(NVIC_HFAULTS));
+
+#if defined(CONFIG_BOARD_CRASHDUMP) && defined(CONFIG_HAVE_FILENAME)
+#define TRACE_LEN (8 * 8 + 7 + 1)
+  static uint8_t trace[TRACE_LEN];
+
+  snprintf((char *)trace, TRACE_LEN, "%08x %08x %08x %08x %08x %08x %08x %08x",
+           getreg32(NVIC_CFAULTS), getreg32(NVIC_HFAULTS),
+           getreg32(NVIC_DFAULTS), getreg32(NVIC_BFAULT_ADDR),
+           getreg32(NVIC_AFAULTS),
+           regs[REG_R13], regs[REG_R14], regs[REG_R15]
+  );
+
+  up_assert(trace, 0);
+#else
   PANIC();
+#endif
   return OK;
 }

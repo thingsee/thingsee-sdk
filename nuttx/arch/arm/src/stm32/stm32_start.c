@@ -95,7 +95,9 @@ static void go_os_start(void *pv, unsigned int nbytes)
 #ifdef CONFIG_ARMV7M_STACKCHECK
 /* we need to get r10 set before we can allow instrumentation calls */
 
-void __start(void) __attribute__ ((no_instrument_function));
+void __start(void) __attribute__ ((no_instrument_function)) externally_visible_function;
+#else
+void __start(void) externally_visible_function;
 #endif
 
 /****************************************************************************
@@ -208,7 +210,7 @@ static void go_os_start(void *pv, unsigned int nbytes)
 
   __asm__ __volatile__
   (
-    "\tmov  r1, r1, lsr #2\n"   /* R1 = nwords = nbytes >> 2 */
+    "\tmovs r1, r1, lsr #2\n"   /* R1 = nwords = nbytes >> 2 */
     "\tbeq  2f\n"               /* (should not happen) */
 
     "\tbic  r0, r0, #3\n"       /* R0 = Aligned stackptr */
@@ -253,6 +255,7 @@ void __start(void)
 
   /* Configure the UART so that we can get debug output as soon as possible */
 
+  stm32_pwr_resetbkprefcount();
   stm32_clockconfig();
   stm32_fpuconfig();
   stm32_lowsetup();

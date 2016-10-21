@@ -138,6 +138,8 @@
 
 int up_create_stack(FAR struct tcb_s *tcb, size_t stack_size, uint8_t ttype)
 {
+  static bool first_task = true;
+
   /* Is there already a stack allocated of a different size?  Because of
    * alignment issues, stack_size might erroneously appear to be of a
    * different size.  Fortunately, this is not a critical operation.
@@ -227,7 +229,12 @@ int up_create_stack(FAR struct tcb_s *tcb, size_t stack_size, uint8_t ttype)
       up_stack_color(tcb->stack_alloc_ptr, tcb->adj_stack_size);
 #endif
 
-      board_led_on(LED_STACKCREATED);
+      if (first_task)
+        {
+          board_led_on(LED_STACKCREATED);
+          first_task = false;
+        }
+
       return OK;
     }
 

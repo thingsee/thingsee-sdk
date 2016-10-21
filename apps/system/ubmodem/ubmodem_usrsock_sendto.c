@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_usrsock_sendto.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,6 +57,7 @@
 
 #include "ubmodem_internal.h"
 #include "ubmodem_usrsock.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Private Data
@@ -290,6 +291,8 @@ static int data_prompt_delay_handler(struct ubmodem_s *modem,
   size_t tmpbuflen;
   uint8_t *tmpbuf;
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+
   sock->timerid = -1;
 
   /*
@@ -308,11 +311,18 @@ static int data_prompt_delay_handler(struct ubmodem_s *modem,
     {
       dbg("Error reading %d bytes of request: ret=%d, errno=%d\n",
           sock->send.buflen, (int)rlen, errno);
-      MODEM_DEBUGASSERT(modem, false);
+
+      (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, -EPIPE);
+      __ubsocket_work_done(sock);
+      return OK;
     }
-  else
+  else if (rlen != sock->send.buflen)
     {
-      MODEM_DEBUGASSERT(modem, rlen == sock->send.buflen);
+      dbg("Error got partial read %d (expected %d)\n", (int)rlen, sock->send.buflen);
+
+      (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, -EPIPE);
+      __ubsocket_work_done(sock);
+      return OK;
     }
 
   /* Data has been read, inform usrsock link that request is being processed.
@@ -373,6 +383,8 @@ static void data_prompt_handler(struct ubmodem_s *modem,
    * Data prompt is now open. We are now required to wait minimum of 50 msec
    * before sending any data.
    */
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
 
   sock->timerid = __ubmodem_set_timer(modem, MODEM_DATA_PROMPT_DELAY_MSEC,
                                       &data_prompt_delay_handler, sock);

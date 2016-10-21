@@ -49,9 +49,23 @@
 #include "stm32.h"
 #include "stm32_exti_pwr.h"
 
-/* Exported global variable */
 
-bool g_charger_connected = false;
+
+static bool g_charger_connected = false;
+
+/****************************************************************************
+ * Name: board_pwr_get_charger_connected
+ *
+ * Description:
+ *  This can be called from user code whenever she wants to know
+ *  charger connection status.
+ *
+ ****************************************************************************/
+
+bool board_pwr_get_charger_connected(void)
+{
+  return g_charger_connected;
+}
 
 /****************************************************************************
  * Name: board_pwr_charger_connected

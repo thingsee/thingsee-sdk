@@ -1,0 +1,21 @@
+# What is this
+
+Here you will find integration tools to inspect NuttX code with [clang-analyzer](http://clang-analyzer.llvm.org/).
+
+# Pre-requisities
+
+* `clang` (version > 3.3)
+
+# How to use
+
+* Call `configure.sh` to select the product to build
+* Use `scan-build`-proxy script to setup proper parameters for real `scan-build`
+
+```
+../misc/clang-checker/scan-build make 
+```
+
+# Settings
+
+Certain `clang-analyzer` checks may be enabled or disabled by editing `checkers.txt`.
+File syntax is described inline.

@@ -42,6 +42,8 @@
 
 #include <nuttx/config.h>
 
+#include <nuttx/serial/serial.h>
+
 #include "chip.h"
 
 #if defined(CONFIG_STM32_STM32L15XX)
@@ -330,6 +332,16 @@ extern "C" {
 /************************************************************************************
  * Public Functions
  ************************************************************************************/
+
+/****************************************************************************
+ * Name: stm32_serial_get_uart
+ *
+ * Description:
+ *   Get serial driver structure for STM32 USART
+ *
+ ****************************************************************************/
+
+FAR uart_dev_t *stm32_serial_get_uart(int n);
 
 #ifdef CONFIG_STM32_STM32L15XX
 

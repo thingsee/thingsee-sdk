@@ -15,4 +15,11 @@ config NETUTILS_JSON
 		adapted for NuttX by Darcy Gong.
 
 if NETUTILS_JSON
+config NETUTILS_JSON_PARSE_IGNORE_MISSING_NULL_TERMINATOR
+	bool "Ignore missing NULL terminator"
+	default n
+	---help---
+		Allow cJSON parser to ignore missing NULL terminator after
+		parsed object. This is the old behavior for cJSON, not matching JSON
+		spec.
 endif

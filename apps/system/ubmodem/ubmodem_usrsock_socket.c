@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_usrsock_socket.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,6 +57,7 @@
 
 #include "ubmodem_internal.h"
 #include "ubmodem_usrsock.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Private Data
@@ -101,6 +102,27 @@ static void open_socket_handler(struct ubmodem_s *modem,
       /* Not CME error, fetch sockets error. */
 
       __ubmodem_get_socket_error(sock);
+      return;
+    }
+
+  if (info->status == RESP_STATUS_TIMEOUT)
+    {
+      int ret;
+
+      /* Timeout for create socket command can mean only one thing: Modem
+       * is stuck in bad state. */
+
+      (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, -ENETDOWN);
+
+      /* Mark socket for removal. */
+
+      sock->is_freeing_pending = true;
+      __ubsocket_work_done(sock);
+
+      /* Prepare task for bringing modem alive from stuck state. */
+
+      ret = __ubmodem_recover_stuck_hardware(modem);
+      MODEM_DEBUGASSERT(modem, ret != ERROR);
       return;
     }
 
@@ -296,6 +318,10 @@ int __ubmodem_usrsock_handle_socket_request(struct ubmodem_s *modem,
   /* Add structure to list. */
 
   sq_addfirst(&sock->node, &modem->sockets.list);
+
+  /* New socket, inform power-management of low activity increase. */
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
 
   /* Wake-up main state machine. */
 

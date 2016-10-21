@@ -1,7 +1,7 @@
 /****************************************************************************
  * drivers/power/bq24251.c
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -51,7 +51,7 @@
  ****************************************************************************/
 
 #ifdef CONFIG_DEBUG_BQ24251_CHARGER
-#  define bq24251_dbg(x, ...)	dbg(x, ##__VA_ARGS__)
+#  define bq24251_dbg(x, ...)   dbg(x, ##__VA_ARGS__)
 #  define bq24251_lldbg(x, ...) lldbg(x, ##__VA_ARGS__)
 #else
 #  define bq24251_dbg(x, ...)
@@ -62,64 +62,66 @@
 
 /* Register#1 */
 
-#define BQ24251_WD_FAULT		(1 << 7)
-#define BQ24251_WD_EN			(1 << 6)
-#define BQ24251_STAT_SHIFT		4
-#define BQ24251_STAT_MASK		(0x03 << BQ24251_STAT_SHIFT)
-#define BQ24251_READY 		(BQ24251_READY_ST << BQ24251_STAT_SHIFT)
-#define BQ24251_PROGR			(BQ24251_PROGR_ST << BQ24251_STAT_SHIFT)
-#define BQ24251_DONE			(BQ24251_DONE_ST << BQ24251_STAT_SHIFT)
-#define BQ24251_FAULT			(BQ24251_FAULT_ST << BQ24251_STAT_SHIFT)
+#define BQ24251_WD_FAULT                (1 << 7)
+#define BQ24251_WD_EN                   (1 << 6)
+#define BQ24251_STAT_SHIFT              4
+#define BQ24251_STAT_MASK               (0x03 << BQ24251_STAT_SHIFT)
+#define BQ24251_READY                   (BQ24251_READY_ST << BQ24251_STAT_SHIFT)
+#define BQ24251_PROGR                   (BQ24251_PROGR_ST << BQ24251_STAT_SHIFT)
+#define BQ24251_DONE                    (BQ24251_DONE_ST << BQ24251_STAT_SHIFT)
+#define BQ24251_FAULT                   (BQ24251_FAULT_ST << BQ24251_STAT_SHIFT)
 
-#define BQ24251_FAULT_SHIFT		0
-#define BQ24251_FAULT_MASK		(0x0F << BQ24251_FAULT_SHIFT)
+#define BQ24251_FAULT_SHIFT             0
+#define BQ24251_FAULT_MASK              (0x0F << BQ24251_FAULT_SHIFT)
 
 /* Register#2 */
 
-#define BQ24251_RESET			(1 << 7)
-#define BQ24251_ILIM_SHIFT		4
-#define BQ24251_ILIM_MASK		(0x07 << BQ24251_ILIM_SHIFT)
-#define BQ24251_EN_STAT			(1 << 3)
-#define BQ24251_EN_TERM			(1 << 2)
-#define BQ24251_CE			(1 << 1)
-#define BQ24251_HZ_MODE			(1 << 0)
-#define BQ24251_CLEAR_RST_MASK		0x7F
+#define BQ24251_RESET                   (1 << 7)
+#define BQ24251_ILIM_SHIFT              4
+#define BQ24251_ILIM_MASK               (0x07 << BQ24251_ILIM_SHIFT)
+#define BQ24251_EN_STAT                 (1 << 3)
+#define BQ24251_EN_TERM                 (1 << 2)
+#define BQ24251_CE                      (1 << 1)
+#define BQ24251_HZ_MODE                 (1 << 0)
+#define BQ24251_CLEAR_RST_MASK          0x7F
 
 /* Register#3 */
 
-#define BQ24251_USB_DET_SHIFT		0
-#define BQ24251_USB_DET_MASK		(0x03 << BQ24251_USB_DET_SHIFT)
+#define BQ24251_USB_DET_SHIFT           0
+#define BQ24251_USB_DET_MASK            (0x03 << BQ24251_USB_DET_SHIFT)
 
 /* Register#4 */
 
-#define BQ24251_ICHG_4			(1 << 7)
-#define BQ24251_ICHG_3			(1 << 6)
-#define BQ24251_ICHG_2			(1 << 5)
-#define BQ24251_ICHG_1			(1 << 4)
-#define BQ24251_ICHG_0			(1 << 3)
-#define BQ24251_ITERM_2			(1 << 2)
-#define BQ24251_ITERM_1			(1 << 1)
-#define BQ24251_ITERM_0			(1 << 0)
+#define BQ24251_ICHG_4                  (1 << 7)
+#define BQ24251_ICHG_3                  (1 << 6)
+#define BQ24251_ICHG_2                  (1 << 5)
+#define BQ24251_ICHG_1                  (1 << 4)
+#define BQ24251_ICHG_0                  (1 << 3)
+#define BQ24251_ITERM_SHIFT             0
+#define BQ24251_ITERM_MASK              (0x07 << BQ24251_ITERM_SHIFT)
+#define BQ24251_ITERM_2                 (1 << 2)
+#define BQ24251_ITERM_1                 (1 << 1)
+#define BQ24251_ITERM_0                 (1 << 0)
 
 /* Register#5 */
 
-#define BQ24251_LOOP_SHIFT		6
-#define BQ24251_LOOP_MASK		(1 << BQ24251_LOOP_SHIFT)
-#define BQ24251_LOW_CHG			(1 << 5)
-#define BQ24251_DPDM_EN			(1 << 4)
-#define BQ24251_CE_STATUS		(1 << 3)
+#define BQ24251_LOOP_SHIFT              6
+#define BQ24251_LOOP_MASK               (1 << BQ24251_LOOP_SHIFT)
+#define BQ24251_LOW_CHG                 (1 << 5)
+#define BQ24251_DPDM_EN                 (1 << 4)
+#define BQ24251_CE_STATUS               (1 << 3)
 
 /* Register#6 */
 
-#define BQ24251_SYSOFF			(1 << 4)
+#define BQ24251_SYSOFF                  (1 << 4)
 
-#define REG1					0x0
-#define REG2					0x01
-#define REG3					0x02
-#define REG4					0x03
-#define REG5					0x04
-#define REG6					0x05
-#define REG7					0x06
+#define REG1 0x0
+#define REG2 0x01
+#define REG3 0x02
+#define REG4 0x03
+#define REG5 0x04
+#define REG6 0x05
+#define REG7 0x06
 
 /************************************************************************************
 * Private Function Prototypes
@@ -145,10 +147,9 @@ struct bq24251_dev_t
   {
     struct i2c_dev_s *i2c;
     uint8_t addr;
+    volatile unsigned int stat_pending;
     bq24251_config_t *config;
     sem_t devsem;
-    sem_t st_sem;
-    bool stat_pending;
 #ifndef CONFIG_DISABLE_POLL
     struct pollfd *fds[CONFIG_BQ24251_NPOLLWAITERS];
 #endif
@@ -258,23 +259,23 @@ static int bq24251_read_reg8(struct bq24251_dev_t *dev, uint8_t reg_addr,
 #ifdef CONFIG_DEBUG_BQ24251_CHARGER
 static int (bq24251_dump_regs) (FAR struct bq24251_dev_t * priv)
 {
-  int ret = OK;
+  int ret;
   uint8_t value = 0;
 
   ret = bq24251_read_reg8(priv, REG1, &value);
-  bq24251_lldbg("REG#1: 0x%08X\n", value);
+  bq24251_dbg("REG#1: 0x%08X\n", value);
   ret |= bq24251_read_reg8(priv, REG2, &value);
-  bq24251_lldbg("REG#2: 0x%08X\n", value);
+  bq24251_dbg("REG#2: 0x%08X\n", value);
   ret |= bq24251_read_reg8(priv, REG3, &value);
-  bq24251_lldbg("REG#3: 0x%08X\n", value);
+  bq24251_dbg("REG#3: 0x%08X\n", value);
   ret |= bq24251_read_reg8(priv, REG4, &value);
-  bq24251_lldbg("REG#4: 0x%08X\n", value);
+  bq24251_dbg("REG#4: 0x%08X\n", value);
   ret |= bq24251_read_reg8(priv, REG5, &value);
-  bq24251_lldbg("REG#5: 0x%08X\n", value);
+  bq24251_dbg("REG#5: 0x%08X\n", value);
   ret |= bq24251_read_reg8(priv, REG6, &value);
-  bq24251_lldbg("REG#6: 0x%08X\n", value);
+  bq24251_dbg("REG#6: 0x%08X\n", value);
   ret |= bq24251_read_reg8(priv, REG7, &value);
-  bq24251_lldbg("REG#7: 0x%08X\n", value);
+  bq24251_dbg("REG#7: 0x%08X\n", value);
 
   return ret;
 }
@@ -282,28 +283,31 @@ static int (bq24251_dump_regs) (FAR struct bq24251_dev_t * priv)
 
 static int bq24251_reset_chrg(FAR struct bq24251_dev_t *priv)
 {
-  int ret = OK;
+  int ret;
 
   ret = bq24251_write_reg8(priv, REG2, BQ24251_RESET);
   if (ret)
     {
-      bq24251_lldbg("REG#2 cannot write i2c reset\n");
+      bq24251_dbg("Cannot write REG#2\n");
       return ret;
     }
 
-  bq24251_lldbg("Reset done\n");
+  bq24251_dbg("Reset done\n");
 
   return ret;
 }
 
 static int bq24251_enable_chrg(FAR struct bq24251_dev_t *priv, bool enable)
 {
-  int ret = OK;
+  int ret;
   uint8_t value = 0;
 
   ret = bq24251_read_reg8(priv, REG2, &value);
   if (ret < 0)
-    goto fail;
+    {
+      bq24251_dbg("Cannot read REG#2\n");
+      goto fail;
+    }
 
   value &= BQ24251_CLEAR_RST_MASK;
   if (enable)
@@ -324,31 +328,51 @@ fail:
 static int bq24251_set_chrg_current(FAR struct bq24251_dev_t *priv,
                                     bq24251_charger_current_t value)
 {
-  int ret = OK;
+  int ret;
   uint8_t tmp = 0;
 
   ret = bq24251_read_reg8(priv, REG4, &tmp);
   if (ret)
     {
-      bq24251_lldbg("REG#4 cannot read i2c ilim\n");
+      bq24251_dbg("Cannot read REG#4\n");
       return ret;
     }
 
   tmp &= ~BQ24251_CHRG_CURRENT_EXTERNAL;
-  tmp |= (0xFF & value);        /* Remove garbage if presented */
-  bq24251_lldbg("REG#4 value: 0x%02X\n", tmp);
+  tmp |= (0xFF & value);
+  bq24251_dbg("REG#4: 0x%02X\n", tmp);
 
   ret = bq24251_write_reg8(priv, REG4, tmp);
-
   if (ret)
     {
-      bq24251_lldbg("REG#4 cannot write i2c ilim\n");
+      bq24251_dbg("Cannot write REG#4\n");
     }
-#ifdef CONFIG_DEBUG_BQ24251_CHARGER
-  uint8_t dbg_val;
-  bq24251_read_reg8(priv, REG4, &dbg_val);
-  bq24251_lldbg("REG#4: 0x%08X\n", dbg_val);
-#endif
+
+  return ret;
+}
+
+static int bq24251_set_chrg_term_current(FAR struct bq24251_dev_t *priv,
+                                         bq24251_current_term_limit_t value)
+{
+  int ret;
+  uint8_t tmp = 0;
+
+  ret = bq24251_read_reg8(priv, REG4, &tmp);
+  if (ret)
+    {
+      bq24251_dbg("Cannot read REG#4\n");
+      return ret;
+    }
+
+  tmp &= ~BQ24251_ITERM_MASK;
+  tmp |= (((uint8_t) value) << BQ24251_ITERM_SHIFT);
+  bq24251_dbg("REG#4: 0x%02X\n", tmp);
+
+  ret = bq24251_write_reg8(priv, REG4, tmp);
+  if (ret)
+    {
+      bq24251_dbg("Cannot write REG#4\n");
+    }
 
   return ret;
 }
@@ -356,25 +380,25 @@ static int bq24251_set_chrg_current(FAR struct bq24251_dev_t *priv,
 static int bq24251_set_ilim(FAR struct bq24251_dev_t *priv,
                             bq24251_current_t value)
 {
-  int ret = OK;
+  int ret;
   uint8_t tmp = 0;
 
   ret = bq24251_read_reg8(priv, REG2, &tmp);
   if (ret)
     {
-      bq24251_lldbg("REG#2 cannot read i2c ilim\n");
+      bq24251_dbg("Cannot read REG#2\n");
       return ret;
     }
 
   tmp &= 0x0F;
   tmp |= (((uint8_t) value) << BQ24251_ILIM_SHIFT);
 
-  bq24251_lldbg("REG#2 ILIM 0x%08X\n", tmp);
+  bq24251_dbg("REG#2 ILIM 0x%08X\n", tmp);
 
   ret = bq24251_write_reg8(priv, REG2, tmp);
   if (ret)
     {
-      bq24251_lldbg("REG#2 cannot write i2c ilim\n");
+      bq24251_dbg("Cannot write REG#2\n");
       return ret;
     }
 
@@ -386,44 +410,45 @@ static int bq24251_set_ilim(FAR struct bq24251_dev_t *priv,
 static int bq24251_chk_chrg_sts(FAR struct bq24251_dev_t *priv,
                                 bq24251_chrg_status_t * status)
 {
-  int ret = OK;
+  int ret;
   uint8_t value;
+  irqstate_t flags;
+  unsigned int stat_pending;
 
-  ret = sem_wait(&priv->st_sem);
-  if (ret < 0)
-    return ret;
-
-  ret = bq24251_read_reg8(priv, REG1, &value);  /* Read register for status */
+  ret = bq24251_read_reg8(priv, REG1, &value);
   if (ret < 0)
     {
-      bq24251_lldbg("Cannot read REG#1\n");
-      goto fail;
+      bq24251_dbg("Cannot read REG#1\n");
+      return ret;
     }
 
   if ((value & BQ24251_FAULT) == BQ24251_FAULT)
     {
       status->fault = value & 0x0F;
-      bq24251_lldbg("Fault occurred: 0x%02X\n", value & 0x0F);
+      bq24251_dbg("Fault occurred: 0x%02X\n", value & 0x0F);
     }
   else
     {
       status->fault = BQ24251_NORMAL & 0x0F;
     }
 
-  /* Just to be sure there is no garbage masking is used */
   status->state = (bq24251_state_t) ((value >> BQ24251_STAT_SHIFT) & 0x3);
-  priv->stat_pending = false;
 
-  bq24251_lldbg("state: %d is_fault: %d fault: %d wd_en: %d wd_fault: %d\n",
+  flags = irqsave();
+  priv->stat_pending -= !!priv->stat_pending;
+  stat_pending = priv->stat_pending;
+  irqrestore(flags);
+
+  (void)stat_pending;
+  bq24251_dbg("state: %d is_fault: %d fault: %d wd_en: %d wd_fault: %d pending: %d\n",
       ((value >> BQ24251_STAT_SHIFT) & 0x3),
       (value & BQ24251_FAULT) == BQ24251_FAULT,
       value & 0x0F,
       (value & BQ24251_WD_EN) == BQ24251_WD_EN,
-      (value & BQ24251_WD_FAULT) == BQ24251_WD_FAULT);
+      (value & BQ24251_WD_FAULT) == BQ24251_WD_FAULT,
+      stat_pending);
 
-fail:
-  sem_post(&priv->st_sem);
-  return ret;
+  return OK;
 }
 
 static int bq24251_start_usbdet(FAR struct bq24251_dev_t *priv)
@@ -434,11 +459,11 @@ static int bq24251_start_usbdet(FAR struct bq24251_dev_t *priv)
   ret = bq24251_read_reg8(priv, REG5, &tmp_value);
   if (ret < 0)
     {
-      bq24251_lldbg("Cannot read REG#5\n");
+      bq24251_dbg("Cannot read REG#5\n");
       return ret;
     }
 
-  bq24251_lldbg("Read value REG5: 0x%08X\n", tmp_value);
+  bq24251_dbg("Read value REG5: 0x%08X\n", tmp_value);
 
   /* Force D+/D- detection. */
 
@@ -447,7 +472,7 @@ static int bq24251_start_usbdet(FAR struct bq24251_dev_t *priv)
   ret = bq24251_write_reg8(priv, REG5, tmp_value);
   if (ret < 0)
     {
-      bq24251_lldbg("Cannot write REG#5\n");
+      bq24251_dbg("Cannot write REG#5\n");
       return ret;
     }
 
@@ -463,13 +488,13 @@ static int bq24251_check_usbdet(FAR struct bq24251_dev_t *priv,
   ret = bq24251_read_reg8(priv, REG5, &tmp_value);
   if (ret < 0)
     {
-      bq24251_lldbg("Cannot write REG#5\n");
+      bq24251_dbg("Cannot read REG#5\n");
       goto fail;
     }
 
   if (tmp_value & BQ24251_DPDM_EN)
     {
-      bq24251_lldbg("USB detection still on-going, ret => EAGAIN\n");
+      bq24251_dbg("USB detection still on-going, ret => EAGAIN\n");
       ret = -EAGAIN;
       goto fail;
     }
@@ -477,10 +502,10 @@ static int bq24251_check_usbdet(FAR struct bq24251_dev_t *priv,
   ret = bq24251_read_reg8(priv, REG3, &tmp_value);
   if (ret < 0)
     {
-      bq24251_lldbg("Cannot read REG#3\n");
+      bq24251_dbg("Cannot read REG#3\n");
       goto fail;
     }
-  bq24251_lldbg("Read value REG3: 0x%08X\n", tmp_value);
+  bq24251_dbg("Read value REG3: 0x%08X\n", tmp_value);
 
   *value = (bq24251_chrg_type_t) (tmp_value & 0x3);
 
@@ -495,7 +520,10 @@ static int bq24251_enable_stat(FAR struct bq24251_dev_t *priv, bool enable)
 
   ret = bq24251_read_reg8(priv, REG2, &value);
   if (ret < 0)
-    goto fail;
+    {
+      bq24251_dbg("Cannot read REG#2\n");
+      goto fail;
+    }
 
   value &= BQ24251_CLEAR_RST_MASK;
   if (enable)
@@ -520,7 +548,10 @@ static int bq24251_enable_term(FAR struct bq24251_dev_t *priv, bool enable)
 
   ret = bq24251_read_reg8(priv, REG2, &value);
   if (ret < 0)
-    goto fail;
+    {
+      bq24251_dbg("Cannot read REG#2\n");
+      goto fail;
+    }
 
   value &= BQ24251_CLEAR_RST_MASK;
   if (enable)
@@ -545,7 +576,10 @@ static int bq24251_set_low_chg(FAR struct bq24251_dev_t *priv, bool enable)
 
   ret = bq24251_read_reg8(priv, REG5, &value);
   if (ret < 0)
-    goto fail;
+    {
+      bq24251_dbg("Cannot read REG#5\n");
+      goto fail;
+    }
 
   if (enable)
     {
@@ -570,7 +604,7 @@ static int bq24251_disable_timers(FAR struct bq24251_dev_t *priv)
   ret = bq24251_read_reg8(priv, REG6, &value);
   if (ret < 0)
     {
-      bq24251_lldbg("Warning: Cannot disable timers: %d\n", ret);
+      bq24251_dbg("Warning: Cannot disable timers: %d\n", ret);
       goto fail;
     }
 
@@ -578,7 +612,7 @@ static int bq24251_disable_timers(FAR struct bq24251_dev_t *priv)
   ret = bq24251_write_reg8(priv, REG6, value);
   if (ret < 0)
     {
-      bq24251_lldbg("Warning: Cannot disable timers: %d\n", ret);
+      bq24251_dbg("Warning: Cannot disable timers: %d\n", ret);
       goto fail;
     }
 
@@ -586,7 +620,7 @@ static int bq24251_disable_timers(FAR struct bq24251_dev_t *priv)
   if (ret < 0)
     goto fail;
 
-  bq24251_lldbg("After timer disable: REG#6: 0x%02X\n", value);
+  bq24251_dbg("After timer disable: REG#6: 0x%02X\n", value);
 
 fail:
   return ret;
@@ -594,12 +628,15 @@ fail:
 
 static int bq24251_enable_wd(FAR struct bq24251_dev_t *priv, bool enable)
 {
-  int ret = OK;
+  int ret;
   uint8_t value = 0;
 
   ret = bq24251_read_reg8(priv, REG1, &value);
   if (ret < 0)
-    goto fail;
+    {
+      bq24251_dbg("Cannot read REG#1\n");
+      goto fail;
+    }
 
   if (enable)
     {
@@ -618,12 +655,15 @@ fail:
 
 static int bq24251_set_hzmode(FAR struct bq24251_dev_t *priv, bool enable)
 {
-  int ret = OK;
+  int ret;
   uint8_t value = 0;
 
   ret = bq24251_read_reg8(priv, REG2, &value);
   if (ret < 0)
-    goto fail;
+    {
+      bq24251_dbg("Cannot read REG#2\n");
+      goto fail;
+    }
 
   value &= BQ24251_CLEAR_RST_MASK;
   if (enable)
@@ -654,8 +694,6 @@ static int bq24251_set_bat_det(FAR struct bq24251_dev_t *priv)
 
 static int bq24251_init_chrg(FAR struct bq24251_dev_t *priv)
 {
-  int ret = OK;
-
   bq24251_reset_chrg(priv);
   bq24251_enable_chrg(priv, true);
   bq24251_enable_stat(priv, true);
@@ -666,27 +704,29 @@ static int bq24251_init_chrg(FAR struct bq24251_dev_t *priv)
 
   bq24251_dump_regs(priv);
 
-  bq24251_lldbg("Charger initialization done\n");
+  bq24251_dbg("Charger initialization done\n");
 
-  return ret;
+  return OK;
 }
 
 static int bq24251_open(FAR struct file *filep)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR struct bq24251_dev_t *priv = inode->i_private;
-  int ret = OK;
+  irqstate_t flags;
 
-  priv->stat_pending = true;
+  flags = irqsave();
+  priv->stat_pending = 1;
+  irqrestore(flags);
 
   bq24251_dbg("Charger is powered on\n");
 
-  return ret;
+  return OK;
 }
 
 static int bq24251_sysoff(FAR struct bq24251_dev_t *priv)
 {
-  int ret = OK;
+  int ret;
   uint8_t value = 0;
 
   ret = bq24251_read_reg8(priv, REG6, &value);
@@ -695,26 +735,6 @@ static int bq24251_sysoff(FAR struct bq24251_dev_t *priv)
   ret |= bq24251_write_reg8(priv, REG6, value);
 
   return ret;
-}
-
-static void bq24251_notify(FAR struct bq24251_dev_t *priv, pollevent_t revents)
-{
-#ifndef CONFIG_DISABLE_POLL
-  int i;
-
-  DEBUGASSERT(priv != NULL);
-
-  for (i = 0; i < CONFIG_BQ24251_NPOLLWAITERS; i++)
-    {
-      struct pollfd *fds = priv->fds[i];
-      if (fds)
-        {
-          fds->revents |= revents;
-          bq24251_lldbg("Report events: %02x\n", fds->revents);
-          sem_post(fds->sem);
-        }
-    }
-#endif
 }
 
 static int bq24251_close(FAR struct file *filep)
@@ -741,14 +761,15 @@ static int bq24251_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR struct bq24251_dev_t *priv = inode->i_private;
-  int32_t ret = OK;
-  bq24251_ioc_t ioc_cmd = (bq24251_ioc_t) cmd;
+  int ret;
 
-  switch (ioc_cmd)
+  while (sem_wait(&priv->devsem) != 0)
     {
-    case BQ24251_IOC_RESET:
-      ret = bq24251_reset_chrg(priv);
-      break;
+      assert(errno == EINTR);
+    }
+
+  switch (cmd)
+    {
     case BQ24251_IOC_INIT:
       ret = bq24251_init_chrg(priv);
       break;
@@ -765,8 +786,11 @@ static int bq24251_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       ret = bq24251_set_ilim(priv, ((bq24251_data_t *) arg)->ilim);
       break;
     case BQ24251_IOC_SET_CHRG_CURRENT:
-      ret =
-        bq24251_set_chrg_current(priv, ((bq24251_data_t *) arg)->chrg_current);
+      ret = bq24251_set_chrg_current(priv, ((bq24251_data_t *) arg)->chrg_current);
+      if (ret == OK)
+        {
+          ret = bq24251_set_chrg_term_current(priv, ((bq24251_data_t *) arg)->term_current);
+        }
       break;
     case BQ24251_IOC_SET_HZ:
       ret = bq24251_set_hzmode(priv, ((bq24251_data_t *) arg)->enable_hz);
@@ -784,16 +808,36 @@ static int bq24251_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       ret = bq24251_set_bat_det(priv);
       break;
     case BQ24251_IOC_SET_CHARGE_ENABLE:
-      bq24251_enable_chrg(priv, ((bq24251_data_t *) arg)->enable_ce);
+      ret = bq24251_enable_chrg(priv, ((bq24251_data_t *) arg)->enable_ce);
       break;
     default:
+      ret = -EINVAL;
       break;
     }
 
+  sem_post(&priv->devsem);
   return ret;
 }
 
 #ifndef CONFIG_DISABLE_POLL
+static void bq24251_notify(FAR struct bq24251_dev_t *priv)
+{
+  int i;
+
+  DEBUGASSERT(priv != NULL);
+
+  for (i = 0; i < CONFIG_BQ24251_NPOLLWAITERS; i++)
+    {
+      struct pollfd *fds = priv->fds[i];
+      if (fds)
+        {
+          fds->revents |= POLLIN;
+          bq24251_lldbg("Report events: %02x\n", fds->revents);
+          sem_post(fds->sem);
+        }
+    }
+}
+
 static int bq24251_poll(FAR struct file *filep, FAR struct pollfd *fds,
                         bool setup)
 {
@@ -801,6 +845,7 @@ static int bq24251_poll(FAR struct file *filep, FAR struct pollfd *fds,
   FAR struct bq24251_dev_t *priv;
   int ret = OK;
   int i;
+  irqstate_t flags;
 
   DEBUGASSERT(filep && fds);
   inode = filep->f_inode;
@@ -808,11 +853,9 @@ static int bq24251_poll(FAR struct file *filep, FAR struct pollfd *fds,
   DEBUGASSERT(inode && inode->i_private);
   priv = (FAR struct bq24251_dev_t *)inode->i_private;
 
-  ret = sem_wait(&priv->devsem);
-  if (ret < 0)
+  while (sem_wait(&priv->devsem) != 0)
     {
-      ret = -EINTR;
-      return ret;
+      assert(errno == EINTR);
     }
 
   if (setup)
@@ -842,11 +885,14 @@ static int bq24251_poll(FAR struct file *filep, FAR struct pollfd *fds,
         {
           fds->priv = NULL;
           ret = -EBUSY;
+          goto out;
         }
-      else if (priv->stat_pending)
+      flags = irqsave();
+      if (priv->stat_pending > 0)
         {
-          bq24251_notify(priv, POLLIN);
+          bq24251_notify(priv);
         }
+      irqrestore(flags);
     }
   else if (fds->priv)
     {
@@ -867,9 +913,15 @@ out:
 
 static int bq24251_int_handler_stat(int irq, FAR void *context)
 {
-  g_charger_data->stat_pending = true;
+  irqstate_t flags;
 
-  bq24251_notify(g_charger_data, POLLIN);
+  flags = irqsave();
+  g_charger_data->stat_pending++;
+#ifndef CONFIG_DISABLE_POLL
+  bq24251_notify(g_charger_data);
+#endif
+  irqrestore(flags);
+
   bq24251_lldbg("Charger interrupt stat\n");
 
   return OK;
@@ -894,7 +946,6 @@ int bq24251_register(FAR const char *devpath, FAR struct i2c_dev_s *i2c,
   priv->i2c = i2c;
   priv->config = config;
   sem_init(&priv->devsem, 0, 1);
-  sem_init(&priv->st_sem, 0, 1);
 
   ret = register_driver(devpath, &g_chargerops, 0666, priv);
 

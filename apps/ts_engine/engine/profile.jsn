@@ -1,0 +1,80 @@
+{
+  "pId": "1",
+  "apiVersion": "00.18",
+  "initPuId": 1,
+  "purposes": [
+    {
+      "puId": 1,
+      "name": "Measuring",
+      "initStId": 0,
+      "states": [
+        {
+          "stId": 0,
+          "name": "Temperature",
+          "events": [
+            {
+              "evId": 0,
+              "name": "Task 0",
+              "actions": {
+                "engine": {
+                  "gotoStId": 1
+                },
+                "cloud": {
+                  "sendEvent": true
+                }
+              },
+              "causes": [
+                {
+                  "sId": "0x00060100",
+                  "threshold": {
+                    "count": 1
+                  },
+                  "measurement": {
+                    "log": false,
+                    "interval": 10000
+                  },
+                  "thresholds": {
+                    "isAny": true
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "stId": 1,
+          "name": "Battery capacity",
+          "events": [
+            {
+              "evId": 0,
+              "name": "Task 0",
+              "actions": {
+                "engine": {
+                  "gotoStId": 0
+                },
+                "cloud": {
+                  "sendEvent": true
+                }
+              },
+              "causes": [
+                {
+                  "sId": "0x00030200",
+                  "threshold": {
+                    "count": 1
+                  },
+                  "measurement": {
+                    "log": false,
+                    "interval": 10000
+                  },
+                  "thresholds": {
+                    "isAny": true
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

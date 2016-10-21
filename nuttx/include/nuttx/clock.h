@@ -140,17 +140,17 @@
 #define MSEC_PER_TICK         (USEC_PER_TICK / USEC_PER_MSEC)            /* Truncates! */
 #define NSEC_PER_TICK         (USEC_PER_TICK * NSEC_PER_USEC)            /* Exact */
 
-#define NSEC2TICK(nsec)       (((nsec)+(NSEC_PER_TICK/2))/NSEC_PER_TICK) /* Rounds */
-#define USEC2TICK(usec)       (((usec)+(USEC_PER_TICK/2))/USEC_PER_TICK) /* Rounds */
+#define NSEC2TICK(nsec)       (((systime_t)(nsec)+(NSEC_PER_TICK/2))/NSEC_PER_TICK) /* Rounds */
+#define USEC2TICK(usec)       (((systime_t)(usec)+(USEC_PER_TICK/2))/USEC_PER_TICK) /* Rounds */
 
 #if (MSEC_PER_TICK * USEC_PER_MSEC) == USEC_PER_TICK
-#  define MSEC2TICK(msec)     (((msec)+(MSEC_PER_TICK/2))/MSEC_PER_TICK) /* Rounds */
+#  define MSEC2TICK(msec)     (((systime_t)(msec)+(MSEC_PER_TICK/2))/MSEC_PER_TICK) /* Rounds */
 #else
-#  define MSEC2TICK(msec)     USEC2TICK(msec * 1000)                     /* Rounds */
+#  define MSEC2TICK(msec)     USEC2TICK((systime_t)(msec) * 1000)                   /* Rounds */
 #endif
 
-#define DSEC2TICK(dsec)       MSEC2TICK((dsec) * MSEC_PER_DSEC)          /* Rounds */
-#define SEC2TICK(sec)         MSEC2TICK((sec)  * MSEC_PER_SEC)           /* Rounds */
+#define DSEC2TICK(dsec)       MSEC2TICK((systime_t)(dsec) * MSEC_PER_DSEC)          /* Rounds */
+#define SEC2TICK(sec)         MSEC2TICK((systime_t)(sec)  * MSEC_PER_SEC)           /* Rounds */
 
 #define TICK2NSEC(tick)       ((tick) * NSEC_PER_TICK)                   /* Exact */
 #define TICK2USEC(tick)       ((tick) * USEC_PER_TICK)                   /* Exact */
@@ -177,31 +177,25 @@ struct cpuload_s
 };
 #endif
 
+/* This type is the natural with of the system timer */
+
+#ifdef CONFIG_SYSTEM_TIME64
+typedef uint64_t systime_t;
+#else
+typedef uint32_t systime_t;
+#endif
+
+/* This type used to hold relative ticks that may have negative value */
+
+#ifdef CONFIG_SYSTEM_TIME64
+typedef int64_t ssystime_t;
+#else
+typedef int32_t ssystime_t;
+#endif
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
-
-/* Access to raw system clock ***********************************************/
-/* Direct access to the system timer/counter is supported only if (1) the
- * system timer counter is available (i.e., we are not configured to use
- * a hardware periodic timer), and (2) the execution environment has direct
- * access to kernel global data
- */
-
-#ifdef __HAVE_KERNEL_GLOBALS
-#  ifdef CONFIG_SYSTEM_TIME64
-
-extern volatile uint64_t g_system_timer;
-#define clock_systimer()  (uint32_t)(g_system_timer & 0x00000000ffffffff)
-#define clock_systimer64() g_system_timer
-
-#  else
-
-extern volatile uint32_t g_system_timer;
-#define clock_systimer() g_system_timer
-
-#  endif
-#endif
 
 /****************************************************************************
  * Public Function Prototypes
@@ -266,37 +260,40 @@ void clock_synchronize(void);
 #endif
 
 /****************************************************************************
- * Function:  clock_systimer
+ * Name: clock_resynchronize
  *
  * Description:
- *   Return the current value of the 32-bit system timer counter.  Indirect
- *   access to the system timer counter is required through this function if
- *   the execution environment does not have direct access to kernel global
- *   data
+ *   Resynchronize the system timer to a hardware RTC.  The user can
+ *   explicitly re-synchronize the system timer to the RTC under certain
+ *   conditions where the system timer is known to be in error.  For example,
+ *   in certain low-power states, the system timer may be stopped but the
+ *   RTC will continue keep correct time.  After recovering from such
+ *   low-power state, this function should be called to restore the correct
+ *   system time.
+ *
+ *   Calling this function will not result in system time going "backward" in
+ *   time. If setting system time with RTC would result time going "backward"
+ *   then resynchronization is not performed.
  *
  * Parameters:
- *   None
+ *   diff:  amount of time system-time is adjusted forward with RTC
  *
  * Return Value:
- *   The current value of the system timer counter
+ *   None
  *
  * Assumptions:
  *
  ****************************************************************************/
 
-#ifndef __HAVE_KERNEL_GLOBALS
-#  ifdef CONFIG_SYSTEM_TIME64
-#    define clock_systimer()  (uint32_t)(clock_systimer64() & 0x00000000ffffffff)
-#  else
-uint32_t clock_systimer(void);
-#  endif
+#ifdef CONFIG_RTC
+void clock_resynchronize(struct timespec *rtc_diff);
 #endif
 
 /****************************************************************************
- * Function:  clock_systimer64
+ * Function:  clock_systimer
  *
  * Description:
- *   Return the current value of the 64-bit system timer counter.  Indirect
+ *   Return the current value of the 32/64-bit system timer counter.  Indirect
  *   access to the system timer counter is required through this function if
  *   the execution environment does not have direct access to kernel global
  *   data
@@ -311,9 +308,7 @@ uint32_t clock_systimer(void);
  *
  ****************************************************************************/
 
-#if !defined(__HAVE_KERNEL_GLOBALS) && defined(CONFIG_SYSTEM_TIME64)
-uint64_t clock_systimer64(void);
-#endif
+systime_t clock_systimer(void);
 
 /****************************************************************************
  * Name: clock_systimespec

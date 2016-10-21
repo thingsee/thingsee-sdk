@@ -1,8 +1,9 @@
 /****************************************************************************
  * apps/system/conman/conman_client.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
+ *   Author: Sila Kayo <sila.kayo@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -774,6 +775,147 @@ out:
 }
 
 /****************************************************************************
+ * Name: conman_client_filesystem_delete
+ *
+ * Description:
+ *   Delete file from modem filesystem.
+ *
+ * Input Parameters:
+ *   client       : client handle
+ *   filename     : name of file to be removed
+ *
+ * Returned Value:
+ *   ERROR if failed, OK on success.
+ *
+ ****************************************************************************/
+
+int conman_client_filesystem_delete(struct conman_client_s *client,
+                                    char *filename)
+{
+  conman_dbg("%s\n", filename);
+
+  return do_command_no_payload(client, CONMAN_MSG_FILESYSTEM_DELETE,
+                               filename, strlen(filename) + 1);
+}
+
+/****************************************************************************
+ * Name: conman_client_ftp_download
+ *
+ * Description:
+ *   Retrieve a file from FTP server to modem filesystem.
+ *
+ * Input Parameters:
+ *   client       : client handle
+ *   hostname     : FTP server hostname
+ *   username     : FTP username
+ *   password     : FTP password
+ *   filepath_src : Remote file path to retrieve
+ *   filepath_dst : Local file path to be stored
+ *
+ * Returned Value:
+ *   ERROR if failed, OK on success.
+ *
+ ****************************************************************************/
+
+int conman_client_ftp_download(struct conman_client_s *client,
+                               char *hostname,
+                               char *username,
+                               char *password,
+                               char *filepath_src,
+                               char *filepath_dst)
+{
+  struct conman_msg_ftp_download_s ftp = {};
+  size_t hostname_len = strlen(hostname);
+  size_t username_len = strlen(username);
+  size_t password_len = strlen(password);
+  size_t filepath_src_len = strlen(filepath_src);
+  size_t filepath_dst_len = strlen(filepath_dst);
+  sq_queue_t qevents;
+  struct iovec bufs[6];
+  int ret;
+
+  ftp.hostname_len = hostname_len + 1;
+  ftp.username_len = username_len + 1;
+  ftp.password_len = password_len + 1;
+  ftp.filepath_src_len = filepath_src_len + 1;
+  ftp.filepath_dst_len = filepath_dst_len + 1;
+
+  if (ftp.hostname_len != hostname_len + 1)
+    {
+      conman_dbg("Too long hostname\n");
+      return ERROR;
+    }
+
+  if (ftp.username_len != username_len + 1)
+    {
+      conman_dbg("Too long username\n");
+      return ERROR;
+    }
+
+  if (ftp.password_len != password_len + 1)
+    {
+      conman_dbg("Too long password\n");
+      return ERROR;
+    }
+
+  if (ftp.filepath_src_len != filepath_src_len + 1)
+    {
+      conman_dbg("Too long filepath_src\n");
+      return ERROR;
+    }
+
+  if (ftp.filepath_dst_len != filepath_dst_len + 1)
+    {
+      conman_dbg("Too long filepath_dst\n");
+      return ERROR;
+    }
+
+  bufs[0].iov_base = &ftp;
+  bufs[0].iov_len = sizeof(ftp);
+  bufs[1].iov_base = (void *)hostname;
+  bufs[1].iov_len = ftp.hostname_len;
+  bufs[2].iov_base = (void *)username;
+  bufs[2].iov_len = ftp.username_len;
+  bufs[3].iov_base = (void *)password;
+  bufs[3].iov_len = ftp.password_len;
+  bufs[4].iov_base = (void *)filepath_src;
+  bufs[4].iov_len = ftp.filepath_src_len;
+  bufs[5].iov_base = (void *)filepath_dst;
+  bufs[5].iov_len = ftp.filepath_dst_len;
+
+  ret = conman_send_reqv(client->sd, CONMAN_MSG_FTP_DOWNLOAD, bufs, 6);
+  if (ret != OK)
+    {
+      conman_dbg("conman_send_reqv failed\n");
+      return ERROR;
+    }
+
+  sq_init(&qevents);
+
+  ret = conman_wait_for_response(client, false, &qevents);
+  if (ret != OK)
+    {
+      conman_dbg("conman communication failed\n");
+      ret = ERROR;
+      goto out;
+    }
+
+  DEBUGASSERT(client->payload == NULL);
+
+  if (client->respval != CONMAN_RESP_OK)
+    {
+      ret = ERROR;
+      goto out;
+    }
+
+  ret = OK;
+
+out:
+  handle_queued_events(client, &qevents);
+  return ret;
+}
+
+/****************************************************************************
  * Name: conman_client_call_answer
  *
  * Description:
@@ -847,4 +989,142 @@ int conman_client_call_audio_control(struct conman_client_s *client,
 
   return do_command_no_payload(client, CONMAN_MSG_CALL_AUDIO_CONTROL,
                                &data, sizeof(data));
+}
+
+/****************************************************************************
+ * Name: conman_client_start_celllocate
+ *
+ * Description:
+ *   Initiate u-blox modem based CellLocate®
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *   timeout        : timeout for CellLocate® (in seconds)
+ *   target_accuracy: target accuracy (in seconds)
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_start_celllocate(struct conman_client_s *client,
+                                   int timeout, int target_accuracy)
+{
+  struct conman_msg_start_celllocate_s data = {};
+
+  data.timeout = timeout;
+  data.target_accuracy = target_accuracy;
+
+  return do_command_no_payload(client, CONMAN_MSG_START_CELLLOCATE,
+                               &data, sizeof(data));
+}
+
+/****************************************************************************
+ * Name: conman_client_aid_celllocate
+ *
+ * Description:
+ *   Give modem current location for aiding u-blox CellLocate®
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *   time           : UTC timestamp of aided location
+ *   latitude       : Estimated latitude in degrees
+ *   longitude      : Estimated longitude in degrees
+ *   altitude       : Estimated altitude in meters
+ *   accuracy       : Estimated accuracy in meters
+ *   speed          : Estimated speed in meters per second
+ *   direction      : Estimated direction of speed in degrees
+ *                    (north zero, clockwise)
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_aid_celllocate(struct conman_client_s *client,
+                                 time_t time, double latitude, double longitude,
+                                 int altitude, unsigned int accuracy,
+                                 unsigned int speed, unsigned int direction)
+{
+  struct conman_msg_aid_celllocate_s data = {};
+
+  data.time = time;
+  data.latitude = latitude;
+  data.longitude = longitude;
+  data.altitude = altitude;
+  data.accuracy = accuracy;
+  data.speed = speed;
+  data.direction = direction;
+
+  return do_command_no_payload(client, CONMAN_MSG_AID_CELLLOCATE,
+                               &data, sizeof(data));
+}
+
+/****************************************************************************
+ * Name: conman_client_request_cell_environment
+ *
+ * Description:
+ *   Request cell environment information from u-blox modem,
+ *   results are returned with CONMAN_EVENT_CELL_ENVIRONMENT
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_request_cell_environment(struct conman_client_s *client)
+{
+  return do_command_no_payload(client, CONMAN_MSG_REQUEST_CELL_ENVIRONMENT,
+                               NULL, 0);
+}
+
+/****************************************************************************
+ * Name: conman_client_ping
+ *
+ * Description:
+ *   Ping/wake conman server.
+ *
+ * Input Parameters:
+ *   client : client handle
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_ping(struct conman_client_s *client)
+{
+  return do_command_no_payload(client, CONMAN_MSG_PING, NULL, 0);
+}
+
+/****************************************************************************
+ * Name: conman_client_wifi_scan
+ *
+ * Description:
+ *   Initiate WiFi scanning
+ *
+ * Input Parameters:
+ *   client         : client handle
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_wifi_scan(struct conman_client_s *client)
+{
+#ifdef CONFIG_SYSTEM_CONMAN_WIFI
+  return do_command_no_payload(client, CONMAN_MSG_WIFI_SCAN, NULL, 0);
+#else
+  errno = -ENOSYS;
+  return ERROR;
+#endif
 }

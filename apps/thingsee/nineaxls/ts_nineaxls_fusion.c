@@ -60,8 +60,8 @@ int ts_nineaxls_fusion_update(float gx, float gy, float gz,
   float deltat = 0.0f;
   static float sum = 0.0f;
   static uint32_t sum_count = 0;
-  static uint32_t ltick = 0;
-  uint32_t ctick = 0;
+  static systime_t ltick = 0;
+  systime_t ctick = 0;
 
   /* Sensor x, y, and z axes of the accelerometer and gyro are aligned. The magnetometer
    * z-axis (+ up) is aligned with the z-axis (+ up) of accelerometer and gyro, but the

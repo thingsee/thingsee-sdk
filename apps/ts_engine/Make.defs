@@ -1,8 +1,7 @@
 ############################################################################
 # apps/ts_engine/Make.defs
-# Adds selected applications to apps/ build
 #
-#   Copyright (C) 2015 Haltian ltd. All rights reserved.
+#   Copyright (C) 2015-2015 Haltian Ltd.
 #   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
 #
 # Redistribution and use in source and binary forms, with or without
@@ -34,23 +33,14 @@
 #
 ############################################################################
 
-
 ifeq ($(CONFIG_THINGSEE_ENGINE),y)
 CONFIGURED_APPS += ts_engine/engine
-CNTXTDIRS += ts_engine/engine
 endif
 
-ifeq ($(CONFIG_THINGSEE_CONNECTOR_TS),y)
-CONFIGURED_APPS += ts_engine/ts-connector
-CNTXTDIRS += ts_engine/ts-connector
+ifeq ($(CONFIG_THINGSEE_ENGINE_CONTROL),y)
+CONFIGURED_APPS += ts_engine/control
 endif
 
-ifeq ($(CONFIG_THINGSEE_CONNECTOR_KII),y)
-CONFIGURED_APPS += ts_engine/kii-connector
-CNTXTDIRS += ts_engine/kii-connector
-endif
-
-ifeq ($(CONFIG_THINGSEE_CONNECTOR_MESHBLU),y)
-CONFIGURED_APPS += ts_engine/meshblu-connector
-CNTXTDIRS += ts_engine/meshblu-connector
+ifeq ($(CONFIG_THINGSEE_CONNECTORS),y)
+CONFIGURED_APPS += ts_engine/connectors
 endif

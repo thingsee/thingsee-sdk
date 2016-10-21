@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_substate_sim.c
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,6 +51,7 @@
 #include <apps/system/ubmodem.h>
 
 #include "ubmodem_internal.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -136,6 +137,7 @@ static int modem_setup_sim_retry_timer_handler(struct ubmodem_s *modem,
   int err;
   struct modem_sub_setup_sim_s *sub = arg;
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
   err = __ubmodem_send_cmd(modem, &cmd_ATpCPIN, check_ATpCPIN_handler,
                        sub, "%s", "?");
   MODEM_DEBUGASSERT(modem, err == OK);
@@ -168,6 +170,7 @@ static void check_ATpCPIN_handler(struct ubmodem_s *modem,
      * Sleep for sometime and retry.
      */
 
+    ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
     err = __ubmodem_set_timer(modem, SIM_TRY_DELAY_MSEC,
                             &modem_setup_sim_retry_timer_handler,
                             sub);
@@ -273,6 +276,7 @@ void __ubmodem_substate_start_setup_sim(struct ubmodem_s *modem)
 
   /* Setup SIM after short delay, to give HW time to initialize. */
 
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
   err = __ubmodem_set_timer(modem, SIM_TRY_DELAY_MSEC,
                           &modem_setup_sim_retry_timer_handler,
                           sub);

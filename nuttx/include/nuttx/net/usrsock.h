@@ -71,6 +71,7 @@ enum usrsock_request_types_e
   USRSOCK_REQUEST_SETSOCKOPT,
   USRSOCK_REQUEST_GETSOCKOPT,
   USRSOCK_REQUEST_GETSOCKNAME,
+  USRSOCK_REQUEST_BIND,
   USRSOCK_REQUEST__MAX
 };
 
@@ -124,6 +125,14 @@ struct usrsock_request_close_s
   struct usrsock_request_common_s head;
 
   int16_t usockid;
+} packed_struct;
+
+struct usrsock_request_bind_s
+{
+  struct usrsock_request_common_s head;
+
+  int16_t usockid;
+  uint16_t addrlen;
 } packed_struct;
 
 struct usrsock_request_connect_s

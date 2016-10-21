@@ -118,7 +118,8 @@ int usrsock_event(FAR struct usrsock_conn_s *conn, uint16_t events)
       conn->flags |= USRSOCK_EVENT_REMOTE_CLOSED;
     }
 
-  if (conn->state == USRSOCK_CONN_STATE_READY &&
+  if ((conn->state == USRSOCK_CONN_STATE_READY ||
+       conn->state == USRSOCK_CONN_STATE_CONNECTING) &&
       !(conn->flags & USRSOCK_EVENT_REMOTE_CLOSED))
     {
       if (events & USRSOCK_EVENT_SENDTO_READY)

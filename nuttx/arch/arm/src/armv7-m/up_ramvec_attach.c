@@ -88,7 +88,7 @@
 
 /* Common exception entrypoint */
 
-void exception_common(void);
+void exception_common(void) externally_visible_function;
 
 /****************************************************************************
  * Name: up_ramvec_attach

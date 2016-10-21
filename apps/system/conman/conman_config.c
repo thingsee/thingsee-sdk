@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/conman/conman_config.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,7 +56,7 @@
 #define JSON_STRDUP(str,obj,label)  do { \
                                       json_entry = cJSON_GetObjectItem(obj, label); \
                                       str = (json_entry ? \
-                                           strdup(json_entry->valuestring) : NULL); \
+                                           strdup(cJSON_string(json_entry)) : NULL); \
                                     } while(0)
 
 /****************************************************************************
@@ -289,7 +289,7 @@ int __conman_config_set_connections(struct conman_s *conman, const char *config)
 
               con = cJSON_GetArrayItem(cons, i);
 
-              cellu->id = cJSON_GetObjectItem(con, "connectionId")->valueint;
+              cellu->id = cJSON_int(cJSON_GetObjectItem(con, "connectionId"));
 
               JSON_STRDUP(cellu->access_point_name, con, "accessPointName");
               JSON_STRDUP(cellu->access_point_ipaddr, con, "accessPointIPAddr");
@@ -339,7 +339,7 @@ int __conman_config_set_connections(struct conman_s *conman, const char *config)
 
               con = cJSON_GetArrayItem(cons, i);
 
-              wifi->id = cJSON_GetObjectItem(con, "connectionId")->valueint;
+              wifi->id = cJSON_int(cJSON_GetObjectItem(con, "connectionId"));
 
               JSON_STRDUP(wifi->ssid, con, "ssid");
               JSON_STRDUP(wifi->password, con, "password");

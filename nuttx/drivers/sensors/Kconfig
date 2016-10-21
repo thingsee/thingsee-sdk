@@ -29,6 +29,12 @@ config LIS2DH_NPOLLWAITERS
 	---help---
 		Maximum number of threads that can be waiting on poll()
 
+config LIS2DH_DRIVER_SELFTEST
+	bool "Enable selftest in LIS2DH driver"
+	default n
+	---help---
+		Enable selftest in LIS2DH driver
+
 endif
 
 config MPL115A
@@ -139,6 +145,30 @@ config TRACES_HTS221_HUMIDITY
 		Enables trace support for the HTS221
 
 config HTS221_NPOLLWAITERS
+	int "Number of waiters to poll"
+	default 1
+	---help---
+		Number of waiters to poll
+
+endif
+
+config GAM9AXEL_SENS
+	bool "Enable ST LSM9DS0 sensor"
+	default n
+	---help---
+		Enables ST's 9-axis LSM9DS0 sensor.
+		This iNEMO inertial module contains 3D accelerometer,
+		3D gyroscope, and 3D magnetometer sensors.
+
+if GAM9AXEL_SENS
+
+config TRACES_GAM9AXEL_SENS
+	bool "Enable trace support for the LSM9DS0"
+	default n
+	---help---
+		Enables trace support for the LSM9DS0
+
+config GAM9AXEL_SENS_NPOLLWAITERS
 	int "Number of waiters to poll"
 	default 1
 	---help---

@@ -104,5 +104,14 @@ long long strtoll(const char *nptr, char **endptr, int base)
   return (long long)accum;
 }
 
+/* Provide 'atoll' so that external binary libraries can be linked with NuttX
+ * libc. */
+
+#undef atoll
+long long atoll(const char *nptr)
+{
+  return strtoll(nptr, NULL, 10);
+}
+
 #endif
 

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/thingsee/ui/ui_calibration.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Petri Salonen <petri.salonen@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,18 +41,14 @@
 #include <nuttx/irq.h>
 #include <nuttx/sensors/lsm9ds1.h>
 #include <apps/thingsee/ts_devinfo.h>
+#include <apps/ts_engine/watchdog.h>
 
 #include "ui_calibration.h"
-
 
 #ifdef CONFIG_THINGSEE_NINEAXELS_MODULE
 
 #define ST_MAGN_VALID_ID                0x3D
 #define ST_SENS_PATH                    "/dev/lsm9ds1"
-
-#define ts_watchdog_kick() ((void)0)
-
-
 
 /****************************************************************************
  * Name: ui_calib_failure_handler
@@ -67,6 +63,7 @@
  *  ERROR (-1) always, since this one is FAILURE HANDLER
  *
  ****************************************************************************/
+
 static int ui_calib_failure_handler(int file)
 {
   if (file > 0)
@@ -74,7 +71,7 @@ static int ui_calib_failure_handler(int file)
       close(file);
     }
 
-    return ERROR;
+  return ERROR;
 }
 
 /****************************************************************************
@@ -90,6 +87,7 @@ static int ui_calib_failure_handler(int file)
  *  OK on calibration succeeded
  *
  ****************************************************************************/
+
 int ui_calib_lsm9ds1_calibrate(int sens_id)
 {
   int file;
@@ -98,8 +96,6 @@ int ui_calib_lsm9ds1_calibrate(int sens_id)
   lsm9ds1_sensor_bias_t b, ref_bias;
   char buf[TS_DEVICE_PROD_DATA_LSM9DS1_REF_SIZE];
 
-
-
   file = open(ST_SENS_PATH, O_RDWR);
   if (file < 0)
     {
@@ -107,7 +103,7 @@ int ui_calib_lsm9ds1_calibrate(int sens_id)
       return ERROR;
     }
 
-  ret = ioctl(file, LSM9DS1_IOC_WHO_AM_I, (unsigned int)&who_am_i);
+  ret = ioctl(file, LSM9DS1_IOC_WHO_AM_I, (unsigned int) &who_am_i);
   if (ret < 0)
     {
       return ui_calib_failure_handler(file);
@@ -121,12 +117,12 @@ int ui_calib_lsm9ds1_calibrate(int sens_id)
   /* Timeconsuming operation, kick the watchdog to avoid resets */
 
   if (board_get_hw_ver() < BOARD_HWVER_B2_0)
-      ts_watchdog_kick();
+    ts_watchdog_kick();
 
   if (sens_id == UI_CALIB_SENS_GYROSCOPE)
-    ret = ioctl(file, LSM9DS1_IOC_CALIBRATE_BIAS_GYRO, (unsigned int)&b);
+    ret = ioctl(file, LSM9DS1_IOC_CALIBRATE_BIAS_GYRO, (unsigned int) &b);
   else
-    ret = ioctl(file, LSM9DS1_IOC_CALIBRATE_BIAS_MAG, (unsigned int)&b);
+    ret = ioctl(file, LSM9DS1_IOC_CALIBRATE_BIAS_MAG, (unsigned int) &b);
 
   if (ret < 0)
     {
@@ -144,9 +140,9 @@ int ui_calib_lsm9ds1_calibrate(int sens_id)
   /* Split prod data as reference */
 
   ret = sscanf(buf, "[%hd,%hd,%hd,%hd,%hd,%hd,%hd,%hd,%hd]",
-          &ref_bias.gyro_bias[0], &ref_bias.gyro_bias[1], &ref_bias.gyro_bias[2],
-          &ref_bias.xl_bias[0], &ref_bias.xl_bias[1], &ref_bias.xl_bias[2],
-          &ref_bias.mag_bias[0], &ref_bias.mag_bias[1], &ref_bias.mag_bias[2]);
+               &ref_bias.gyro_bias[0], &ref_bias.gyro_bias[1], &ref_bias.gyro_bias[2],
+               &ref_bias.xl_bias[0], &ref_bias.xl_bias[1], &ref_bias.xl_bias[2],
+               &ref_bias.mag_bias[0], &ref_bias.mag_bias[1], &ref_bias.mag_bias[2]);
 
   /* If not enough entries, clear them all */
 
@@ -181,7 +177,7 @@ int ui_calib_lsm9ds1_calibrate(int sens_id)
       return ui_calib_failure_handler(-1);
     }
 
-    return OK;
+  return OK;
 }
 
 #endif

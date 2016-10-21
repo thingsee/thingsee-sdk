@@ -45,6 +45,7 @@
 #include <sys/types.h>
 #include <stdbool.h>
 #include <queue.h>
+#include <nuttx/clock.h>
 
 #ifdef CONFIG_SCHED_WORKQUEUE
 
@@ -183,7 +184,7 @@ int work_lpstart(void);
  *
  ****************************************************************************/
 
-void work_process(FAR struct kwork_wqueue_s *wqueue, uint32_t period, int wndx);
+void work_process(FAR struct kwork_wqueue_s *wqueue, systime_t period, int wndx);
 
 #endif /* CONFIG_SCHED_WORKQUEUE */
 #endif /* __SCHED_WQUEUE_WQUEUE_H */

@@ -1,0 +1,10 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config THINGSEE_ENGINE_CONTROL
+	bool "Thingsee engine control app"
+	default n
+	---help---
+		Enable the Thingsee engine control app

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/conman/conman_cc3000.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -154,9 +154,30 @@
 #define CC3000_DEFAULT_AUC_KEEPALIVE 10
 #define CC3000_DEFAULT_AUC_INACTIVITY 60
 
+/* Scan result bitfield parsing */
+
+#define CC3000_SCAN_RESULTS_IS_VALID(res) (((res)->bitfield >> (0 + 0)) & 0x1)
+#define CC3000_SCAN_RESULTS_RSSI(res)     (((res)->bitfield >> (0 + 1)) & 0x7f)
+#define CC3000_SCAN_RESULTS_SECURITY(res) (((res)->bitfield >> (8 + 0)) & 0x3)
+#define CC3000_SCAN_RESULTS_SSID_LEN(res) (((res)->bitfield >> (8 + 2)) & 0x3f)
+
+/* How long to wait before reading scan results? */
+
+#define SCAN_READ_INTERVAL 10
+
 /****************************************************************************
  * Type Declarations
  ****************************************************************************/
+
+struct cc3000_scan_results_s
+{
+  uint32_t num_networks_found;
+  uint32_t results;
+  uint16_t bitfield;
+  uint16_t frame_time;
+  char ssid[32];
+  uint8_t bssid[6];
+};
 
 struct wifi_thread_params_s
 {
@@ -182,11 +203,17 @@ struct wifi_priv_s
 {
   pthread_mutex_t mutex;
   pthread_t tid;
-  bool stop;
-  bool connected;
-  bool established;
+  bool stop:1;
+  bool stopped:1;
+  bool connected:1;
+  bool established:1;
+  bool scanning_only:1;
+  bool do_scan:1;
+  bool scan_started:1;
   int outfd;
   int infd;
+  int main_outfd;
+  int main_infd;
   struct wifi_socket_stat_s sockets[CC3000_MAX_SOCKETS];
   struct in_addr ipaddr;
   struct in_addr dnsaddr;
@@ -233,6 +260,8 @@ static struct wifi_priv_s *wifi;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+static int stop_wifi_thread(struct conman_s *conman);
 
 static int cc3000_error_to_errno(int err)
 {
@@ -1322,6 +1351,141 @@ static void cc3000_usrsock_handle_select_results(struct wifi_usrsock_s *usrsock,
     }
 }
 
+static bool cc3000_start_scan(struct timespec *scan_read_abs)
+{
+  unsigned long aiIntervalList[16];
+  int i, ret;
+
+  for (i = 0; i < 16; i++)
+    {
+      aiIntervalList[i] = 2000;
+    }
+
+  /* Start scanning. */
+
+  ret = wlan_ioctl_set_scan_params(true, 100, 100, 5, 0x1fff, -90, 0, 205,
+                                   aiIntervalList);
+  if (ret != 0)
+    {
+      conman_dbg("cc3000_start_scan returned: %d.\n", ret);
+      return false;
+    }
+
+  (void)clock_gettime(CLOCK_MONOTONIC, scan_read_abs);
+  scan_read_abs->tv_sec += SCAN_READ_INTERVAL;
+
+  return true;
+}
+
+static bool cc3000_read_scan_results(void)
+{
+  struct cc3000_scan_results_s cc3000_scan_res = { };
+  struct conman_event_wifi_scan_entry_s result_out;
+  const char event_id = 'r';
+  uint8_t nresults;
+  int ret;
+  int i;
+
+  nresults = -1;
+  i = 0;
+
+  ret = wlan_ioctl_get_scan_results(1, (uint8_t *)&cc3000_scan_res);
+  if (ret != 0)
+    {
+      conman_dbg("wlan_ioctl_get_scan_results returned: %d.\n", ret);
+
+      return false;
+    }
+
+  nresults = cc3000_scan_res.num_networks_found;
+  if (nresults != cc3000_scan_res.num_networks_found)
+    nresults = UINT8_MAX;
+
+  if (nresults <= 0 || !CC3000_SCAN_RESULTS_IS_VALID(&cc3000_scan_res))
+    {
+      /* No scan results available yet. */
+
+      return true;
+    }
+
+  conman_dbg("number of scan results: %d.\n", nresults);
+
+  /* Start sending sending scan results */
+
+  if (__conman_util_block_write(wifi->main_infd, &event_id,
+                                sizeof(event_id)) != OK)
+    {
+      return false; /* main thread pipe write problem, exit wifi thread. */
+    }
+  if (__conman_util_block_write(wifi->main_infd, &nresults,
+                                sizeof(nresults)) != OK)
+    {
+      return false;
+    }
+
+  do
+    {
+      if (CC3000_SCAN_RESULTS_IS_VALID(&cc3000_scan_res))
+        {
+          int raw_rssi;
+
+          memset(&result_out, 0, sizeof(result_out));
+
+          raw_rssi = CC3000_SCAN_RESULTS_RSSI(&cc3000_scan_res);
+          result_out.rssi = raw_rssi - 128;
+
+          result_out.ssid_len = CC3000_SCAN_RESULTS_SSID_LEN(&cc3000_scan_res);
+
+          if (result_out.ssid_len > 32)
+            result_out.ssid_len = 32;
+
+          memcpy(result_out.bssid, cc3000_scan_res.bssid, 6);
+          memcpy(result_out.ssid, cc3000_scan_res.ssid, result_out.ssid_len);
+
+          if (__conman_util_block_write(wifi->main_infd, &result_out,
+                                        sizeof(result_out)) != OK)
+            {
+              return false;
+            }
+        }
+
+      ret = wlan_ioctl_get_scan_results(1, (uint8_t *)&cc3000_scan_res);
+      if (ret != 0)
+        {
+          conman_dbg("wlan_ioctl_get_scan_results returned: %d.\n", ret);
+
+          break;
+        }
+
+      /* Last 'wlan_ioctl_get_scan_results' call returns result with is_valid
+       * flag unset. This last call is needed for flushing/reseting internal
+       * scan result output logic. */
+
+      if (++i == nresults)
+        {
+          break;
+        }
+    }
+  while (CC3000_SCAN_RESULTS_IS_VALID(&cc3000_scan_res));
+
+  /* Something went wrong for CC3000 => did not get enough results. Output
+   * enough results to flush main thread. */
+
+  memset(&result_out, 0, sizeof(result_out));
+  for (; i < nresults; i++)
+    {
+      if (__conman_util_block_write(wifi->main_infd, &result_out,
+                                    sizeof(result_out)) != OK)
+        {
+          return false;
+        }
+    }
+
+  /* Done reading scan results. */
+
+  return true;
+}
+
 static bool is_wifi_stopped(void *priv)
 {
   return wifi_should_stop();
@@ -1329,6 +1493,11 @@ static bool is_wifi_stopped(void *priv)
 
 static void do_wifi_thread(void)
 {
+  const char connection_established_event = 'E';
+  const char connection_lost_event = 'L';
+  const char connection_request_failed_event = 'F';
+  struct timespec scan_read = {};
+  bool established = false;
   struct wifi_status_s status;
   struct wifi_usrsock_s *usrsock;
   struct pollfd pfds[2];
@@ -1343,6 +1512,7 @@ static void do_wifi_thread(void)
   conman_dbg("Initializing WiFi thread.\n");
   wifi->connected = false;
   wifi->established = false;
+  wifi->scan_started = false;
   wifi->ipaddr.s_addr = 0;
   wifi->dnsaddr.s_addr = 0;
   PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
@@ -1351,7 +1521,7 @@ static void do_wifi_thread(void)
   if (!usrsock)
     {
       conman_dbg("error allocating %d bytes.\n", sizeof(*usrsock));
-      return;
+      goto report_out;
     }
   usrsock->linkfd = -1;
 
@@ -1365,7 +1535,7 @@ static void do_wifi_thread(void)
 
       if (wifi_should_stop())
         {
-          return;
+          goto report_out;
         }
 
       /* Initialize WiFi HW */
@@ -1373,7 +1543,7 @@ static void do_wifi_thread(void)
       if (!cc3000_initialize(NULL, wifi_async_callback))
         {
           conman_dbg("Could not initialize WiFi HW.\n");
-          return;
+          goto report_out;
         }
 
       if (wifi_should_stop())
@@ -1454,8 +1624,13 @@ static void do_wifi_thread(void)
   if (usrsock->linkfd < 0)
     {
       conman_dbg("failed to open /dev/usrsock\n");
-      return;
+      goto destroy_out;
     }
+
+  established = true;
+  (void)__conman_util_block_write(wifi->main_infd,
+                                  &connection_established_event,
+                                  sizeof(connection_established_event));
 
   /* Run usrsock daemon. */
 
@@ -1464,6 +1639,7 @@ static void do_wifi_thread(void)
       TICC3000fd_set readfds, writefds, exceptfds;
       int highest_sockid;
       bool repoll;
+      bool do_scan;
       int nfds;
 
       /* Check if there is I/O activity pending on sockets. */
@@ -1525,6 +1701,46 @@ static void do_wifi_thread(void)
 
       do
         {
+          PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+          do_scan = wifi->do_scan;
+          wifi->do_scan = false;
+          PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+
+          if (do_scan)
+            {
+              if (!cc3000_start_scan(&scan_read))
+                {
+                  scan_read.tv_sec = 0;
+                  scan_read.tv_nsec = 0;
+                }
+            }
+
+          if (scan_read.tv_sec)
+            {
+              struct timespec ts;
+
+              (void)clock_gettime(CLOCK_MONOTONIC, &ts);
+
+              /* Should we read scan results? */
+
+              if (ts.tv_sec >= scan_read.tv_sec)
+                {
+                  (void)cc3000_read_scan_results();
+
+                  scan_read.tv_sec = 0;
+                  scan_read.tv_nsec = 0;
+                }
+              else
+                {
+                  int scan_timeout = (scan_read.tv_sec - ts.tv_sec) * 1000;
+
+                  if (poll_timeout < 0 || poll_timeout > scan_timeout)
+                    poll_timeout = scan_timeout;
+                  if (poll_timeout <= 0)
+                    poll_timeout = 1;
+                }
+            }
+
           memset(pfds, 0, sizeof(pfds));
 
           /* Check usrsock interface for activity. */
@@ -1606,10 +1822,143 @@ destroy_out:
   free(usrsock);
 
   cc3000_uninitialize();
+
+report_out:
+  if (established)
+    {
+      (void)__conman_util_block_write(wifi->main_infd, &connection_lost_event,
+                                      sizeof(connection_lost_event));
+    }
+  else
+    {
+      (void)__conman_util_block_write(wifi->main_infd, &connection_request_failed_event,
+                                      sizeof(connection_request_failed_event));
+    }
+}
+
+static bool do_wifi_scanning_thread(void)
+{
+  struct timespec ts, scan_read;
+  struct pollfd pfds[1];
+  int poll_timeout;
+  int ret;
+
+  /* Initialize WiFi thread */
+
+  PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+  conman_dbg("Initializing WiFi scanning thread.\n");
+  wifi->connected = false;
+  wifi->established = false;
+  wifi->scan_started = false;
+  wifi->ipaddr.s_addr = 0;
+  wifi->dnsaddr.s_addr = 0;
+  PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+
+  /* Initialize WiFi HW */
+
+  if (!cc3000_initialize(NULL, wifi_async_callback))
+    {
+      conman_dbg("Could not initialize WiFi HW.\n");
+      return false;
+    }
+
+  if (wifi_should_stop())
+    {
+      goto destroy_out;
+    }
+
+  if (!cc3000_start_scan(&scan_read))
+    {
+      goto destroy_out;
+    }
+
+  do
+    {
+      (void)clock_gettime(CLOCK_MONOTONIC, &ts);
+
+      /* Should we read scan results? */
+
+      if (ts.tv_sec >= scan_read.tv_sec)
+        {
+          (void)cc3000_read_scan_results();
+
+          break; /* Done scanning. */
+        }
+
+      poll_timeout = (scan_read.tv_sec - ts.tv_sec) * 1000;
+      if (poll_timeout <= 0)
+        {
+          poll_timeout = 1;
+        }
+
+      /* Check command interface for activity. */
+
+      memset(pfds, 0, sizeof(pfds));
+      pfds[0].fd = wifi->outfd;
+      pfds[0].events = POLLIN;
+
+      conman_dbg("poll, pfds: %d, timeout: %d\n",
+                 sizeof(pfds) / sizeof(pfds[0]),
+                 (int)poll_timeout);
+
+      ret = poll(pfds, sizeof(pfds) / sizeof(pfds[0]), (int)poll_timeout);
+      if (ret > 0 && (pfds[0].revents & POLLIN))
+        {
+          bool got_stop = false;
+          bool got_wake = false;
+          char cmd;
+
+          do
+            {
+              ret = read(wifi->outfd, &cmd, 1);
+              if (ret == 1)
+                {
+                  conman_dbg("Got command '%c'.\n", cmd);
+
+                  if (cmd == 'S')
+                    {
+                      /* "Stop" command. */
+
+                      got_stop = true;
+                    }
+                  else if (cmd == 'W')
+                    {
+                      /* "Wake poll" command. */
+
+                      got_wake = true;
+                    }
+                }
+            }
+          while (ret == 1);
+
+          if (got_stop)
+            {
+              conman_dbg("Handle command '%c'.\n", 'S');
+              goto destroy_out;
+            }
+          else if (got_wake)
+            {
+              conman_dbg("Handle command '%c'.\n", 'W');
+            }
+        }
+    }
+  while (!wifi_should_stop());
+
+destroy_out:
+  PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+  conman_dbg("Destroying WiFi thread.\n");
+  wifi->established = false;
+  wifi->scan_started = false;
+  PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+
+  cc3000_uninitialize();
+  return false;
 }
 
 static void *wifi_thread(void *p)
 {
+  char stopped_event = 'S';
+
   conman_dbg("Enter.\n");
 
   while (!wifi_should_stop())
@@ -1617,37 +1966,96 @@ static void *wifi_thread(void *p)
       do_wifi_thread();
     }
 
+  PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+  wifi->stopped = true;
+  PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+  write(wifi->main_infd, &stopped_event, 1);
+
+  conman_dbg("Exit.\n");
+  return NULL;
+}
+
+static void *wifi_scanning_only_thread(void *p)
+{
+  char stopped_event = 'S';
+
+  conman_dbg("Enter.\n");
+
+  while (!wifi_should_stop())
+    {
+      if (!do_wifi_scanning_thread())
+        {
+          break;
+        }
+    }
+
+  PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+  wifi->stopped = true;
+  PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+  write(wifi->main_infd, &stopped_event, 1);
+
   conman_dbg("Exit.\n");
   return NULL;
 }
 
 static int start_wifi_thread(struct conman_s *conman,
-                             const struct conman_wifi_connection_s *concfg)
+                             const struct conman_wifi_connection_s *concfg,
+                             bool scan_only)
 {
   pthread_attr_t attr;
   int wifisec = WLAN_SEC_UNSEC;
   int ret;
   int fds[2];
+  int main_fds[2];
   int flags;
+  bool scanning_only = false;
 
   conman_dbg("Starting wifi thread...\n");
 
   if (wifi != NULL)
     {
-      /* Already running */
+      bool stop_n_restart = false;
 
-      conman_dbg("Cannot start WiFi: %s.\n", "Already running");
+      PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+      if (wifi->scanning_only)
+        {
+          /* WiFi in scanning only mode, stop thread and restart in full
+           * connectivity mode. */
 
-      return ERROR;
+          stop_n_restart = true;
+        }
+      PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+
+      if (stop_n_restart)
+        {
+          stop_wifi_thread(conman);
+        }
+      else
+        {
+          /* Already running */
+
+          conman_dbg("Cannot start WiFi: %s.\n", "Already running");
+
+          return ERROR;
+        }
     }
 
   if (!concfg || !concfg->ssid)
     {
-      /* No WiFi config. */
+      if (!concfg && scan_only)
+        {
+          /* Start WiFi in scanning only mode. */
 
-      conman_dbg("Cannot start WiFi: %s.\n", "No WiFi config");
+          scanning_only = true;
+        }
+      else
+        {
+          /* No WiFi config. */
 
-      return ERROR;
+          conman_dbg("Cannot start WiFi: %s.\n", "No WiFi config");
+
+          return ERROR;
+        }
     }
   else
     {
@@ -1682,12 +2090,29 @@ static int start_wifi_thread(struct conman_s *conman,
       return ERROR;
     }
 
-  PTH_VERIFY(pthread_mutex_init(&wifi->mutex, NULL));
   wifi->infd = fds[1];
   wifi->outfd = fds[0];
-  wifi->cfg.ssid = concfg->ssid ? concfg->ssid : "";
+
+  ret = pipe(main_fds);
+  if (ret < 0)
+    {
+      conman_dbg("Cannot start WiFi: %s.\n", "Out of file-descriptors");
+
+      close(wifi->infd);
+      close(wifi->outfd);
+      free(wifi);
+      wifi = NULL;
+      return ERROR;
+    }
+
+  wifi->main_infd = main_fds[1];
+  wifi->main_outfd = main_fds[0];
+
+  PTH_VERIFY(pthread_mutex_init(&wifi->mutex, NULL));
+  wifi->cfg.ssid = (concfg && concfg->ssid) ? concfg->ssid : "";
   wifi->cfg.security = wifisec;
-  wifi->cfg.password = concfg->password ? concfg->password : "";
+  wifi->cfg.password = (concfg && concfg->password) ? concfg->password : "";
+  wifi->scanning_only = scanning_only;
 
   flags = fcntl(wifi->outfd, F_GETFL, 0);
   if (flags == ERROR ||
@@ -1696,6 +2121,8 @@ static int start_wifi_thread(struct conman_s *conman,
       conman_dbg("Cannot make pipe non-blocking.\n");
       close(wifi->infd);
       close(wifi->outfd);
+      close(wifi->main_infd);
+      close(wifi->main_outfd);
       free(wifi);
       wifi = NULL;
       return ERROR;
@@ -1706,7 +2133,9 @@ static int start_wifi_thread(struct conman_s *conman,
 
   /* Start pthread to handle WiFi. */
 
-  ret = pthread_create(&wifi->tid, &attr, wifi_thread, NULL);
+  ret = pthread_create(&wifi->tid, &attr,
+                       scanning_only ? wifi_scanning_only_thread : wifi_thread,
+                       NULL);
   if (ret)
     {
       conman_dbg("Can't create WiFi thread: %d\n", ret);
@@ -1714,6 +2143,8 @@ static int start_wifi_thread(struct conman_s *conman,
       pthread_mutex_destroy(&wifi->mutex);
       close(wifi->infd);
       close(wifi->outfd);
+      close(wifi->main_infd);
+      close(wifi->main_outfd);
       free(wifi);
       wifi = NULL;
       return ERROR;
@@ -1753,12 +2184,67 @@ static int stop_wifi_thread(struct conman_s *conman)
 
   close(wifi->infd);
   close(wifi->outfd);
+  close(wifi->main_infd);
+  close(wifi->main_outfd);
   free(wifi);
   wifi = NULL;
 
   conman_dbg("Done.\n");
 
   return OK;
+}
+
+static void handle_scan_results_event(struct conman_s *conman, int fd)
+{
+  struct conman_event_wifi_scan_results_s *event;
+  uint8_t num_results = 0;
+  int last_ok;
+  int i;
+
+  /* Read number of results. */
+
+  if (__conman_util_block_read(fd, &num_results, sizeof(num_results)) != OK)
+    {
+      return;
+    }
+
+  conman_dbg("num results: %d\n", num_results);
+
+  event = calloc(1, sizeof(*event) + sizeof(event->results[0]) * num_results);
+  if (!event)
+    {
+      conman_dbg("out of memory!\n");
+      return;
+    }
+
+  event->num_results = num_results;
+
+  /* Read results. */
+
+  for (i = 0, last_ok = -1; i < num_results; i++)
+    {
+      const uint8_t *bssid;
+
+      if (__conman_util_block_read(fd, &event->results[i],
+                                   sizeof(event->results[i])) != OK)
+        {
+          break;
+        }
+
+      bssid = event->results[i].bssid;
+
+      if (bssid[0] || bssid[1] || bssid[2] || bssid[3] || bssid[4] || bssid[5])
+        {
+          last_ok = i;
+        }
+    }
+
+  event->num_results = last_ok + 1;
+
+  __conman_send_boardcast_event(conman, CONMAN_EVENT_WIFI_SCAN, event,
+            sizeof(*event) + sizeof(event->results[0]) * event->num_results);
+
+  free(event);
 }
 
 /****************************************************************************
@@ -1828,7 +2314,7 @@ int __conman_cc3000_request_connection(struct conman_s *conman,
 
       conman_dbg("conn request, starting...\n");
 
-      return start_wifi_thread(conman, concfg);
+      return start_wifi_thread(conman, concfg, NULL);
 
     case CONMAN_NONE:
       if (conman->connections.current.wifi_refcnt == 0)
@@ -1939,4 +2425,185 @@ int __conman_cc3000_get_status_connection(struct conman_s *conman,
 bool __conman_cc3000_is_destroying(struct conman_s *conman)
 {
   return false;
+}
+
+/****************************************************************************
+ * Name: __conman_cc3000_wifi_scan
+ *
+ * Description:
+ *  Initiate WiFi scanning
+ *
+ * Input Parameters:
+ *   conman  : connection manager handle
+ *
+ * Returned Value:
+ *   OK: scanning started successfully
+ *   ERROR: could not start wifi scanning
+ *
+ ****************************************************************************/
+
+int __conman_cc3000_wifi_scan(struct conman_s *conman)
+{
+  if (wifi)
+    {
+      bool stopped;
+
+      PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+      stopped = wifi->stopped;
+      PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+
+      if (stopped)
+        {
+          /* Already stopped, perform clean-up. */
+
+          stop_wifi_thread(conman);
+        }
+    }
+
+  if (!wifi)
+    {
+      /* WiFi not connected, start CC3000 in scanning mode. */
+
+      return start_wifi_thread(conman, NULL, true);
+    }
+  else
+    {
+      char wakecmd = 'W';
+
+      PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+
+      /* WiFi connected, do scanning in parallel to connection. */
+
+      wifi->do_scan = true;
+
+      /* Issue wake command */
+
+      write(wifi->infd, &wakecmd, 1);
+
+      PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+
+      return OK;
+    }
+}
+
+/****************************************************************************
+ * Name: __conman_cc3000_get_max_pollfds
+ ****************************************************************************/
+
+unsigned int __conman_cc3000_get_max_pollfds(struct conman_s *conman)
+{
+  return 1; /* WiFi thread to main thread IPC pipe. */
+}
+
+/****************************************************************************
+ * Name: __conman_cc3000_setup_pollfds
+ ****************************************************************************/
+
+void __conman_cc3000_setup_pollfds(struct conman_s *conman,
+                                   struct pollfd *pfds, int maxfds,
+                                   int *fds_pos, int *min_timeout)
+{
+  if (!wifi)
+    {
+      return;
+    }
+
+  DEBUGASSERT(*fds_pos < maxfds);
+
+  PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+
+  if (wifi->main_outfd >= 0)
+    {
+      pfds[*fds_pos].fd = wifi->main_outfd;
+      pfds[*fds_pos].events = POLLIN;
+      pfds[*fds_pos].revents = 0;
+      (*fds_pos)++;
+    }
+
+  PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+}
+
+/****************************************************************************
+ * Name: __conman_cc3000_handle_pollfds
+ ****************************************************************************/
+
+void __conman_cc3000_handle_pollfds(struct conman_s *conman,
+                                    struct pollfd *pfds)
+{
+  char event;
+  ssize_t ret;
+  bool do_process = false;
+
+  if (!wifi)
+    {
+      return;
+    }
+
+  PTH_VERIFY(pthread_mutex_lock(&wifi->mutex));
+
+  if (pfds->fd == wifi->main_outfd)
+    {
+      do_process = true;
+    }
+
+  PTH_VERIFY(pthread_mutex_unlock(&wifi->mutex));
+
+  if (!do_process)
+    {
+      return;
+    }
+
+  /* Read event from WiFi thread. */
+
+  ret = read(pfds->fd, &event, 1);
+  if (ret == 1)
+    {
+      conman_dbg("Got event '%c'.\n", event);
+
+      switch (event)
+        {
+          /* Thread 's'topped event. */
+          case 'S':
+            {
+              /* Perform clean-up. */
+
+              stop_wifi_thread(conman);
+              return;
+            }
+
+          /* Scan 'r'esults event. */
+          case 'r':
+            {
+              handle_scan_results_event(conman, pfds->fd);
+              return;
+            }
+
+          /* Connection 'E'stablished event. */
+          case 'E':
+            {
+              __conman_send_boardcast_event(conman,
+                                            CONMAN_EVENT_CONNECTION_ESTABLISHED,
+                                            NULL, 0);
+              return;
+            }
+
+          /* Connection 'L'ost event. */
+          case 'L':
+            {
+              __conman_send_boardcast_event(conman,
+                                            CONMAN_EVENT_LOST_CONNECTION,
+                                            NULL, 0);
+              return;
+            }
+
+          /* Connection request 'F'ailed event. */
+          case 'F':
+            {
+              __conman_send_boardcast_event(conman,
+                                            CONMAN_EVENT_CONNECTION_REQUEST_FAILED,
+                                            NULL, 0);
+              return;
+            }
+        }
+    }
 }

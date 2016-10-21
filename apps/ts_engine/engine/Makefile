@@ -1,7 +1,7 @@
 ############################################################################
-# apps/ts_engine/engine/Makefile
+# apps/thingsee/engine/Makefile
 #
-#   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+#   Copyright (C) 2014-2016 Haltian Ltd.
 #   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
 #
 # Redistribution and use in source and binary forms, with or without
@@ -37,61 +37,107 @@
 -include $(TOPDIR)/Make.defs
 include $(APPDIR)/Make.defs
 
+# Thingsee engine
+
+ASRCS  =
+CSRCS  = main.c parse.c parse_labels.c execute.c sense.c util.c client.c
+CSRCS += shutdown.c
+CSRCS += log.c
+CSRCS += alloc_dbg.c
+CSRCS += time_from_file.c
+CSRCS += value.c
+CSRCS += geofence.c
+CSRCS += $(wildcard *button.c)
+
+ifeq ($(CONFIG_ARCH_SIM),y)
+  CSRCS += sense_sim.c
+else
+  CSRCS += sense_group_hw_keys.c
+  CSRCS += sense_group_acceleration.c
+  CSRCS += sense_group_orientation.c
+  CSRCS += sense_group_location.c
+  CSRCS += sense_group_energy.c
+  CSRCS += sense_group_time.c
+  CSRCS += sense_ambient_light.c
+  CSRCS += sense_hts221.c
+  CSRCS += sense_lps25h.c
+  CSRCS += device_property.c
+  CSRCS += cloud_property.c
+  CSRCS += hwwdg.c
+  CSRCS += watchdog.c
+
+  CSRCS += ../../thingsee/nineaxls/lsm9ds1_module.c # FIXME
+  CSRCS += ../../thingsee/nineaxls/ts_nineaxls_fusion.c # FIXME
+  CSRCS += ../../thingsee/nineaxls/ts_nineaxls_quaternion.c # FIXME
+
+  ifeq ($(CONFIG_THINGSEE_UI), y)
+    CSRCS += ../../thingsee/ui/thingsee_ui.c # FIXME
+    CSRCS += ../../thingsee/ui/ui_bitmaps.c # FIXME
+    CSRCS += ../../thingsee/ui/ui_battery.c # FIXME
+    CFLAGS += -I../../thingsee/ui # FIXME
+  endif
+  
+  CSRCS += ../../system/ubgps/ubgps.c # FIXME
+  CSRCS += ../../system/ubgps/ubgps_internal.c # FIXME
+  CSRCS += ../../system/ubgps/ubgps_state.c # FIXME
+  CSRCS += ../../system/ubgps/ubx.c # FIXME
+endif
+
+ifeq ($(CONFIG_THINGSEE_CONNECTORS),y)
+  CSRCS  += connector.c
+endif
+
+JSONS = profile.jsn
+
+JSONCSRCS	= $(JSONS:.jsn=.c)
+CSRCS		+= $(JSONCSRCS)
+
+CFLAGS += -I..
+
+AOBJS		= $(ASRCS:.S=$(OBJEXT))
+COBJS		= $(CSRCS:.c=$(OBJEXT))
+
+SRCS		= $(ASRCS) $(CSRCS) $(JSONS)
+OBJS		= $(AOBJS) $(COBJS)
+
+ifeq ($(CONFIG_WINDOWS_NATIVE),y)
+  BIN		= ..\..\libapps$(LIBEXT)
+else
+ifeq ($(WINTOOL),y)
+  BIN		= ..\\..\\libapps$(LIBEXT)
+else
+  BIN		= ../../libapps$(LIBEXT)
+endif
+endif
+
+ROOTDEPPATH	= --dep-path .
+
 # built-in application info
 
 APPNAME = ts_engine
 PRIORITY = SCHED_PRIORITY_DEFAULT
-STACKSIZE = 2048
-
-OBJS = ${shell ar t libtsengine.a.nocleanup}
-
-ifeq ($(CONFIG_WINDOWS_NATIVE),y)
-  BIN = ..\..\libapps$(LIBEXT)
-else
-ifeq ($(WINTOOL),y)
-  BIN = ..\\..\\libapps$(LIBEXT)
-else
-  BIN = ../../libapps$(LIBEXT)
-endif
-endif
-
-ifeq ($(WINTOOL),y)
-  INSTALL_DIR = "${shell cygpath -w $(BIN_DIR)}"
-else
-  INSTALL_DIR = $(BIN_DIR)
-endif
-
-CONFIG_TS_ENGINE_PROGNAME ?= ts_engine$(EXEEXT)
-PROGNAME = $(CONFIG_TS_ENGINE_PROGNAME)
-
-ROOTDEPPATH = --dep-path .
+STACKSIZE = (4 * 1024)
 
 # Common build
 
-VPATH =
+VPATH		=
 
 all: .built
 .PHONY: clean depend distclean
 
-$(OBJS):
-	$(Q) ar x libtsengine.a.nocleanup
+$(AOBJS): %$(OBJEXT): %.S
+	$(call ASSEMBLE, $<, $@)
+
+$(COBJS): %$(OBJEXT): %.c
+	$(call COMPILE, $<, $@)
+
+$(JSONCSRCS): %.c: %.jsn
+	cat $< | tr -d ' \n\r' > $<.tmp && /bin/echo -n -e \\x00 >> $<.tmp && xxd -i $<.tmp $@ && rm $<.tmp
+	sed -e 's/unsigned/const unsigned/g' $@ > $@.tmp && mv $@.tmp $@
 
 .built: $(OBJS)
 	$(call ARCHIVE, $(BIN), $(OBJS))
 	@touch .built
-
-ifeq ($(CONFIG_BUILD_KERNEL),y)
-$(BIN_DIR)$(DELIM)$(PROGNAME): $(OBJS) $(MAINOBJ)
-	@echo "LD: $(PROGNAME)"
-	$(Q) $(LD) $(LDELFFLAGS) $(LDLIBPATH) -o $(INSTALL_DIR)$(DELIM)$(PROGNAME) $(ARCHCRT0OBJ) $(MAINOBJ) $(LDLIBS)
-	$(Q) $(NM) -u  $(INSTALL_DIR)$(DELIM)$(PROGNAME)
-
-install: $(BIN_DIR)$(DELIM)$(PROGNAME)
-
-else
-install:
-
-endif
 
 ifeq ($(CONFIG_NSH_BUILTIN_APPS),y)
 $(BUILTIN_REGISTRY)$(DELIM)$(APPNAME)_main.bdat: $(DEPCONFIG) Makefile

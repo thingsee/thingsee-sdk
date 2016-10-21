@@ -161,7 +161,6 @@
 #define UBX_NAV_DOP                   0x04
 #define UBX_NAV_POSECEF               0x01
 #define UBX_NAV_POSLLH                0x02
-#define UBX_NAV_PVT                   0x07
 #define UBX_NAV_SBAS                  0x32
 #define UBX_NAV_SOL                   0x06
 #define UBX_NAV_STATUS                0x03
@@ -170,6 +169,16 @@
 #define UBX_NAV_TIMEUTC               0x21
 #define UBX_NAV_VELECEF               0x11
 #define UBX_NAV_VELDED                0x12
+
+#define UBX_NAV_PVT                   0x07
+#define NAV_FLAG_FIX_OK               (1 << 0)
+#define NAV_FLAG_DIFF                 (1 << 1)
+#define NAV_FLAG_PSM_EN               (1 << 2)
+#define NAV_FLAG_PSM_ACQ              (2 << 2)
+#define NAV_FLAG_PSM_TRK              (3 << 2)
+#define NAV_FLAG_PSM_POT              (4 << 2)
+#define NAV_FLAG_PSM_INA              (5 << 2)
+#define NAV_FLAG_HEADING_VALID        (1 << 5)
 
 /* UBX AID class (0x0B) message id's */
 
@@ -228,7 +237,7 @@ typedef enum ubx_state_e ubx_state_t;
 
 /* Maximum UBX message payload length */
 
-#define UBX_MSG_MAX_PAYLOAD_LENGTH    256
+#define UBX_MSG_MAX_PAYLOAD_LENGTH    1024
 
 /****************************************************************************
  * Public Types

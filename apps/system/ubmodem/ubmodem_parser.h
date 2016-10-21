@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_parser.h
  *
- *   Copyright (C) 2014-2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,13 +62,20 @@
 #endif
 
 #ifdef CONFIG_UBMODEM_USRSOCK
-#  define NUM_USRSOCK_URC_HANDLERS 2
+#  define NUM_USRSOCK_URC_HANDLERS 3
 #else
 #  define NUM_USRSOCK_URC_HANDLERS 0
 #endif
 
-#define NUM_COMMAND_HANDLERS (4 + NUM_USRSOCK_URC_HANDLERS + NUM_VOICE_URC_HANDLERS)
-#define MAX_RESPONSE_STREAM_LEN (1024 * 3 / 4)
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+#  define NUM_FTP_URC_HANDLERS 1
+#else
+#  define NUM_FTP_URC_HANDLERS 0
+#endif
+
+#define NUM_COMMAND_HANDLERS (4 + NUM_USRSOCK_URC_HANDLERS + \
+                              NUM_VOICE_URC_HANDLERS + NUM_FTP_URC_HANDLERS)
+#define MAX_RESPONSE_STREAM_LEN (1024 + 32)
 
 /* Allow unaligned memory accesses when supported by HW. */
 

@@ -1,8 +1,9 @@
 /****************************************************************************
  * apps/include/system/ubmodem.h
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
+ *   Author: Sila Kayo <sila.kayo@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,9 +42,18 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <nuttx/compiler.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <netinet/in.h>
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* Maximum filename length (as defined in u-blox AT command manual). */
+
+#define UBMODEM_FILESYSTEM_NAME_MAX_LEN 47
 
 /****************************************************************************
  * Type Declarations
@@ -62,7 +72,7 @@ enum ubmodem_func_level_e
   UBMODEM_LEVEL_POWERED_ON,           /* Powered on (initial state after boot) */
   UBMODEM_LEVEL_CMD_PROMPT,           /* AT command prompt initialized */
   UBMODEM_LEVEL_SIM_ENABLED,          /* SIM card set up / PIN entered */
-  UBMODEM_LEVEL_NETWORK,              /* GPS network connected */
+  UBMODEM_LEVEL_NETWORK,              /* GSM network connected */
   UBMODEM_LEVEL_GPRS,                 /* GPRS/Internet connected */
   __UBMODEM_LEVEL_MAX
 };
@@ -76,9 +86,13 @@ enum ubmodem_event_flags_e
   UBMODEM_EVENT_FLAG_FAILED_LEVEL_TRANSITION = 1 << 2,
   UBMODEM_EVENT_FLAG_IP_ADDRESS              = 1 << 3,
   UBMODEM_EVENT_FLAG_CELL_LOCATION           = 1 << 4,
-  UBMODEM_EVENT_FLAG_CALL_RINGING            = 1 << 5,
-  UBMODEM_EVENT_FLAG_CALL_ACTIVE             = 1 << 6,
-  UBMODEM_EVENT_FLAG_CALL_DISCONNECTED       = 1 << 7,
+  UBMODEM_EVENT_FLAG_CELL_ENVIRONMENT        = 1 << 5,
+  UBMODEM_EVENT_FLAG_CALL_RINGING            = 1 << 6,
+  UBMODEM_EVENT_FLAG_CALL_ACTIVE             = 1 << 7,
+  UBMODEM_EVENT_FLAG_CALL_DISCONNECTED       = 1 << 8,
+  UBMODEM_EVENT_FLAG_FTP_DOWNLOAD_STATUS     = 1 << 9,
+  UBMODEM_EVENT_FLAG_FILESYSTEM_OPER_COMPLETE= 1 << 10,
+  UBMODEM_EVENT_FLAG_ERROR                   = 1 << 11,
 
   /* Debug traces. */
 
@@ -90,6 +104,20 @@ enum ubmodem_event_flags_e
   UBMODEM_EVENT_FLAG_TRACE_DATA_FROM_MODEM   = 1 << 31,
 };
 
+/* Error event types */
+
+enum ubmodem_error_event_e
+{
+  UBMODEM_ERROR_STARTUP_VOLTAGE_TOO_LOW      = 0,
+};
+
+/* Filesystem operation types */
+
+enum ubmodem_filesystem_oper_e
+{
+  MODEM_FILESYSTEM_DELETE = 1,
+};
+
 /* Info types for 'ubmodem_get_info' */
 
 typedef enum ubmodem_info_type
@@ -99,6 +127,7 @@ typedef enum ubmodem_info_type
   UB_INFO_ICCID,
   UB_INFO_MSISDN_1,
   UB_INFO_UDOPN,
+  UB_INFO_MCC_MNC,
 } ubmodem_info_type_t;
 
 /* Event data structure for UBMODEM_EVENT_FLAG_NEW_LEVEL. */
@@ -160,6 +189,10 @@ struct ubmodem_event_cell_location_s
 {
   struct
   {
+    /* Got date/time? */
+
+    bool valid;
+
     /* Year */
 
     int year;
@@ -183,10 +216,14 @@ struct ubmodem_event_cell_location_s
     /* Seconds */
 
     int sec;
-  } date;
+  } date packed_struct;
 
   struct
   {
+    /* Got location? */
+
+    bool valid;
+
     /* Latitude as degrees */
 
     double latitude;
@@ -202,8 +239,77 @@ struct ubmodem_event_cell_location_s
     /* Accuracy estimate in meters */
 
     int32_t accuracy;
-  } location;
+  } location packed_struct;
+} packed_struct;
+
+/* Event data structure for UBMODEM_EVENT_FLAG_CELL_ENVIRONMENT. */
+
+enum ubmodem_rat_type_e
+{
+  UBMODEM_RAT_GSM = 0,
+  UBMODEM_RAT_UMTS,
+  __UBMODEM_RAT_MAX,
 };
+
+struct ubmodem_event_cell_env_neighbor_s
+{
+  bool have_mcc_mnc_lac:1;
+  bool have_cellid:1;
+  bool have_bsic:1;
+  bool have_arfcn:1;
+  bool have_sc:1;
+  bool have_signal_dbm:1;
+  enum ubmodem_rat_type_e rat;
+  uint16_t mcc;
+  uint16_t mnc;
+  uint16_t lac;
+  uint32_t cell_id;
+  uint8_t bsic; /* GSM only */
+  uint16_t arfcn;
+  uint16_t sc; /* UMTS only */
+  /* UMTS: "-115 + <rscp_lev>", GSM: "-110 + <rxlev>" */
+  int16_t signal_dbm;
+} packed_struct;
+
+#define UBMODEM_MAX_CELL_ENVIRONMENT_NEIGHBORS 32
+
+struct ubmodem_event_cell_environment_s
+{
+  bool have_signal_qual:1;
+  bool have_serving:1;
+
+  struct
+  {
+    int16_t rssi; /* dBm */
+    int8_t qual;  /* range: 0..7 */
+  } signal_qual;
+
+  struct
+  {
+    enum ubmodem_rat_type_e rat;
+    uint16_t mcc;
+    uint16_t mnc;
+    uint16_t lac;
+    uint32_t cell_id;
+    uint8_t bsic; /* GSM only */
+    uint16_t arfcn;
+    uint16_t sc; /* UMTS only */
+    /* UMTS: "-115 + <rscp_lev>", GSM: "-110 + <rxlev>" */
+    int16_t signal_dbm;
+  } serving packed_struct;
+
+  uint8_t num_neighbors;
+  /* Max: UBMODEM_MAX_CELL_ENVIRONMENT_NEIGHBORS */
+  struct ubmodem_event_cell_env_neighbor_s neighbors[];
+} packed_struct;
+
+/* Event data structure for UBMODEM_EVENT_FLAG_FTP_DOWNLOAD_STATUS. */
+
+struct ubmodem_event_ftp_download_status_s
+{
+  bool file_downloaded;
+  void *priv;
+} packed_struct;
 
 enum ubmodem_tcp_conn_event_e
 {
@@ -213,6 +319,23 @@ enum ubmodem_tcp_conn_event_e
   UBMODEM_TCP_EVENT_INPUT_DATA,
   UBMODEM_TCP_EVENT_CLOSED
 };
+
+/* Filesystem operation structure, event data structure for
+ * UBMODEM_EVENT_FLAG_FILESYSTEM_OPER_COMPLETE. */
+
+struct ubmodem_filesystem_oper_s
+{
+  enum ubmodem_filesystem_oper_e type;
+  int result;
+  union
+  {
+    struct
+    {
+      char name[UBMODEM_FILESYSTEM_NAME_MAX_LEN + 1];
+    } delete;
+  } oper;
+} packed_struct;
+
 
 /* Configuration callback function type, used to fetch configuration settings
  * for modem.
@@ -252,6 +375,14 @@ typedef void (*ubmodem_send_sms_cb_t)(struct ubmodem_s *modem,
 
 typedef void (*ubmodem_info_cb_t)(void *priv, const char *data, int datalen,
                                   bool status, ubmodem_info_type_t type);
+
+/* Modem hardware control power-management activity levels. */
+
+enum ubmodem_hw_pm_activity_e
+{
+  UBMODEM_PM_ACTIVITY_LOW = 0,
+  UBMODEM_PM_ACTIVITY_HIGH,
+};
 
 /* Modem hardware control operations structure. */
 
@@ -333,6 +464,50 @@ struct ubmodem_hw_ops_s
    **************************************************************************/
 
   uint32_t (*reset_pin_set)(void *priv, bool set);
+
+  /**************************************************************************
+   * Name: ubmodem_hw_ops_s->pm_set_activity
+   *
+   * Description:
+   *   Control low/high activity state for power-management
+   *
+   * Input Parameters:
+   *   type: activity type (high/low)
+   *   set:  set activity or unset activity by one step
+   *
+   **************************************************************************/
+
+  void (*pm_set_activity)(void *priv, enum ubmodem_hw_pm_activity_e type,
+                          bool set);
+};
+
+/* Modem FTP download parameters structure. */
+
+struct ubmodem_ftp_download_s
+{
+  /* FTP server hostname */
+
+  const char *hostname;
+
+  /* Login user-name */
+
+  const char *username;
+
+  /* Login password */
+
+  const char *password;
+
+  /* Path to source file on FTP server */
+
+  const char *filepath_src;
+
+  /* Path to destination file on modem internal filesystem */
+
+  const char *filepath_dst;
+
+  /* Caller private structure */
+
+  void *priv;
 };
 
 /****************************************************************************
@@ -346,14 +521,63 @@ struct ubmodem_hw_ops_s
  *   Ask modem to perform CellLocate work. Modem must be in GPRS level.
  *
  * Input Parameters:
- *   None.
+ *   modem           : Modem structure
+ *   locate_timeout  : Timeout period (in seconds)
+ *   allowed_accuracy: Target accuracy (in meters)
  *
  * Returned valued:
  *   ERROR if failed, OK on success.
  *
  ****************************************************************************/
 
-int ubmodem_start_cell_locate(struct ubmodem_s *modem);
+int ubmodem_start_cell_locate(struct ubmodem_s *modem, int locate_timeout,
+                              int target_accuracy);
+
+/****************************************************************************
+ * Name: ubmodem_cell_locate_give_location_aid
+ *
+ * Description:
+ *   Give modem external location information to aid Cell-Locate (+ULOCAID).
+ *   Modem will send this information to u-blox CellLocate servers and
+ *   potentially improve CellLocate database over time.
+ *
+ * Input Parameters:
+ *   modem    : Modem structure
+ *   time     : UTC timestamp of aided location
+ *   latitude : Estimated latitude in degrees
+ *   longitude: Estimated longitude in degrees
+ *   altitude : Estimated altitude in meters
+ *   accuracy : Estimated accuracy in meters
+ *   speed    : Estimated speed in meters per second
+ *   direction: Estimated direction of speed in degrees (north zero, clockwise)
+ *
+ * Returned valued:
+ *   ERROR if failed, OK on success.
+ *
+ ****************************************************************************/
+
+int ubmodem_cell_locate_give_location_aid(struct ubmodem_s *modem,
+                                          time_t time, double latitude,
+                                          double longitude, int altitude,
+                                          unsigned int accuracy,
+                                          unsigned int speed,
+                                          unsigned int direction);
+
+/****************************************************************************
+ * Name: ubmodem_request_cell_environment
+ *
+ * Description:
+ *   Ask cell environment information from modem
+ *
+ * Input Parameters:
+ *   modem           : Modem structure
+ *
+ * Returned valued:
+ *   ERROR if failed, OK on success.
+ *
+ ****************************************************************************/
+
+int ubmodem_request_cell_environment(struct ubmodem_s *modem);
 
 /****************************************************************************
  * Name: ubmodem_register_event_listener
@@ -503,6 +727,46 @@ int ubmodem_send_sms(struct ubmodem_s *modem, const char *receiver,
 
 #endif /* CONFIG_UBMODEM_SMS_ENABLED */
 
+#ifdef CONFIG_UBMODEM_FTP_ENABLED
+
+/****************************************************************************
+ * Name: ubmodem_ftp_download_file
+ *
+ * Description:
+ *   Retrieve a file from FTP server.
+ *
+ * Input Parameters:
+ *   modem : Pointer for modem library object from ubmodem_initialize
+ *   ftp   : FTP configuration parameters
+ *   priv  : caller private data pointer
+ *
+ * Returned valued:
+ *   ERROR if failed, OK on success.
+ *
+ ****************************************************************************/
+
+int ubmodem_ftp_download_file(struct ubmodem_s *modem,
+                              struct ubmodem_ftp_download_s *ftp, void *priv);
+
+#endif /* CONFIG_UBMODEM_FTP_ENABLED */
+
+/****************************************************************************
+ * Name: ubmodem_filesystem_delete
+ *
+ * Description:
+ *   Delete file in modem filesystem
+ *
+ * Input Parameters:
+ *   modem           : Modem structure
+ *   filename        : Name of file to delete
+ *
+ * Returned valued:
+ *   ERROR if failed, OK on successfully start of task.
+ *
+ ****************************************************************************/
+
+int ubmodem_filesystem_delete(struct ubmodem_s *modem, const char *filename);
+
 #ifdef CONFIG_UBMODEM_VOICE
 
 /****************************************************************************
@@ -544,6 +808,19 @@ void ubmodem_voice_hangup(struct ubmodem_s *modem);
  ****************************************************************************/
 
 void ubmodem_audio_setup(struct ubmodem_s *modem, bool out_on, bool in_on);
+
+/****************************************************************************
+ * Name: __ubmodem_audio_cleanup
+ *
+ * Description:
+ *  Audio setup cleanup
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+void ubmodem_audio_cleanup(struct ubmodem_s *modem);
 
 #endif /* CONFIG_UBMODEM_VOICE */
 

@@ -96,6 +96,7 @@ struct lps25h_dev_t
   {
     struct i2c_dev_s *i2c;
     uint8_t addr;
+    bool irqenabled;
     volatile bool int_pending;
     sem_t devsem;
     sem_t waitsem;
@@ -285,6 +286,7 @@ static int lps25h_open(FAR struct file *filep)
   lps25h_dbg("WHO_AM_I: 0x%2x\n", value);
 
   priv->config->irq_enable(priv->config, true);
+  priv->irqenabled = true;
 
 out:
   sem_post(&priv->devsem);
@@ -303,6 +305,7 @@ static int lps25h_close(FAR struct file *filep)
     }
 
   priv->config->irq_enable(priv->config, false);
+  priv->irqenabled = false;
   ret = lps25h_power_on_off(priv, false);
   lps25h_dbg("CLOSED\n");
 
@@ -379,6 +382,11 @@ static int lps25h_one_shot(struct lps25h_dev_t *dev)
   int retries;
   struct timespec abstime;
   irqstate_t flags;
+
+  if (!dev->irqenabled)
+    {
+      lps25h_dbg("IRQ disabled!\n");
+    }
 
   /* Retry one-shot measurement multiple times. */
 
@@ -633,6 +641,7 @@ int lps25h_register(FAR const char *devpath, FAR struct i2c_dev_s *i2c,
     }
   priv->config->irq_attach(config, lps25h_int_handler);
   priv->config->irq_enable(config, false);
+  priv->irqenabled = false;
 
   return OK;
 }

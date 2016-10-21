@@ -38,14 +38,52 @@
 #include <sys/types.h>
 #include <debug.h>
 
-#if   defined(CONFIG_LSM9DS1_SENS)
+#ifdef CONFIG_GAM9AXEL_SENS
+#  include "lsm9ds0_module.h"
+#elif defined(CONFIG_LSM9DS1_SENS)
 #  include "lsm9ds1_module.h"
 #  include "ts_nineaxls_fusion.h"
 #else
 #  error "What sensor module do you want?"
 #endif
 
-#if   defined(CONFIG_LSM9DS1_SENS)
+#ifdef CONFIG_GAM9AXEL_SENS
+static int lsm9ds0_main(void)
+{
+  int ret = OK;
+  uint8_t gyro_id = 0;
+  uint8_t acc_mag_id = 0;
+  uint16_t acc_xyz[3] = { 0 };
+  uint16_t magn_xyz[3] = { 0 };
+  uint8_t sts_reg_m = 0;
+  uint8_t int_src_reg_m = 0;
+  uint8_t sts_reg_a = 0;
+  uint8_t int_gen_1_src = 0;
+  uint8_t int_gen_2_src = 0;
+
+  nineax_lsm9ds0_start();
+  nineax_lsm9ds0_who_am_i(&gyro_id, &acc_mag_id);
+  lldbg("Read ids: 0x%02X 0x%02X\n", gyro_id, acc_mag_id);
+
+  nineax_lsm9ds0_config_xm();
+  while (1)
+    {
+      nineax_lsm9ds0_read_status_xm(&sts_reg_m, &int_src_reg_m, &sts_reg_a,
+                                    &int_gen_1_src, &int_gen_2_src);
+      nineax_lsm9ds0_wait_for_sensor();
+      nineax_lsm9ds0_read_xm(magn_xyz, acc_xyz);
+      lldbg("Raw data, MAGN: 0x%04X, 0x%04X, 0x%04X. ACC: 0x%04X, 0x%04X, 0x%04X\n",
+         magn_xyz[0], magn_xyz[1], magn_xyz[2], acc_xyz[0], acc_xyz[1],
+         acc_xyz[2]);
+    }
+  nineax_lsm9ds0_self_test_xm();
+  nineax_lsm9ds0_self_test_gyro();
+  nineax_lsm9ds0_stop();
+
+  return ret;
+}
+
+#elif defined(CONFIG_LSM9DS1_SENS)
 
 static int lsm9ds1_main(void)
 {
@@ -139,7 +177,9 @@ static int lsm9ds1_main(void)
 
 int ts_nineaxls_main(void)
 {
-#if   defined(CONFIG_LSM9DS1_SENS)
+#ifdef CONFIG_GAM9AXEL_SENS
+  return lsm9ds0_main();
+#elif defined(CONFIG_LSM9DS1_SENS)
   return lsm9ds1_main();
 #endif
 }

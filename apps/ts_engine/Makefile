@@ -1,7 +1,7 @@
 ############################################################################
 # apps/ts_engine/Makefile
 #
-#   Copyright (C) 2015 Haltian ltd. All rights reserved.
+#   Copyright (C) 2015-2016 Haltian Ltd.
 #   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,42 +33,27 @@
 #
 ############################################################################
 
--include $(TOPDIR)/.config	# Current configuration
+-include $(TOPDIR)/.config # Current configuration
 
 # Sub-directories
 
-SUBDIRS = engine
-
-ifeq ($(CONFIG_THINGSEE_CONNECTOR_TS),y)
-SUBDIRS += ts-connector
-CNTXTDIRS += ts-connector
+ifeq ($(CONFIG_THINGSEE_ENGINE),y)
+SUBDIRS += engine
+CNTXTDIRS += engine
 endif
 
-ifeq ($(CONFIG_THINGSEE_CONNECTOR_KII),y)
-SUBDIRS += kii-connector
-CNTXTDIRS += kii-connector
+ifeq ($(CONFIG_THINGSEE_ENGINE_CONTROL),y)
+SUBDIRS += control
+CNTXTDIRS += control
 endif
 
-ifeq ($(CONFIG_THINGSEE_CONNECTOR_MESHBLU),y)
-SUBDIRS += meshblu-connector
-CNTXTDIRS += meshblu-connector
+ifeq ($(CONFIG_THINGSEE_CONNECTORS),y)
+SUBDIRS += connectors
+CNTXTDIRS += connectors
 endif
-
-# Create the list of installed runtime modules (INSTALLED_DIRS)
-
-ifeq ($(CONFIG_WINDOWS_NATIVE),y)
-define ADD_DIRECTORY
-  INSTALLED_DIRS  += $(if $(wildcard .\$1\Makefile),$1,)
-endef
-else
-define ADD_DIRECTORY
-  INSTALLED_DIRS  += $(if $(wildcard ./$1/Makefile),$1,)
-endef
-endif
-
-$(foreach DIR, $(SUBDIRS), $(eval $(call ADD_DIRECTORY,$(DIR))))
 
 all: nothing
+
 .PHONY: nothing context depend clean distclean
 
 define SDIR_template
@@ -76,18 +61,20 @@ $(1)_$(2):
 	$(Q) $(MAKE) -C $(1) $(2) TOPDIR="$(TOPDIR)" APPDIR="$(APPDIR)"
 endef
 
-$(foreach SDIR, $(INSTALLED_DIRS), $(eval $(call SDIR_template,$(SDIR),depend)))
-$(foreach SDIR, $(INSTALLED_DIRS), $(eval $(call SDIR_template,$(SDIR),clean)))
-$(foreach SDIR, $(INSTALLED_DIRS), $(eval $(call SDIR_template,$(SDIR),distclean)))
+$(foreach SDIR, $(CNTXTDIRS), $(eval $(call SDIR_template,$(SDIR),context)))
+$(foreach SDIR, $(SUBDIRS), $(eval $(call SDIR_template,$(SDIR),depend)))
+$(foreach SDIR, $(SUBDIRS), $(eval $(call SDIR_template,$(SDIR),clean)))
+$(foreach SDIR, $(SUBDIRS), $(eval $(call SDIR_template,$(SDIR),distclean)))
 
 nothing:
 
-install:
+context: $(foreach SDIR, $(CNTXTDIRS), $(SDIR)_context)
 
-context:
+depend: $(foreach SDIR, $(SUBDIRS), $(SDIR)_depend)
 
-depend: $(foreach SDIR, $(INSTALLED_DIRS), $(SDIR)_depend)
+clean: $(foreach SDIR, $(SUBDIRS), $(SDIR)_clean)
 
-clean: $(foreach SDIR, $(INSTALLED_DIRS), $(SDIR)_clean)
+distclean: $(foreach SDIR, $(SUBDIRS), $(SDIR)_distclean)
 
-distclean: $(foreach SDIR, $(INSTALLED_DIRS), $(SDIR)_distclean)
+-include Make.dep
+

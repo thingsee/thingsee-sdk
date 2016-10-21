@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_voice_config.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -76,6 +76,7 @@ static const struct at_cmd_def_s cmd_ATpUGPIOC =
   .name         = "+UGPIOC",
   .resp_format  = NULL,
   .resp_num     = 0,
+  .timeout_dsec = 10 * 10,
 };
 
 #endif /*UBMODEM_AUDIO_OUT_CTRL_GPIO*/

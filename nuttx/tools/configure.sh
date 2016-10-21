@@ -127,13 +127,14 @@ fi
 src_config="${configpath}/defconfig"
 dest_config="${TOPDIR}/.config"
 
+inherit_script="${TOPDIR}/tools/defconfig_inheritance.sh"
+src_config=$(${inherit_script} ${src_config})
+
 if [ ! -r "${src_config}" ]; then
   echo "File \"${src_config}\" does not exist"
   exit 6
 fi
 
-inherit_script="${TOPDIR}/tools/defconfig_inheritance.sh"
-${inherit_script} ${src_config}
 
 # Extract values needed from the defconfig file.  We need:
 # (1) The CONFIG_WINDOWS_NATIVE setting to know it this is target for a

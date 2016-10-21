@@ -65,9 +65,16 @@ typedef enum bq24251_current_t
     BQ24251_ILIM_NO_LIMIT
   } bq24251_current_t;
 
+typedef enum bq24251_current_term_limit_t
+  {
+    BQ24251_ITERM_DEFAULT = 0,
+    BQ24251_ITERM_25MA = (1 << 0),
+    BQ24251_ITERM_50MA = (1 << 1),
+    BQ24251_ITERM_100MA = (1 << 2)
+  } bq24251_current_term_limit_t;
+
 typedef enum bq24251_ioc_t
   {
-    BQ24251_IOC_RESET = 0,
     BQ24251_IOC_INIT,
     BQ24251_IOC_CHK_CHRG_STS,
     BQ24251_IOC_START_USBDET,
@@ -121,6 +128,7 @@ typedef struct bq24251_data_t
     bq24251_current_t ilim;
     bq24251_chrg_type_t chrg_type;
     bq24251_charger_current_t chrg_current;
+    bq24251_current_term_limit_t term_current;
     bool enable_hz:1;
     bool enable_ce:1;
     bool enable_term:1;

@@ -1,0 +1,222 @@
+/****************************************************************************
+ * apps/thingsee/engine/sense.h
+ *
+ * Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ * 3. Neither the name NuttX nor the names of its contributors may be
+ *    used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+ * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+ * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Authors:
+ *   Pekka Ervasti <pekka.ervasti@haltian.com>
+ *
+ ****************************************************************************/
+
+#ifndef __TS_ENGINE_SENSE_H__
+#define __TS_ENGINE_SENSE_H__
+
+#include <apps/netutils/cJSON.h>
+
+typedef int (*sense_init_t)(struct ts_cause *cause);
+typedef int (*sense_uninit_t)(struct ts_cause *cause);
+typedef int (*sense_read_t)(struct ts_cause *cause);
+typedef int (*sense_init_irq_t)(struct ts_cause *cause);
+typedef int (*sense_uninit_irq_t)(struct ts_cause *cause);
+
+struct ts_sense_info
+{
+  sense_id_t sId;
+  const char * const name;
+
+  struct ts_value min;
+  struct ts_value max;
+  int32_t min_interval;
+
+  struct
+  {
+    struct
+    {
+      sense_init_irq_t init;
+      sense_uninit_irq_t uninit;
+    } irq;
+    struct{
+      sense_init_t init;
+      sense_init_t uninit;
+      sense_read_t read;
+    } active;
+  } ops;
+};
+
+#define RESERVED				0x00
+#define INDEX					0x00
+
+#define GROUP_ID_LOCATION			0x01
+#define GROUP_ID_SPEED				0x02
+#define GROUP_ID_ENERGY				0x03
+#define GROUP_ID_ORIENTATION			0x04
+#define GROUP_ID_ACCELERATION			0x05
+#define GROUP_ID_ENVIRONMENT			0x06
+#define GROUP_ID_HW_KEYS			0x07
+#define GROUP_ID_TIME				0x08
+#define GROUP_ID_LAST				GROUP_ID_TIME
+
+#define PROPERTY_ID_LATITUDE			0x01
+#define PROPERTY_ID_LONGITUDE			0x02
+#define PROPERTY_ID_ALTITUDE			0x03
+#define PROPERTY_ID_ACCURACY			0x04
+#define PROPERTY_ID_IS_INSIDE_GEOFENCE          0x05
+#define PROPERTY_ID_GPS_TIMESTAMP		0x06
+#define PROPERTY_ID_LATLON			0x07
+#define PROPERTY_ID_LOCATION_LAST		PROPERTY_ID_LATLON
+
+#define PROPERTY_ID_GROUND_SPEED		0x01
+#define PROPERTY_ID_AIR_SPEED			0x02
+#define PROPERTY_ID_SPEED_LAST			PROPERTY_ID_AIR_SPEED
+
+#define PROPERTY_ID_BATTERY_FULL_CAPACITY	0x01
+#define PROPERTY_ID_CURRENT_LEVEL		0x02
+#define PROPERTY_ID_CURRENT_VOLTAGE		0x03
+#define PROPERTY_ID_CHARGER_IS_CONNECTED	0x04
+#define PROPERTY_ID_ENERGY_LAST			PROPERTY_ID_CHARGER_IS_CONNECTED
+
+#define PROPERTY_ID_HEADING			0x01
+#define PROPERTY_ID_YAW				0x02
+#define PROPERTY_ID_PITCH			0x03
+#define PROPERTY_ID_ROLL			0x04
+#define PROPERTY_ID_ANGLE_SPEED_YAW		0x05
+#define PROPERTY_ID_ANGLE_SPEED_PITCH		0x06
+#define PROPERTY_ID_ANGLE_SPEED_ROLL		0x07
+#define PROPERTY_ID_ORIENTATION_LAST		PROPERTY_ID_ANGLE_SPEED_ROLL
+
+#define PROPERTY_ID_LONGITUDINAL		0x01
+#define PROPERTY_ID_LATERAL			0x02
+#define PROPERTY_ID_VERTICAL			0x03
+#define PROPERTY_ID_IMPACT			0x04
+#define PROPERTY_ID_ACCELERATION_LAST		PROPERTY_ID_IMPACT
+
+#define PROPERTY_ID_TEMPERATURE			0x01
+#define PROPERTY_ID_HUMIDITY			0x02
+#define PROPERTY_ID_AMBIENT_LIGHT		0x03
+#define PROPERTY_ID_PRESSURE			0x04
+#define PROPERTY_ID_MAGNETIC_FIELD_LONGITUDINAL	0x05
+#define PROPERTY_ID_MAGNETIC_FIELD_LATERAL	0x06
+#define PROPERTY_ID_MAGNETIC_FIELD_VERTICAL	0x07
+#define PROPERTY_ID_WIND_DIRECTION              0x08
+#define PROPERTY_ID_WIND_SPEED                  0x09
+#define PROPERTY_ID_RAIN_ACCUMULATION           0x0A
+#define PROPERTY_ID_ENVIRONMENT_LAST		PROPERTY_ID_RAIN_ACCUMULATION
+
+#define PROPERTY_ID_POWER_BUTTON_PRESSED	0x01
+#define PROPERTY_ID_HOME_BUTTON_PRESSED		0x02
+#define PROPERTY_ID_HW_KEYS_LAST		PROPERTY_ID_HOME_BUTTON_PRESSED
+
+#define PROPERTY_ID_ALPHANUMERIC_KEYCODE	0x01
+#define PROPERTY_ID_FUNCTION_KEYCODE		0x02
+#define PROPERTY_ID_SYSTEM_KEYCODE		0x03
+#define PROPERTY_ID_EXTENDED_KEYCODE		0x04
+#define PROPERTY_ID_NUMBER_PAD_KEYCODE		0x05
+#define PROPERTY_ID_KEYBOARD_LAST		PROPERTY_ID_NUMBER_PAD_KEYCODE
+
+#define PROPERTY_ID_UNIX_TIME			0x01
+#define PROPERTY_ID_YEAR			0x02
+#define PROPERTY_ID_MONTH			0x03
+#define PROPERTY_ID_DAY				0x04
+#define PROPERTY_ID_HOUR			0x05
+#define PROPERTY_ID_MIN				0x06
+#define PROPERTY_ID_SECOND			0x07
+#define PROPERTY_ID_AIRTIME                     0x08
+#define PROPERTY_ID_TIME_LAST			PROPERTY_ID_AIRTIME
+
+#define SENSE_ID_LATITUDE			((RESERVED << 24) | (GROUP_ID_LOCATION << 16) | (PROPERTY_ID_LATITUDE << 8) | INDEX)
+#define SENSE_ID_LONGITUDE			((RESERVED << 24) | (GROUP_ID_LOCATION << 16) | (PROPERTY_ID_LONGITUDE << 8) | INDEX)
+#define SENSE_ID_ALTITUDE			((RESERVED << 24) | (GROUP_ID_LOCATION << 16) | (PROPERTY_ID_ALTITUDE << 8) | INDEX)
+#define SENSE_ID_ACCURACY			((RESERVED << 24) | (GROUP_ID_LOCATION << 16) | (PROPERTY_ID_ACCURACY << 8) | INDEX)
+#define SENSE_ID_IS_INSIDE_GEOFENCE		((RESERVED << 24) | (GROUP_ID_LOCATION << 16) | (PROPERTY_ID_IS_INSIDE_GEOFENCE << 8) | INDEX)
+#define SENSE_ID_GPS_TIMESTAMP			((RESERVED << 24) | (GROUP_ID_LOCATION << 16) | (PROPERTY_ID_GPS_TIMESTAMP << 8) | INDEX)
+#define SENSE_ID_LATLON				((RESERVED << 24) | (GROUP_ID_LOCATION << 16) | (PROPERTY_ID_LATLON << 8) | INDEX)
+
+#define SENSE_ID_GROUND_SPEED			((RESERVED << 24) | (GROUP_ID_SPEED << 16) | (PROPERTY_ID_GROUND_SPEED << 8) | INDEX)
+#define SENSE_ID_AIR_SPEED			((RESERVED << 24) | (GROUP_ID_SPEED << 16) | (PROPERTY_ID_AIR_SPEED << 8) | INDEX)
+
+#define SENSE_ID_BATTERY_FULL_CAPACITY		((RESERVED << 24) | (GROUP_ID_ENERGY << 16) | (PROPERTY_ID_BATTERY_FULL_CAPACITY << 8) | INDEX)
+#define SENSE_ID_CURRENT_LEVEL			((RESERVED << 24) | (GROUP_ID_ENERGY << 16) | (PROPERTY_ID_CURRENT_LEVEL << 8) | INDEX)
+#define SENSE_ID_CURRENT_VOLTAGE		((RESERVED << 24) | (GROUP_ID_ENERGY << 16) | (PROPERTY_ID_CURRENT_VOLTAGE << 8) | INDEX)
+#define SENSE_ID_CHARGER_IS_CONNECTED		((RESERVED << 24) | (GROUP_ID_ENERGY << 16) | (PROPERTY_ID_CHARGER_IS_CONNECTED << 8) | INDEX)
+
+#define SENSE_ID_HEADING			((RESERVED << 24) | (GROUP_ID_ORIENTATION << 16) | (PROPERTY_ID_HEADING << 8) | INDEX)
+#define SENSE_ID_YAW				((RESERVED << 24) | (GROUP_ID_ORIENTATION << 16) | (PROPERTY_ID_YAW << 8) | INDEX)
+#define SENSE_ID_PITCH				((RESERVED << 24) | (GROUP_ID_ORIENTATION << 16) | (PROPERTY_ID_PITCH << 8) | INDEX)
+#define SENSE_ID_ROLL				((RESERVED << 24) | (GROUP_ID_ORIENTATION << 16) | (PROPERTY_ID_ROLL << 8) | INDEX)
+#define SENSE_ID_ANGLE_SPEED_YAW		((RESERVED << 24) | (GROUP_ID_ORIENTATION << 16) | (PROPERTY_ID_ANGLE_SPEED_YAW << 8) | INDEX)
+#define SENSE_ID_ANGLE_SPEED_PITCH		((RESERVED << 24) | (GROUP_ID_ORIENTATION << 16) | (PROPERTY_ID_ANGLE_SPEED_PITCH << 8) | INDEX)
+#define SENSE_ID_ANGLE_SPEED_ROLL		((RESERVED << 24) | (GROUP_ID_ORIENTATION << 16) | (PROPERTY_ID_ANGLE_SPEED_ROLL << 8) | INDEX)
+
+#define SENSE_ID_LONGITUDINAL			((RESERVED << 24) | (GROUP_ID_ACCELERATION << 16) | (PROPERTY_ID_LONGITUDINAL << 8) | INDEX)
+#define SENSE_ID_LATERAL			((RESERVED << 24) | (GROUP_ID_ACCELERATION << 16) | (PROPERTY_ID_LATERAL << 8) | INDEX)
+#define SENSE_ID_VERTICAL			((RESERVED << 24) | (GROUP_ID_ACCELERATION << 16) | (PROPERTY_ID_VERTICAL << 8) | INDEX)
+#define SENSE_ID_IMPACT				((RESERVED << 24) | (GROUP_ID_ACCELERATION << 16) | (PROPERTY_ID_IMPACT << 8) | INDEX)
+
+#define SENSE_ID_TEMPERATURE			((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_TEMPERATURE << 8) | INDEX)
+#define SENSE_ID_HUMIDITY			((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_HUMIDITY << 8) | INDEX)
+#define SENSE_ID_AMBIENT_LIGHT			((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_AMBIENT_LIGHT << 8) | INDEX)
+#define SENSE_ID_PRESSURE			((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_PRESSURE << 8) | INDEX)
+#define SENSE_ID_MAGNETIC_FIELD_LONGITUDINAL	((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_MAGNETIC_FIELD_LONGITUDINAL << 8) | INDEX)
+#define SENSE_ID_MAGNETIC_FIELD_LATERAL		((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_MAGNETIC_FIELD_LATERAL << 8) | INDEX)
+#define SENSE_ID_MAGNETIC_FIELD_VERTICAL	((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_MAGNETIC_FIELD_VERTICAL << 8) | INDEX)
+#define SENSE_ID_WIND_DIRECTION                 ((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_WIND_DIRECTION << 8) | INDEX)
+#define SENSE_ID_WIND_SPEED                     ((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_WIND_SPEED << 8) | INDEX)
+#define SENSE_ID_RAIN_ACCUMULATION              ((RESERVED << 24) | (GROUP_ID_ENVIRONMENT << 16) | (PROPERTY_ID_RAIN_ACCUMULATION << 8) | INDEX)
+
+#define SENSE_ID_POWER_BUTTON_PRESSED		((RESERVED << 24) | (GROUP_ID_HW_KEYS << 16) | (PROPERTY_ID_POWER_BUTTON_PRESSED << 8) | INDEX)
+#define SENSE_ID_HOME_BUTTON_PRESSED		((RESERVED << 24) | (GROUP_ID_HW_KEYS << 16) | (PROPERTY_ID_HOME_BUTTON_PRESSED << 8) | INDEX)
+
+#define SENSE_ID_UNIX_TIME			((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_UNIX_TIME << 8) | INDEX)
+#define SENSE_ID_YEAR				((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_YEAR << 8) | INDEX)
+#define SENSE_ID_MONTH				((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_MONTH << 8) | INDEX)
+#define SENSE_ID_DAY				((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_DAY << 8) | INDEX)
+#define SENSE_ID_HOUR				((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_HOUR << 8) | INDEX)
+#define SENSE_ID_MIN				((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_MIN << 8) | INDEX)
+#define SENSE_ID_SECOND				((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_SECOND << 8) | INDEX)
+#define SENSE_ID_AIRTIME			((RESERVED << 24) | (GROUP_ID_TIME << 16) | (PROPERTY_ID_AIRTIME << 8) | INDEX)
+
+#define SENSE_ID_INVALID			((uint32_t)~0)
+
+int
+engine_cause_get_value (struct ts_cause *cause);
+
+int
+engine_cause_request_value (struct ts_cause *cause);
+
+const struct ts_sense_info *
+get_sense_info (sense_id_t sense_id);
+
+int
+initialize_sense_lookup (void);
+
+cJSON *
+generate_module_json (void);
+
+#endif

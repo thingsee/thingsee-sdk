@@ -83,16 +83,9 @@
 
 static struct ubgps_s g_gps;
 
-/* GPS state machine names */
+/* A-GPS hint data structure */
 
-static const char * gps_sm_name[__GPS_STATE_MAX] =
-{
-  [GPS_STATE_POWER_OFF]       = "GPS_STATE_POWER_OFF",
-  [GPS_STATE_INITIALIZATION]  = "GPS_STATE_INITIALIZATION",
-  [GPS_STATE_COLD_START]      = "GPS_STATE_COLD_START",
-  [GPS_STATE_SEARCHING_FIX]   = "GPS_STATE_SEARCHING_FIX",
-  [GPS_STATE_FIX_ACQUIRED]    = "GPS_STATE_FIX_ACQUIRED",
-};
+static struct gps_assist_hint_s g_gps_hint;
 
 /****************************************************************************
  * Public Data
@@ -120,7 +113,6 @@ struct ubgps_s *ubgps_initialize(void)
 {
   struct ubgps_s * const gps = &g_gps;
   struct sm_event_s event;
-  int error;
   int ret;
 
   dbg_ubgps("\n");
@@ -132,21 +124,17 @@ struct ubgps_s *ubgps_initialize(void)
       return gps;
     }
 
-  /* Initialize aiding mutex */
-
-  pthread_mutex_init(&g_aid_mutex, NULL);
-
   /* Clear data */
 
   memset(gps, 0, sizeof(struct ubgps_s));
+  gps->hint = &g_gps_hint;
 
   /* Open GPS serial device */
 
   gps->fd = board_gps_initialize();
-  error = get_errno();
   if (gps->fd < 0)
     {
-      dbg("Failed to open GPS device: %d\n", error);
+      dbg("Failed to open GPS device: %d\n", errno);
       return NULL;
     }
 
@@ -155,6 +143,10 @@ struct ubgps_s *ubgps_initialize(void)
   ret = ubgps_set_nonblocking(gps, false);
   if (ret < 0)
     return NULL;
+
+  /* Initialize aiding mutex */
+
+  pthread_mutex_init(&g_aid_mutex, NULL);
 
   /* Initialize GPS state */
 
@@ -184,11 +176,20 @@ struct ubgps_s *ubgps_initialize(void)
 
   gps->nmea.line = malloc(gps->nmea.line_size);
   if (!gps->nmea.line)
-    goto errout_ubx;
+    {
+      dbg("NMEA line alloc failed\n");
+      goto errout_ubx;
+    }
 
   /* Initialize GPS callback queue */
 
   sq_init(&gps->callbacks);
+
+#ifdef CONFIG_UBGPS_ASSIST_UPDATER
+  /* Initialize A-GPS if A-GPS updater enabled. */
+
+  ubgps_set_aiding_params(false, "", 1, false, 0, 0, 0, 0);
+#endif
 
   /* Construct and provess state machine entry event */
 
@@ -452,7 +453,7 @@ int ubgps_config(gps_config_t const config, void const * const value)
               gps->state.current_state == GPS_STATE_FIX_ACQUIRED)
             {
 #ifdef CONFIG_UBGPS_PSM_MODE
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD)
+              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
                 {
                   /* Use default navigation rate for SW controlled PSM */
 
@@ -535,10 +536,12 @@ int ubgps_request_state(gps_state_t const state, uint32_t const timeout)
  ****************************************************************************/
 char const * const ubgps_get_statename(gps_state_t const gps_state)
 {
+  struct ubgps_s * const gps = &g_gps;
+
   if (gps_state < 0 || gps_state >= __GPS_STATE_MAX)
     return NULL;
 
-  return gps_sm_name[gps_state];
+  return ubgps_sm(gps, gps_state)->name;
 }
 
 /*****************************************************************************
@@ -589,9 +592,10 @@ int ubgps_set_aiding_params(bool const use_time,
                              uint32_t const accuracy)
 {
   struct ubgps_s * const gps = &g_gps;
-  int fd;
 
   dbg_ubgps("\n");
+
+  (void)use_time;
 
   /* Free previously set assistance data */
 
@@ -608,31 +612,118 @@ int ubgps_set_aiding_params(bool const use_time,
   if (!gps->assist)
     return ERROR;
 
-  gps->assist->use_time = use_time;
   gps->assist->alp_file = NULL;
   gps->assist->alp_file_id = 0;
 
+#ifdef CONFIG_UBGPS_ASSIST_UPDATER
+  /* Ignore input ALP file, use A-GPS updater provided file instead. */
+
+  (void)alp_file;
+
+  if (ubgps_check_alp_file_validity(ubgps_aid_get_alp_filename()))
+    {
+      /* AlmanacPlus file available */
+
+      gps->assist->alp_file = strdup(ubgps_aid_get_alp_filename());
+      gps->assist->alp_file_id = 1;
+    }
+#else
   if (alp_file)
     {
-      /* Check that AlmanacPlus file is present */
+      /* Check that AlmanacPlus file is present and valid */
 
-      fd = open(alp_file, O_RDONLY);
-      if (fd >= 0)
+      if (ubgps_check_alp_file_validity(alp_file))
         {
-          close(fd);
-
           /* AlmanacPlus file available */
 
           gps->assist->alp_file = strdup(alp_file);
           gps->assist->alp_file_id = alp_file_id;
         }
     }
+#endif
 
-  gps->assist->use_loc = use_loc;
-  gps->assist->latitude = (uint32_t)(latitude * 10000000.0f);
-  gps->assist->longitude = (uint32_t)(longitude * 10000000.0f);
-  gps->assist->altitude = altitude * 10;
-  gps->assist->accuracy = accuracy * 10;
+  if (use_loc)
+    {
+      if (!g_gps_hint.have_location)
+        {
+          /* Use only if GPS module does not internally already have
+           * location. */
+
+          (void)ubgps_give_location_hint(latitude, longitude, altitude,
+                                         accuracy);
+        }
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: ubgps_give_location_hint
+ *
+ * Description:
+ *   Give location hint for A-GPS
+ *
+ * Input Parameters:
+ *   latitude    - Latitude
+ *   longitude   - Longitude
+ *   altitude    - Altitude in meters
+ *   accuracy    - Horizontal accuracy in meters
+ *
+ * Returned Value:
+ *   Status
+ *
+ ****************************************************************************/
+
+int ubgps_give_location_hint(double const latitude,
+                             double const longitude,
+                             int32_t const altitude,
+                             uint32_t const accuracy)
+{
+  struct timespec currtime = {};
+
+  if (accuracy > HINT_LOCATION_MINIMUM_NEW_ACCURACY)
+    {
+      errno = EINVAL;
+      return ERROR;
+    }
+
+  (void)clock_gettime(CLOCK_MONOTONIC, &currtime);
+
+  if (g_gps_hint.have_location)
+    {
+      uint64_t current_accuracy;
+      uint32_t secs_since = currtime.tv_sec - g_gps_hint.location_time.tv_sec;
+
+      /* Adjust location accuracy by time*speed. */
+
+      current_accuracy = g_gps_hint.accuracy;
+      current_accuracy += ((uint64_t)HINT_LOCATION_ACCURACY_DEGRADE_SPEED_MPS *
+                           secs_since);
+
+      /* Use old location if its accuracy is better than new. Accuracy of
+       * old location data will degrade over time and eventually be overridden
+       * with new location. */
+
+      if (current_accuracy < accuracy)
+        {
+          errno = EALREADY;
+          return ERROR;
+        }
+    }
+
+
+  g_gps_hint.location_time = currtime;
+  g_gps_hint.have_location = true;
+  g_gps_hint.latitude = latitude * 1e7;
+  g_gps_hint.longitude = longitude * 1e7;
+  g_gps_hint.altitude = altitude;
+  g_gps_hint.accuracy = accuracy;
+
+  dbg_ubgps("New location hint:\n");
+  dbg_ubgps(" lat     : %d\n", g_gps_hint.latitude);
+  dbg_ubgps(" long    : %d\n", g_gps_hint.longitude);
+  dbg_ubgps(" alt     : %d meters\n", altitude);
+  dbg_ubgps(" accuracy: %u meters\n", g_gps_hint.accuracy);
 
   return OK;
 }

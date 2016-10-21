@@ -2289,6 +2289,58 @@ config STM32_TIM17_CHANNEL
 		If TIM17 is enabled for PWM usage, you also need specifies the timer output
 		channel {1}
 
+config STM32_TIM2_STEPPER
+	bool "TIM2 stepper"
+	default n
+	depends on STM32_TIM2
+	---help---
+		Reserve timer 2 for use by stepper motor
+
+		Timer devices may be used for different purposes. If STM32_TIM2 is defined
+		then the following may also be defined to indicate that the timer is intended
+		to be used for stepper motor control. Your board configuration will have to
+		provide stepper motor GPIO configuration for TIM2_GPIO_P1_P, TIM2_GPIO_P1_N,
+		TIM2_GPIO_P2_P and TIM2_GPIO_P2_N.
+
+config STM32_TIM3_STEPPER
+	bool "TIM3 stepper"
+	default n
+	depends on STM32_TIM3
+	---help---
+		Reserve timer 3 for use by stepper motor
+
+		Timer devices may be used for different purposes. If STM32_TIM3 is defined
+		then the following may also be defined to indicate that the timer is intended
+		to be used for stepper motor control. Your board configuration will have to
+		provide stepper motor GPIO configuration for TIM3_GPIO_P1_P, TIM3_GPIO_P1_N,
+		TIM3_GPIO_P2_P and TIM3_GPIO_P2_N.
+
+config STM32_TIM4_STEPPER
+	bool "TIM4 stepper"
+	default n
+	depends on STM32_TIM4
+	---help---
+		Reserve timer 4 for use by stepper motor
+
+		Timer devices may be used for different purposes. If STM32_TIM4 is defined
+		then the following may also be defined to indicate that the timer is intended
+		to be used for stepper motor control. Your board configuration will have to
+		provide stepper motor GPIO configuration for TIM4_GPIO_P1_P, TIM4_GPIO_P1_N,
+		TIM4_GPIO_P2_P and TIM4_GPIO_P2_N.
+
+config STM32_TIM5_STEPPER
+	bool "TIM5 stepper"
+	default n
+	depends on STM32_TIM5
+	---help---
+		Reserve timer 5 for use by stepper motor
+
+		Timer devices may be used for different purposes. If STM32_TIM5 is defined
+		then the following may also be defined to indicate that the timer is intended
+		to be used for stepper motor control. Your board configuration will have to
+		provide stepper motor GPIO configuration for TIM5_GPIO_P1_P, TIM5_GPIO_P1_N,
+		TIM5_GPIO_P2_P and TIM5_GPIO_P2_N.
+
 config STM32_TIM1_ADC
 	bool "TIM1 ADC"
 	default n
@@ -2579,13 +2631,13 @@ config STM32_ADC2_TIMTRIG
 	depends on HAVE_ADC2_TIMER
 	---help---
 		Values 0:CC1 1:CC2 2:CC3 3:CC4 4:TRGO
-		
+
 if STM32_STM32L15XX
     config STM32_HAVE_ONLY_EOCIE
     bool "Have only end of conversion interrupt enabled in ADC driver"
     default n
     depends on ADC
-        ---help--- 
+        ---help---
             Workaround to skip IOCTL operations for lazy asses
 endif
 

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_usrsock.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,9 +54,11 @@
 #include <apps/system/ubmodem.h>
 
 #include <nuttx/net/usrsock.h>
+#include <nuttx/random.h>
 
 #include "ubmodem_internal.h"
 #include "ubmodem_usrsock.h"
+#include "ubmodem_hw.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -87,6 +89,17 @@ static const struct at_cmd_def_s urc_ATpUUSORD =
   .resp_num     = 2,
 };
 
+static const struct at_cmd_def_s urc_ATpUUSORF =
+{
+  .name         = "+UUSORF",
+  .resp_format  =
+  (const uint8_t[]){
+    RESP_FMT_INT8,
+    RESP_FMT_INT32
+  },
+  .resp_num     = 2,
+};
+
 static const struct at_cmd_def_s urc_ATpUUSOCL =
 {
   .name         = "+UUSOCL",
@@ -94,17 +107,23 @@ static const struct at_cmd_def_s urc_ATpUUSOCL =
   .resp_num     = 1,
 };
 
-static const struct at_cmd_def_s cmd_ATpUSOCTL_get_lasterror =
+static const struct at_cmd_def_s cmd_ATpUSOER_get_socket_error =
 {
-  .name         = "+USOCTL",
+  .name         = "+USOER",
   .resp_format  =
   (const uint8_t[]){
-    RESP_FMT_INT8,
-    RESP_FMT_INT8,
     RESP_FMT_INT32
   },
-  .resp_num     = 3,
+  .resp_num     = 1,
 };
+
+/****************************************************************************
+ * Private Function Prototypes
+ ****************************************************************************/
+
+static void modem_socket_complete_error(struct ubmodem_s *modem,
+                                        struct modem_socket_s *sock,
+                                        int err);
 
 /****************************************************************************
  * Private Functions
@@ -189,23 +208,13 @@ static void get_socket_error_handler(struct ubmodem_s *modem,
 {
   struct modem_socket_s *sock = priv;
   int32_t error_code;
-  int8_t sockid;
-  int8_t ctlreqid;
   int err;
 
   /*
-   * Response handler for get sockets error, 'AT+USOCTL=<sock>,1'
+   * Response handler for get sockets error, 'AT+USOER'
    */
 
-  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpUSOCTL_get_lasterror);
-
-  if (sock->is_closed || sock->modem_sd < 0)
-    {
-      /* Socket closed, report EPIPE. */
-
-      err = -EPIPE;
-      goto out;
-    }
+  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpUSOER_get_socket_error);
 
   if (resp_status_is_error_or_timeout(info->status) ||
       info->status != RESP_STATUS_OK)
@@ -214,24 +223,6 @@ static void get_socket_error_handler(struct ubmodem_s *modem,
 
       err = -EPIPE;
       goto out;
-    }
-
-  /* Read the sockets number. */
-
-  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &sockid) ||
-      sockid != sock->modem_sd)
-    {
-      MODEM_DEBUGASSERT(modem, false); /* Should not get here. */
-      return;
-    }
-
-  /* Read the sockets control request identifier (should be 1). */
-
-  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &ctlreqid) ||
-      ctlreqid != 1)
-    {
-      MODEM_DEBUGASSERT(modem, false); /* Should not get here. */
-      return;
     }
 
   /* Read the error code. */
@@ -245,8 +236,29 @@ static void get_socket_error_handler(struct ubmodem_s *modem,
   /* Map modem sockets error to system error code. */
 
   err = -modem_socket_error_to_system_errno(error_code);
+  if (err == 0)
+    {
+      /* Got error from socket command, but now USOER reports no error.
+       * Set default error code for unknown error case. */
+
+      err = -EPIPE;
+    }
 
 out:
+  modem_socket_complete_error(modem, sock, err);
+}
+
+/****************************************************************************
+ * Name: modem_socket_complete_error
+ *
+ * Description:
+ *   Completion routine for usrsock command in error case.
+ ****************************************************************************/
+
+static void modem_socket_complete_error(struct ubmodem_s *modem,
+                                        struct modem_socket_s *sock,
+                                        int err)
+{
   /* Some sockets states require special handling after fetching error code. */
 
   switch (sock->state)
@@ -274,6 +286,17 @@ out:
                 err = sock->send.buflen;
               }
           }
+
+        break;
+
+      case MODEM_SOCKET_STATE_CONNECTING:
+        /* Connecting socket failed, adjust error message. */
+
+        if (err == -EPIPE)
+          {
+            err = -ECONNREFUSED;
+          }
+
         break;
 
       default:
@@ -293,7 +316,7 @@ out:
  * Name: urc_socket_read_handler
  *
  * Desciption:
- *   Handler for +UUSORD URC (data received by modem on sockets).
+ *   Handler for +UUSORD/+UUSORF URC (data received by modem on sockets).
  ****************************************************************************/
 
 static void urc_socket_read_handler(struct ubmodem_s *modem,
@@ -310,7 +333,7 @@ static void urc_socket_read_handler(struct ubmodem_s *modem,
    * URC handler for 'data available for sockets on modem'
    */
 
-  MODEM_DEBUGASSERT(modem, cmd == &urc_ATpUUSORD);
+  MODEM_DEBUGASSERT(modem, (cmd == &urc_ATpUUSORD || cmd == &urc_ATpUUSORF));
   MODEM_DEBUGASSERT(modem, info->status == RESP_STATUS_URC);
 
   /* Get sockid. */
@@ -328,6 +351,8 @@ static void urc_socket_read_handler(struct ubmodem_s *modem,
       MODEM_DEBUGASSERT(modem, false); /* Should not get here. */
       return;
     }
+
+  dbg("URC: %s, sockid: %d, available: %d bytes\n", cmd->name, sockid, datalen);
 
   /* Get sockets structure for this sockets. */
 
@@ -353,6 +378,10 @@ static void urc_socket_read_handler(struct ubmodem_s *modem,
 
       return;
     }
+
+#ifdef CONFIG_DEV_RANDOM
+  add_sw_randomness(datalen);
+#endif
 
   /* Update sockets with new available data length. */
 
@@ -536,6 +565,88 @@ static void modem_add_xid_to_poll_off_list(struct ubmodem_s *modem,
 }
 
 /****************************************************************************
+ * Name: modem_socket_error_cmee_handler
+ ****************************************************************************/
+
+static void modem_socket_error_cmee_handler(struct ubmodem_s *modem,
+                                            bool cmee_ok, int cmee_setting,
+                                            void *priv)
+{
+  struct modem_socket_s *sock = priv;
+  int err;
+
+  if (!cmee_ok)
+    {
+      /* CMEE setting not in correctly configured state, do not attempt to
+       * read socket error code. */
+
+      modem_socket_complete_error(modem, sock, -EPIPE);
+
+      /* Modem HW is in unknown state, attempt to recover. */
+
+      err = __ubmodem_recover_stuck_hardware(modem);
+      MODEM_DEBUGASSERT(modem, err != ERROR);
+      return;
+    }
+
+  if (sock->is_closed)
+    {
+      /* Socket was closed (received +UUSOCL URC) before finishing socket
+       * error reading. Report -EPIPE. */
+
+      modem_socket_complete_error(modem, sock, -EPIPE);
+      return;
+    }
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUSOER_get_socket_error,
+                           get_socket_error_handler, sock, "");
+  MODEM_DEBUGASSERT(modem, err == OK);
+}
+
+/****************************************************************************
+ * Name: __ubmodem_do_socket_config
+ *
+ * Description:
+ *   Prepare socket configuration command, such as:
+ *    - set or get socket option
+ *    - bind socket
+ ****************************************************************************/
+
+static void __ubmodem_do_socket_config(struct modem_socket_s *sock)
+{
+  struct ubmodem_s *modem = sock->modem;
+
+  if (sock->is_closed)
+    {
+      /* Socket has been closed, report error. */
+
+      (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, -EBADF);
+
+      __ubsocket_work_done(sock);
+      return;
+    }
+
+  if (sock->req.reqid == USRSOCK_REQUEST_SETSOCKOPT)
+    {
+      __ubmodem_setsockopt_socket(sock);
+      return;
+    }
+  else if (sock->req.reqid == USRSOCK_REQUEST_GETSOCKOPT)
+    {
+      __ubmodem_getsockopt_socket(sock);
+      return;
+    }
+  else if (sock->req.reqid == USRSOCK_REQUEST_BIND)
+    {
+      __ubmodem_bind_socket(sock);
+      return;
+    }
+
+  (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, -EINVAL);
+  return;
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -551,9 +662,12 @@ void __ubmodem_get_socket_error(struct modem_socket_s *sock)
   struct ubmodem_s *modem = sock->modem;
   int err;
 
-  err = __ubmodem_send_cmd(modem, &cmd_ATpUSOCTL_get_lasterror,
-                           get_socket_error_handler, sock,
-                           "=%d,1", sock->modem_sd);
+  /* This function gets called after socket command responds with plain ERROR
+   * (not CME error). Recheck that CMEE is still correctly setup; in other
+   * words check that modem HW has not got reset. */
+
+  err = __ubmodem_check_cmee_status(modem, modem_socket_error_cmee_handler,
+                                    sock);
   MODEM_DEBUGASSERT(modem, err == OK);
 }
 
@@ -718,11 +832,11 @@ void __ubsocket_update_state(struct modem_socket_s *sock)
       goto new_state;
     }
 
-  if (sock->is_setgetsock_pending)
+  if (sock->is_socket_config_pending)
     {
-      /* getsockopt/setsockopt has been requested. */
+      /* getsockopt/setsockopt/bind has been requested. */
 
-      sock->state = MODEM_SOCKET_STATE_SETGETSOCK;
+      sock->state = MODEM_SOCKET_STATE_SOCKET_CONFIG;
       make_first = true;
       goto new_state;
     }
@@ -808,8 +922,8 @@ void __ubsocket_work_done(struct modem_socket_s *sock)
         sock->tx_buf_full_recheck = false;
         break;
 
-      case MODEM_SOCKET_STATE_SETGETSOCK:
-        sock->is_setgetsock_pending = false;
+      case MODEM_SOCKET_STATE_SOCKET_CONFIG:
+        sock->is_socket_config_pending = false;
         break;
 
       default:
@@ -923,8 +1037,8 @@ void __ubmodem_do_usrsock_work(struct ubmodem_s *modem)
         __ubmodem_check_txfull_socket(sock);
         break;
 
-      case MODEM_SOCKET_STATE_SETGETSOCK:
-        __ubmodem_do_setgetsock_socket(sock);
+      case MODEM_SOCKET_STATE_SOCKET_CONFIG:
+        __ubmodem_do_socket_config(sock);
         break;
 
       case MODEM_SOCKET_STATE_FREE:
@@ -937,6 +1051,10 @@ void __ubmodem_do_usrsock_work(struct ubmodem_s *modem)
         /* Update main state machine. */
 
         __ubmodem_change_state(modem, MODEM_STATE_WAITING);
+
+        /* Socket freed, inform power-management of low activity decrease. */
+
+        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
 
         break;
 
@@ -1002,6 +1120,11 @@ int __ubmodem_usrsock_handle_request(struct ubmodem_s *modem)
         {
           sizeof(struct usrsock_request_getsockopt_s),
           __ubmodem_usrsock_handle_getsockopt_request,
+        },
+      [USRSOCK_REQUEST_BIND] =
+        {
+          sizeof(struct usrsock_request_bind_s),
+          __ubmodem_usrsock_handle_bind_request,
         },
     };
   const struct ubmodem_usrsock_handler_s *handlers =
@@ -1106,6 +1229,9 @@ void __ubmodem_usrsock_initialize(struct ubmodem_s *modem,
       __ubparser_register_response_handler(&modem->parser, &urc_ATpUUSORD,
                                            urc_socket_read_handler,
                                            modem, true);
+      __ubparser_register_response_handler(&modem->parser, &urc_ATpUUSORF,
+                                           urc_socket_read_handler,
+                                           modem, true);
       __ubparser_register_response_handler(&modem->parser, &urc_ATpUUSOCL,
                                            urc_socket_close_handler,
                                            modem, true);
@@ -1156,6 +1282,7 @@ void __ubmodem_usrsock_uninitialize(struct ubmodem_s *modem)
   if (modem->socket_urcs_registered)
     {
       __ubparser_unregister_response_handler(&modem->parser, urc_ATpUUSOCL.name);
+      __ubparser_unregister_response_handler(&modem->parser, urc_ATpUUSORF.name);
       __ubparser_unregister_response_handler(&modem->parser, urc_ATpUUSORD.name);
       modem->socket_urcs_registered = false;
     }
@@ -1176,10 +1303,16 @@ void __ubmodem_usrsock_uninitialize(struct ubmodem_s *modem)
         }
 
       free(sock);
+
+      /* Socket freed, inform power-management of low activity decrease. */
+
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
     }
 
   /* Clean-up state. */
 
   modem->sockets.poll_off_count = 0;
+  memset(modem->sockets.poll_off_list, 0, sizeof(modem->sockets.poll_off_list));
+  memset(&modem->sockets.ipcfg, 0, sizeof(modem->sockets.ipcfg));
 }
 

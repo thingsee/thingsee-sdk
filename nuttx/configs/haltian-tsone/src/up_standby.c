@@ -224,23 +224,6 @@ void up_boot_standby_mode(void)
   for (i = 0; i < 4; i++)
     up_lowputc('s');
 
-  /* Configure SDcard pins. */
-
-  gpio_initialize_sdcard_pins();
-
-  /* Configure display GPIOs. */
-
-  gpio_off_mask = ~(GPIO_PUPD_MASK | GPIO_MODE_MASK | GPIO_OUTPUT_SET);
-  stm32_configgpio(GPIO_CHIP_SELECT_DISPLAY);
-  stm32_configgpio(GPIO_LCD_SSD1309_CMDDATA);
-  stm32_configgpio(GPIO_LCD_SSD1309_RESET);
-  stm32_configgpio((GPIO_SPI2_MOSI & gpio_off_mask) | GPIO_OUTPUT_CLEAR | GPIO_OUTPUT);
-  stm32_configgpio((GPIO_SPI2_SCK & gpio_off_mask) | GPIO_OUTPUT_CLEAR | GPIO_OUTPUT);
-
-  /* Reconfigure GPIO's for stop mode (most pins are setup as analog input). */
-
-  up_reconfigure_gpios_for_pmstop();
-
   /* Setup bootloader to jump directly to firmware. */
 
   putreg32(BOARD_FIRMWARE_BASE_ADDR, CONFIG_BOOTLOADER_ADDR_BKREG);
@@ -250,21 +233,38 @@ void up_boot_standby_mode(void)
 
   stm32_pwr_enablebkp(false);
 
-  /* We must kick HWWDG even from standby mode, else it resets device. */
-
-  board_wdginitialize_autokick(hwwdg_irq_in_standby);
-
-  /* Setup 'power'-button as EXTI for wake-up. */
-
-  stm32_configgpio(GPIO_BTN_POWERKEY);
-  stm32_gpiosetevent(GPIO_BTN_POWERKEY, true, false, true,
-                     button_pressed_down_handler);
-
-  /* Our standby-mode is really ARM core's stop-mode.
-     Enter stop-mode with MCU internal regulator in low-power mode. */
-
   while (true)
     {
+      /* Configure SDcard pins. */
+
+      gpio_initialize_sdcard_pins();
+
+      /* Configure display GPIOs. */
+
+      gpio_off_mask = ~(GPIO_PUPD_MASK | GPIO_MODE_MASK | GPIO_OUTPUT_SET);
+      stm32_configgpio(GPIO_CHIP_SELECT_DISPLAY);
+      stm32_configgpio(GPIO_LCD_SSD1309_CMDDATA);
+      stm32_configgpio(GPIO_LCD_SSD1309_RESET);
+      stm32_configgpio((GPIO_SPI2_MOSI & gpio_off_mask) | GPIO_OUTPUT_CLEAR | GPIO_OUTPUT);
+      stm32_configgpio((GPIO_SPI2_SCK & gpio_off_mask) | GPIO_OUTPUT_CLEAR | GPIO_OUTPUT);
+
+      /* Reconfigure GPIO's for stop mode (most pins are setup as analog input). */
+
+      up_reconfigure_gpios_for_pmstop();
+
+      /* We must kick HWWDG even from standby mode, else it resets device. */
+
+      board_wdginitialize_autokick(hwwdg_irq_in_standby);
+
+      /* Setup 'power'-button as EXTI for wake-up. */
+
+      stm32_configgpio(GPIO_BTN_POWERKEY);
+      stm32_gpiosetevent(GPIO_BTN_POWERKEY, true, false, true,
+                         button_pressed_down_handler);
+
+      /* Our standby-mode is really ARM core's stop-mode.
+         Enter stop-mode with MCU internal regulator in low-power mode. */
+
       (void)stm32_pmstop(true);
 
       standby_do_trace('p');

@@ -14,4 +14,10 @@ if THINGSEE_UI
         default n
         ---help---
             Enable menu-item for rebooting into DFU-mode
+
+    config THINGSEE_UI_DEBUG
+        bool "Enable UI debug traces"
+        default n
+        ---help---
+            Enable UI debug traces
 endif

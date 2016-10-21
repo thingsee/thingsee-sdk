@@ -213,6 +213,11 @@ static void http_parser_reset(void)
     {
       fclose(updater.fd);
       updater.fd = NULL;
+
+      /* This path is called only if download was aborted by socket error.
+       * ALP file is invalid at this stage, so remove it. */
+
+      unlink(ALP_FILE_PATH);
     }
 }
 
@@ -267,7 +272,7 @@ static int http_parse_response(char *inbuf, size_t *len,
       return OK;
     }
 
-  if(!updater.header_received)
+  if (!updater.header_received)
     {
       const char *pInbuf = inbuf;
       static const char substr [] = "\r\n";
@@ -332,6 +337,12 @@ static int http_parse_response(char *inbuf, size_t *len,
 
           pInbuf = pch + substr_len;
           currlen = *len - (pInbuf - inbuf);
+
+          if (updater.header_received)
+            {
+              aid_dbg("HTTP header done.\n");
+              break;
+            }
         }
 
       /* Adjust remaining length according to handled bytes */
@@ -371,26 +382,48 @@ static int http_parse_response(char *inbuf, size_t *len,
         }
       else
         {
+          /* Write failed. */
+
           fclose(updater.fd);
+          updater.fd = NULL;
+
+          /* ALP file is invalid at this stage. */
+
+          unlink(ALP_FILE_PATH);
+
           status = ERROR;
+          assist->alp_file_id++;
         }
 
       if (updater.write_cnt >= updater.content_len)
         {
           fclose(updater.fd);
+          updater.fd = NULL;
 
-          /* Aiding data ready to be taken in use, file_id should differ from
-             the previous one to notify aiding client about updated data */
-
-          if (!assist->alp_file)
+          if (!ubgps_check_alp_file_validity(ALP_FILE_PATH))
             {
-              /* file does not exist */
+              /* Received data is invalid. */
 
-              assist->alp_file = strdup(ALP_FILE_PATH);
+              unlink(ALP_FILE_PATH);
+
+              assist->alp_file_id++;
+              status = ERROR;
             }
+          else
+            {
+              /* Aiding data ready to be taken in use, file_id should differ from
+                 the previous one to notify aiding client about updated data */
 
-          assist->alp_file_id++;
-          status = OK;
+              if (!assist->alp_file)
+                {
+                  /* file does not exist */
+
+                  assist->alp_file = strdup(ALP_FILE_PATH);
+                }
+
+              assist->alp_file_id++;
+              status = OK;
+            }
         }
     }
 
@@ -695,7 +728,6 @@ error:
   return NULL;
 }
 
-
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -725,7 +757,7 @@ int ubgps_aid_updater_start(struct gps_assistance_s * const assist)
   DEBUGASSERT(assist);
 
   ret = pthread_mutex_trylock(&g_aid_mutex);
-  if (ret < 0)
+  if (ret != 0)
     {
       aid_dbg("mutex locked => updater already running\n");
       return OK;
@@ -801,4 +833,13 @@ int ubgps_aid_updater_stop(struct gps_assistance_s * const assist)
 
   aid_dbg("<-\n");
   return OK;
+}
+
+/****************************************************************************
+ * Name: ubgps_aid_get_alp_filename
+ ****************************************************************************/
+
+const char *ubgps_aid_get_alp_filename(void)
+{
+  return ALP_FILE_PATH;
 }

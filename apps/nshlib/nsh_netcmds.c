@@ -1163,8 +1163,8 @@ int cmd_ping(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
 {
   FAR char *staddr;
   in_addr_t ipaddr;
-  uint32_t start;
-  uint32_t next;
+  systime_t start;
+  systime_t next;
   uint32_t dsec = 10;
   uint32_t maxwait;
   uint16_t id;
@@ -1276,8 +1276,8 @@ int cmd_ping6(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
 {
   FAR char *staddr;
   struct in6_addr ipaddr;
-  uint32_t start;
-  uint32_t next;
+  systime_t start;
+  systime_t next;
   uint32_t dsec = 10;
   uint32_t maxwait;
   uint16_t id;

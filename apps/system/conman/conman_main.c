@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/conman/conman_main.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *   Author: Pekka Ervasti <pekka.ervasti@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -117,6 +117,8 @@ int conman_main(int argc, char **argv)
 
   maxfds += ubmodem_max_pfds; /* modem fds */
 
+  maxfds += __conman_cc3000_get_max_pollfds(conman); /* wifi fds */
+
   pfds = calloc(maxfds, sizeof(*pfds));
   if (!pfds)
     {
@@ -129,6 +131,7 @@ int conman_main(int argc, char **argv)
   while (true)
     {
       int ubmodem_pos_fds, ubmodem_num_fds;
+      int cc3000_pos_fds, cc3000_num_fds;
       int client_pos_fds, client_num_fds;
       int nfds;
       int timeout;
@@ -153,6 +156,12 @@ int conman_main(int argc, char **argv)
       ubmodem_pos_fds = nfds;
       __conman_ubmodem_setup_pollfds(conman, pfds, maxfds, &nfds, &timeout);
       ubmodem_num_fds = nfds - ubmodem_pos_fds;
+
+      /* Setup pollfds for cc3000 and get timeout for timers. */
+
+      cc3000_pos_fds = nfds;
+      __conman_cc3000_setup_pollfds(conman, pfds, maxfds, &nfds, &timeout);
+      cc3000_num_fds = nfds - cc3000_pos_fds;
 
       ret = poll(pfds, nfds, timeout == INT_MAX ? -1 : timeout);
       if (ret < 0)
@@ -187,6 +196,11 @@ int conman_main(int argc, char **argv)
                    i >= client_pos_fds && i < (client_pos_fds + client_num_fds))
             {
               __conman_ctl_handle_pollin(conman, &pfds[i]);
+            }
+          else if (pfds[i].revents && cc3000_num_fds > 0 &&
+                   i >= cc3000_pos_fds && i < (cc3000_pos_fds + cc3000_num_fds))
+            {
+              __conman_cc3000_handle_pollfds(conman, &pfds[i]);
             }
           else if (ubmodem_pos_fds == i && ubmodem_num_fds > 0)
             {

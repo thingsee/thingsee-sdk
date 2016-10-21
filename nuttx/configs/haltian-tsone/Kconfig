@@ -90,6 +90,10 @@ config BOARD_I2C_BQ24251_CHARGER
 	int "I2C bus for BQ24251 charger"
 	default 1
 
+config BOARD_I2C_GAM9AXEL_SENS
+	int "I2C bus for LSM9DS0 inertial sensor"
+	default 1
+
 config BOARD_I2C_HTS221_HUMIDITY
 	int "I2C bus for HTS221 humidity sensor"
 	default 1

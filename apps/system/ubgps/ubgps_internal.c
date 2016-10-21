@@ -186,20 +186,21 @@ static void ubgps_filter_location(struct ubgps_s * const gps,
  ****************************************************************************/
 int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const event)
 {
-  gps_state_t state = gps->state.current_state;
+  gps_state_t state;
   int status;
 
   DEBUGASSERT(gps && event);
 
   /* Inject event to state machine */
 
-  status = gps_sm[state](gps, event);
+  state = gps->state.current_state;
+  status = ubgps_sm(gps, state)->func(gps, event);
 
   /* Check status */
 
   if (status != OK)
     {
-      dbg("%s: event id: %d, status %s\n", ts_gps_get_statename(state),
+      dbg("%s: event id: %d, status %s\n", ubgps_get_statename(state),
           event->id, status == OK ? "OK" : "ERROR");
     }
 
@@ -213,7 +214,7 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
       /* Construct and send exit event to old state */
 
       sevent.id = SM_EVENT_EXIT;
-      (void)gps_sm[state](gps, &sevent);
+      (void)ubgps_sm(gps, state)->func(gps, &sevent);
 
       /* Change to new state */
 
@@ -223,7 +224,7 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
       /* Construct and send entry event to new state */
 
       sevent.id = SM_EVENT_ENTRY;
-      (void)gps_sm[state](gps, &sevent);
+      (void)ubgps_sm(gps, state)->func(gps, &sevent);
 
       /* Publish state change event */
 
@@ -422,20 +423,15 @@ int ubgps_receiver(const struct pollfd * const pfd, void * const priv)
   uint8_t input_buffer[32];
   ssize_t input_bytes;
   uint8_t * input;
-  int flags;
   int ret;
-
-  /* Get file flags */
-
-  flags = fcntl(pfd->fd, F_GETFL, 0);
-  if (flags == ERROR)
-    return ERROR;
 
   while (1)
     {
       /* Set file non-blocking */
 
       ret = ubgps_set_nonblocking(gps, true);
+      if (ret < 0)
+        return ERROR;
 
       /* Read bytes from GPS module */
 
@@ -455,7 +451,9 @@ int ubgps_receiver(const struct pollfd * const pfd, void * const priv)
       while (input_bytes--)
         {
           uint8_t data = *input++;
+
           /* Pass data to UBX receiver */
+
           if (ubx_msg_receive(gps, data) == ERROR)
             {
               /* Pass data to NMEA receiver */
@@ -472,7 +470,6 @@ int ubgps_receiver(const struct pollfd * const pfd, void * const priv)
   /* Set file blocking */
 
   ret = ubgps_set_nonblocking(gps, false);
-
   if (ret < 0)
     return ERROR;
 
@@ -497,7 +494,7 @@ void ubgps_publish_event(struct ubgps_s * const gps, struct gps_event_s const * 
 {
   struct gps_callback_entry_s const * cb;
 
-  DEBUGASSERT(gps != NULL || event != NULL);
+  DEBUGASSERT(gps && event);
 
   /* Check if any callback is interested of this event */
 
@@ -1102,7 +1099,6 @@ int ubgps_send_aid_alp_poll(struct ubgps_s * const gps)
 int ubgps_send_aid_ini(struct ubgps_s * const gps)
 {
   struct ubx_msg_s * msg;
-  time_t currtime;
   struct tm t;
   uint32_t latitude = 0;
   uint32_t longitude = 0;
@@ -1120,13 +1116,10 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
   if (ubx_busy(&gps->state.ubx_receiver))
     return ERROR;
 
-  /* Check if assistance data is available */
-
-  if (!gps->assist)
-    return OK;
-
-  if (gps->assist->use_time)
+  if (board_rtc_time_is_set(NULL))
     {
+      time_t currtime;
+
       dbg_int("Using system time for GPS.\n");
 
       /* Construct time and date for GPS */
@@ -1144,24 +1137,52 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
       flags |= (1 << 1) | (1 << 10);
     }
 
-  if (gps->assist->alp_file)
+  if (gps->assist && gps->assist->alp_file)
     dbg_int("Using AssistNow Offline data from '%s', file ID %d.\n",
         gps->assist->alp_file, gps->assist->alp_file_id);
 
-  if (gps->assist->use_loc)
+  if (gps->hint && gps->hint->have_location)
     {
-      latitude = gps->assist->latitude;
-      longitude = gps->assist->longitude;
-      altitude = gps->assist->altitude;
-      accuracy = gps->assist->accuracy;
+      struct timespec currtime = {};
+      uint64_t current_accuracy;
 
-      dbg_int("Using last known location (lat: %.7f, long: %.7f).\n",
-          (double)latitude / 10000000.0f,
-          (double)longitude / 10000000.0f);
+      (void)clock_gettime(CLOCK_MONOTONIC, &currtime);
+
+      /* Adjust location accuracy by time*speed. */
+
+      current_accuracy = gps->hint->accuracy;
+      current_accuracy +=
+          ((uint64_t)HINT_LOCATION_ACCURACY_DEGRADE_SPEED_MPS *
+           (currtime.tv_sec - gps->hint->location_time.tv_sec));
+
+      current_accuracy *= 100; /* m => cm */
+      if (current_accuracy > UINT32_MAX)
+        current_accuracy = UINT32_MAX;
+
+      altitude = gps->hint->altitude * 100; /* m => cm */
+      if (altitude > INT32_MAX)
+        altitude = INT32_MAX;
+      else if (altitude < INT32_MIN)
+        altitude = INT32_MIN;
+
+      latitude = gps->hint->latitude;
+      longitude = gps->hint->longitude;
+      accuracy = current_accuracy;
+
+      dbg_int("Using last known position:\n");
+      dbg_int(" lat     : %d\n", gps->hint->latitude);
+      dbg_int(" long    : %d\n", gps->hint->longitude);
+      dbg_int(" alt     : %d meters\n", altitude / 100);
+      dbg_int(" acc_old : %u meters\n", gps->hint->accuracy);
+      dbg_int(" acc_curr: %u meters\n", (uint32_t)current_accuracy / 100);
 
       /* Position is given in lat / long / alt */
 
       flags |= (1 << 5);
+
+      /* Position is valid. */
+
+      flags |= (1 << 0);
     }
 
   /* Allocate and setup AID-INI message */
@@ -1178,7 +1199,7 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
   UBX_SET_U2(msg, 18, yymm);      /* Year / month */
   UBX_SET_U4(msg, 20, ddhhmmss);  /* Day / hour / minute / seconds (ddhhmmss) */
   UBX_SET_I4(msg, 24, 0);         /* Fractional part of time of week */
-  UBX_SET_U4(msg, 28, 1000);      /* Milliseconds part of time accuracy */
+  UBX_SET_U4(msg, 28, 10000);     /* Milliseconds part of time accuracy */
   UBX_SET_U4(msg, 32, 0);         /* Nanoseconds part of time accuracy */
   UBX_SET_I4(msg, 36, 0);         /* Clock drift or frequency */
   UBX_SET_U4(msg, 40, 0);         /* Accuracy of clock drift or frequency */
@@ -1212,6 +1233,7 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
 {
   uint8_t valid = UBX_GET_X1(msg, 11);
   uint8_t fix_type = UBX_GET_X1(msg, 20);
+  uint8_t flags = UBX_GET_X1(msg, 21);
 
   /* Initialize time data */
 
@@ -1230,6 +1252,9 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
       gps->time.year = UBX_GET_U2(msg, 4);
       gps->time.month = UBX_GET_U1(msg, 6);
       gps->time.day = UBX_GET_U1(msg, 7);
+
+      dbg_int("valid:0x%02X, year:%04d, month:%02d, day:%02d\n",
+              valid, gps->time.year, gps->time.month,  gps->time.day);
     }
 
   if (gps->time.validity.time || gps->time.validity.fully_resolved)
@@ -1237,6 +1262,9 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
       gps->time.hour = UBX_GET_U1(msg, 8);
       gps->time.min = UBX_GET_U1(msg, 9);
       gps->time.sec = UBX_GET_U1(msg, 10);
+
+      dbg_int("valid:0x%02X, hour:%02d, min:%02d, sec:%02d\n",
+              valid, gps->time.hour, gps->time.min,  gps->time.sec);
     }
 
   /* Initialize location data */
@@ -1245,53 +1273,71 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
 
   /* Get fix type */
 
-  if (fix_type < __GPS_FIX_MAX)
+  if (fix_type < __GPS_FIX_MAX && (flags & NAV_FLAG_FIX_OK))
     gps->location.fix_type = fix_type;
   else
     gps->location.fix_type = GPS_FIX_NOT_AVAILABLE;
 
   /* Get location data if there's a fix */
 
-  if (gps->location.fix_type > GPS_FIX_NOT_AVAILABLE)
+  if (fix_type < __GPS_FIX_MAX)
     {
+      struct gps_location_s location = {};
+
+      location.fix_type = gps->location.fix_type;
+
       /* Get number of satellites used in navigation solution */
 
-      gps->location.num_of_used_satellites = UBX_GET_U1(msg, 23);
+      location.num_of_used_satellites = UBX_GET_U1(msg, 23);
 
-      /* Get longitude, latitude and horizontal accuracy */
+      /* Get longitude [1e-7 deg], latitude [1e-7 deg] and horizontal accuracy [mm] */
 
-      gps->location.longitude = UBX_GET_I4(msg, 24);
-      gps->location.latitude = UBX_GET_I4(msg, 28);
-      gps->location.horizontal_accuracy = UBX_GET_U4(msg, 40);
+      location.longitude = UBX_GET_I4(msg, 24);
+      location.latitude = UBX_GET_I4(msg, 28);
+      location.horizontal_accuracy = UBX_GET_U4(msg, 40);
 
-      /* Get height and vertical accuracy */
+      /* Get height [mm] and vertical accuracy [mm] */
 
-      gps->location.height = UBX_GET_I4(msg, 36);
-      gps->location.vertical_accuracy = UBX_GET_U4(msg, 44);
+      location.height = UBX_GET_I4(msg, 36);
+      location.vertical_accuracy = UBX_GET_U4(msg, 44);
 
-      /* Get ground speed and accuracy */
+      /* Get ground speed [mm/s] and accuracy [mm/s] */
 
-      gps->location.ground_speed = UBX_GET_I4(msg, 60);
-      gps->location.ground_speed_accuracy = UBX_GET_U4(msg, 68);
+      location.ground_speed = UBX_GET_I4(msg, 60);
+      location.ground_speed_accuracy = UBX_GET_U4(msg, 68);
 
-      /* Get heading and heading accuracy estimate */
+      /* Get heading [1e-5 deg] and heading accuracy estimate [1e-5 deg] */
 
-      gps->location.heading = UBX_GET_I4(msg, 64);
-      gps->location.heading_accuracy = UBX_GET_U4(msg, 72);
+      location.heading = UBX_GET_I4(msg, 64);
+      location.heading_accuracy = UBX_GET_U4(msg, 72);
 
-      dbg_int("fix:%d, sat:%u, lon:%d, lat:%d, acc:%um, height:%dm,\n"
+      dbg_int("fix:%d (%s), flags:0x%02X, sat:%u, lat:%d, lon:%d, acc:%um, height:%dm, "
               "acc:%um, speed:%dm/s, acc:%um/s, heading:%ddeg, acc:%udeg\n",
-               gps->location.fix_type,
-               gps->location.num_of_used_satellites,
-               gps->location.longitude,
-               gps->location.latitude,
-               gps->location.horizontal_accuracy/1000,
-               gps->location.height/1000,
-               gps->location.vertical_accuracy/1000,
-               gps->location.ground_speed/1000,
-               gps->location.ground_speed_accuracy/1000,
-               gps->location.heading/100000,
-               gps->location.heading_accuracy/100000);
+              fix_type,
+              gps->location.fix_type != GPS_FIX_NOT_AVAILABLE ? "OK" : "NOK",
+              flags,
+              location.num_of_used_satellites,
+              location.latitude,
+              location.longitude,
+              location.horizontal_accuracy/1000,
+              location.height/1000,
+              location.vertical_accuracy/1000,
+              location.ground_speed/1000,
+              location.ground_speed_accuracy/1000,
+              location.heading/100000,
+              location.heading_accuracy/100000);
+
+      if (location.fix_type != GPS_FIX_NOT_AVAILABLE)
+        {
+          gps->location = location;
+
+          /* Update location hint for A-GPS. */
+
+          (void)ubgps_give_location_hint((double)location.latitude / 1e7,
+                                         (double)location.longitude / 1e7,
+                                         location.height / 1000,
+                                         location.horizontal_accuracy / 1000);
+        }
     }
 
   return OK;
@@ -1478,7 +1524,7 @@ int ubgps_handle_aid_alpsrv(struct ubgps_s * const gps, struct ubx_msg_s const *
   /* Check that AssistNow Offline data is available */
 
   ret = pthread_mutex_trylock(&g_aid_mutex);
-  if (ret < 0)
+  if (ret != 0)
     {
       dbg_int("mutex_trylock failed: %d\n", ret);
       return OK;
@@ -1486,6 +1532,14 @@ int ubgps_handle_aid_alpsrv(struct ubgps_s * const gps, struct ubx_msg_s const *
 
   if (!gps->assist->alp_file || !gps->assist->alp_file_id)
     {
+      pthread_mutex_unlock(&g_aid_mutex);
+      return OK;
+    }
+
+  if (!ubgps_check_alp_file_validity(gps->assist->alp_file))
+    {
+      free(gps->assist->alp_file);
+      gps->assist->alp_file = NULL;
       pthread_mutex_unlock(&g_aid_mutex);
       return OK;
     }
@@ -1626,10 +1680,10 @@ int ubgps_set_nonblocking(struct ubgps_s * const gps, bool const set)
   if (flags == ERROR)
     return ERROR;
 
-  if (!set)
-    flags &= ~O_NONBLOCK;
-  else
+  if (set)
     flags |= O_NONBLOCK;
+  else
+    flags &= ~O_NONBLOCK;
 
   ret = fcntl(gps->fd, F_SETFL, flags);
   if (ret == ERROR)
@@ -1677,4 +1731,112 @@ void __ubgps_gc_callbacks(struct ubgps_s * const gps)
 
       cb = cbnext;
     }
+}
+
+/****************************************************************************
+ * Name: __ubgps_full_write
+ ****************************************************************************/
+
+size_t __ubgps_full_write(int gps_fd, const void *buf, size_t writelen)
+{
+  const uint8_t *writebuf = buf;
+  size_t nwritten;
+  size_t total = 0;
+
+  do
+    {
+      nwritten = write(gps_fd, writebuf, writelen);
+      if (nwritten == ERROR)
+        {
+          int error = get_errno();
+          if (error != EAGAIN)
+            {
+              return ERROR;
+            }
+          nwritten = 0;
+        }
+      writebuf += nwritten;
+      writelen -= nwritten;
+      total += nwritten;
+    }
+  while (writelen > 0);
+
+  return total;
+}
+
+/****************************************************************************
+ * Name: ubgps_check_alp_file_validity
+ *
+ * Description:
+ *   Check that ALP file contains valid aiding data.
+ *
+ ****************************************************************************/
+
+bool ubgps_check_alp_file_validity(const char *filepath)
+{
+  bool ret = false;
+  uint8_t buf[2];
+  ssize_t rlen;
+  int fd;
+
+  fd = open(filepath, O_RDONLY);
+  if (fd < 0)
+    {
+      dbg("could not open file: \"%s\" (errno=%d)\n", filepath, get_errno());
+      goto out;
+    }
+
+  /* Get header */
+
+  rlen = read(fd, buf, 2);
+  if (rlen < 2)
+    {
+      dbg("could not read header, rlen=%d, errno=%d\n", rlen, get_errno());
+      goto out;
+    }
+
+  /* Expected header is 'µB' */
+
+  if (!(buf[0] == 0xB5 && buf[1] == 0x62))
+    {
+      dbg("invalid header, %02X:%02X\n", buf[0], buf[1]);
+      goto out;
+    }
+
+#if 0
+  /* Get tail */
+
+  rlen = lseek(fd, -2, SEEK_END);
+  if (rlen == -1)
+    {
+      dbg("could not seek to tail, rlen=%d, errno=%d\n", rlen, get_errno());
+      goto out;
+    }
+
+  rlen = read(fd, buf, 2);
+  if (rlen < 2)
+    {
+      dbg("could not read tail, rlen=%d, errno=%d\n", rlen, get_errno());
+      goto out;
+    }
+
+  /* Expected tail is 'XX' */
+
+  if (!(buf[0] == 'X' && buf[1] == 'X'))
+    {
+      dbg("invalid tail, %02X:%02X\n", buf[0], buf[1]);
+      goto out;
+    }
+#endif
+
+  /* ALP file appears to be valid. */
+
+  ret = true;
+
+out:
+  if (fd >= 0)
+    {
+      close(fd);
+    }
+  return ret;
 }

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_poll.c
  *
- *   Copyright (C) 2014 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -200,7 +200,9 @@ static int modem_poll_event(struct ubmodem_s *modem, struct pollfd *pfd,
 
       /* Add nanoseconds to entropy pool. */
 
+#ifdef CONFIG_DEV_RANDOM
       add_time_randomness(curr_ts.tv_nsec);
+#endif
     }
   while (timer)
     {
