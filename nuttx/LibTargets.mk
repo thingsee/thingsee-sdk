@@ -173,12 +173,6 @@ lib$(DELIM)libproxies$(LIBEXT): syscall$(DELIM)libproxies$(LIBEXT)
 
 # Possible non-kernel builds
 
-testing$(DELIM)libtesting$(LIBEXT): context
-	$(Q) $(MAKE) -C testing TOPDIR="$(TOPDIR)" libtesting$(LIBEXT)
-
-lib$(DELIM)libtesting$(LIBEXT): testing$(DELIM)libtesting$(LIBEXT)
-	$(Q) install testing$(DELIM)libtesting$(LIBEXT) lib$(DELIM)libtesting$(LIBEXT)
-
 libc$(DELIM)libc$(LIBEXT): context
 	$(Q) $(MAKE) -C libc TOPDIR="$(TOPDIR)" libc$(LIBEXT)
 

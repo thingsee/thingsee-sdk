@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_parser.c
  *
- *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1779,7 +1779,7 @@ void __ubmodem_assert_debug_print(struct ubmodem_s *modem)
  * Self-tests
  ****************************************************************************/
 
-#ifndef MODEM_DISABLE_SELFTESTS
+#ifndef CONFIG_UBMODEM_DISABLE_SELFTESTS
 
 struct parser_selftest_expected_s {
   int16_t status;

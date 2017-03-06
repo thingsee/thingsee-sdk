@@ -39,6 +39,7 @@ APPDIR = ${shell pwd}
 TOPDIR ?= $(APPDIR)/import
 
 -include $(TOPDIR)/Make.defs
+-include $(APPDIR)/Make.defs
 
 # Application Directories
 
@@ -117,10 +118,15 @@ BIN_DIR = $(APPDIR)$(DELIM)bin
 
 BIN = libapps$(LIBEXT)
 
+# Compatibility for new NuttX (2017)
+
+APPS_INCLUDE_DIR      = $(APPDIR)$(DELIM)include
+APPS_INCLUDE_APPS_DIR = $(APPS_INCLUDE_DIR)$(DELIM)apps
+
 # Build targets
 
 all: $(BIN)
-.PHONY: import install context context_serialize context_rest .depdirs depend clean distclean
+.PHONY: import install context context_serialize context_rest .depdirs depend clean distclean dirlinks
 
 define SDIR_template
 $(1)_$(2):
@@ -147,6 +153,14 @@ install: $(BIN_DIR) .install
 
 import:
 	+$(Q) $(MAKE) .import TOPDIR="$(APPDIR)$(DELIM)import"
+
+$(APPS_INCLUDE_APPS_DIR):
+	@echo "LN: $(APPS_INCLUDE_DIR) to $(APPS_INCLUDE_APPS_DIR)"
+	$(Q) $(DIRUNLINK) $(APPS_INCLUDE_APPS_DIR)
+	$(Q) $(DIRLINK) $(APPS_INCLUDE_DIR) $(APPS_INCLUDE_APPS_DIR)
+
+dirlinks: $(APPS_INCLUDE_APPS_DIR)
+	$(Q) $(MAKE) -C platform dirlinks TOPDIR="$(TOPDIR)" APPDIR="$(APPDIR)"
 
 context_rest: $(foreach SDIR, $(INSTALLED_APPS), $(SDIR)_context)
 
@@ -186,4 +200,5 @@ endif
 	$(call DELFILE, .depend)
 	$(call DELDIR, $(BIN_DIR))
 
-
+.PHONY: preconfig
+preconfig:

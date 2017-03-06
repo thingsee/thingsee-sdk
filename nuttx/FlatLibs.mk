@@ -117,8 +117,6 @@ ifeq ($(CONFIG_AUDIO),y)
 NUTTXLIBS += lib$(DELIM)libaudio$(LIBEXT)
 endif
 
-NUTTXLIBS += lib$(DELIM)libtesting$(LIBEXT)
-
 # Export all libraries
 
 EXPORTLIBS = $(NUTTXLIBS)

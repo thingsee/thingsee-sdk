@@ -340,6 +340,9 @@ static int mxt_getreg(FAR struct mxt_dev_s *priv, uint16_t regaddr,
 #ifdef CONFIG_I2C_RESET
           /* Perhaps the I2C bus is locked up?  Try to shake the bus free */
 
+          if (retries == 3)
+            break;
+
           idbg("WARNING: I2C_TRANSFER failed: %d ... Resetting\n", ret);
 
           ret = up_i2creset(priv->i2c);
@@ -411,6 +414,9 @@ static int mxt_putreg(FAR struct mxt_dev_s *priv, uint16_t regaddr,
         {
 #ifdef CONFIG_I2C_RESET
           /* Perhaps the I2C bus is locked up?  Try to shake the bus free */
+
+          if (retries == 3)
+            break;
 
           idbg("WARNING: I2C_TRANSFER failed: %d ... Resetting\n", ret);
 

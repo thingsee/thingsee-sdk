@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_voice_audio.c
  *
- *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,6 +62,13 @@
  * Type Declarations
  ****************************************************************************/
 
+struct play_audio_params_s
+{
+  unsigned int audio_resource:2; /* Allowed values: 0..2 */
+  unsigned int tone_id:7;        /* Allowed values: 0..72 */
+  unsigned int nof_repeats:8;    /* Allowed values: 0..255 */
+};
+
 /****************************************************************************
  * Private Function Prototypes.
  ****************************************************************************/
@@ -81,6 +88,22 @@ static const struct at_cmd_def_s cmd_ATpUGPIOW =
 static const struct at_cmd_def_s cmd_ATpCMUT =
 {
   .name         = "+CMUT",
+  .resp_format  = NULL,
+  .resp_num     = 0,
+  .timeout_dsec = 10 * 10,
+};
+
+static const struct at_cmd_def_s cmd_ATpUPAR =
+{
+  .name         = "+UPAR",
+  .resp_format  = NULL,
+  .resp_num     = 0,
+  .timeout_dsec = 10 * 10,
+};
+
+static const struct at_cmd_def_s cmd_ATpUSAR =
+{
+  .name         = "+USAR",
   .resp_format  = NULL,
   .resp_num     = 0,
   .timeout_dsec = 10 * 10,
@@ -173,6 +196,57 @@ static int start_task_audio_setup_in_mic(struct ubmodem_s *modem, void *priv)
   return OK;
 }
 
+static int start_task_play_audio_resource(struct ubmodem_s *modem, void *priv)
+{
+  union
+  {
+    struct play_audio_params_s out;
+    uintptr_t in;
+  } u;
+  int err;
+
+  u.in = (uintptr_t)priv;
+
+  if (modem->level < UBMODEM_LEVEL_CMD_PROMPT)
+    {
+      return ERROR;
+    }
+
+  /* Start playing audio resource. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUPAR, simple_cmd_handler, modem,
+                           "=%u,%u,%u", u.out.audio_resource, u.out.tone_id,
+                           u.out.nof_repeats);
+  MODEM_DEBUGASSERT(modem, err == OK);
+
+  return OK;
+}
+
+static int start_task_stop_audio_resource(struct ubmodem_s *modem, void *priv)
+{
+  union
+  {
+    struct play_audio_params_s out;
+    uintptr_t in;
+  } u;
+  int err;
+
+  u.in = (uintptr_t)priv;
+
+  if (modem->level < UBMODEM_LEVEL_CMD_PROMPT)
+    {
+      return ERROR;
+    }
+
+  /* Start stopping audio resource. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUSAR, simple_cmd_handler, modem,
+                           "=%u", u.out.audio_resource);
+  MODEM_DEBUGASSERT(modem, err == OK);
+
+  return OK;
+}
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -225,6 +299,87 @@ void ubmodem_audio_setup(struct ubmodem_s *modem, bool out_on, bool in_on)
 }
 
 /****************************************************************************
+ * Name: ubmodem_play_audio_resource
+ *
+ * Description:
+ *   Play audio resource (see documentation for AT+UPAR)
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+int ubmodem_play_audio_resource(struct ubmodem_s *modem,
+                                unsigned int audio_resource,
+                                unsigned int tone_id,
+                                unsigned int nof_repeats)
+{
+  union
+  {
+    struct play_audio_params_s in;
+    uintptr_t out;
+  } u = {};
+
+  DEBUGASSERT(modem);
+
+  if (modem->level < UBMODEM_LEVEL_CMD_PROMPT)
+    {
+      return ERROR;
+    }
+
+  u.in.audio_resource = audio_resource;
+  u.in.tone_id = tone_id;
+  u.in.nof_repeats = nof_repeats;
+
+  if (u.in.audio_resource != audio_resource || u.in.tone_id != tone_id ||
+      u.in.nof_repeats != nof_repeats)
+    {
+      return ERROR;
+    }
+
+  return __ubmodem_add_task(modem, start_task_play_audio_resource,
+                            (void *)u.out);
+}
+
+/****************************************************************************
+ * Name: ubmodem_stop_audio_resource
+ *
+ * Description:
+ *   Stop audio resource (see documentation for AT+USAR)
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+int ubmodem_stop_audio_resource(struct ubmodem_s *modem,
+                                unsigned int audio_resource)
+{
+  union
+  {
+    struct play_audio_params_s in;
+    uintptr_t out;
+  } u = {};
+
+  DEBUGASSERT(modem);
+
+  if (modem->level < UBMODEM_LEVEL_CMD_PROMPT)
+    {
+      return ERROR;
+    }
+
+  u.in.audio_resource = audio_resource;
+
+  if (u.in.audio_resource != audio_resource)
+    {
+      return ERROR;
+    }
+
+  return __ubmodem_add_task(modem, start_task_stop_audio_resource,
+                            (void *)u.out);
+}
+
+/****************************************************************************
  * Name: __ubmodem_audio_cleanup
  *
  * Description:
@@ -235,9 +390,10 @@ void ubmodem_audio_setup(struct ubmodem_s *modem, bool out_on, bool in_on)
  *
  ****************************************************************************/
 
-void ubmodem_audio_cleanup(struct ubmodem_s *modem)
+void __ubmodem_audio_cleanup(struct ubmodem_s *modem)
 {
   modem->audio.in_enabled = false;
   modem->audio.out_enabled = false;
   __ubmodem_audio_cleanup_additional(modem);
 }
+

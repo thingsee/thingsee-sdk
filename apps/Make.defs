@@ -53,3 +53,28 @@ define REGISTER
 	$(Q) touch "$(BUILTIN_REGISTRY)$(DELIM).updated"
 endef
 endif
+
+# Tools
+
+ifeq ($(CONFIG_WINDOWS_NATIVE),y)
+  MKKCONFIG = $(APPDIR)\tools\mkkconfig.bat
+  DIRLINK   = $(TOPDIR)\tools\link.bat
+  DIRUNLINK = $(TOPDIR)\tools\unlink.bat
+else
+  MKKCONFIG = $(APPDIR)/tools/mkkconfig.sh
+  DIRUNLINK = $(TOPDIR)/tools/unlink.sh
+ifeq ($(WINTOOL),y)
+  DIRLINK = $(TOPDIR)/tools/copydir.sh
+else
+  DIRLINK   = $(TOPDIR)/tools/link.sh
+endif
+endif
+
+ifeq ($(WINTOOL),y)
+  INCDIROPT = -w
+endif
+
+# Standard include path
+
+CFLAGS   += ${shell $(INCDIR) $(INCDIROPT) "$(CC)" "$(APPDIR)$(DELIM)include"}
+CXXFLAGS += ${shell $(INCDIR) $(INCDIROPT) "$(CC)" "$(APPDIR)$(DELIM)include"}

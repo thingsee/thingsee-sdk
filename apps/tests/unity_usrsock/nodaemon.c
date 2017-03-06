@@ -38,7 +38,7 @@
 /****************************************************************************
  * Included Files
  ****************************************************************************/
-#include <nuttx/testing/unity_fixture.h>
+#include <apps/testing/unity_fixture.h>
 #include <sys/socket.h>
 #include <errno.h>
 

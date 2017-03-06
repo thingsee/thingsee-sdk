@@ -38,7 +38,7 @@
  * Included Files
  ****************************************************************************/
 #include <apps/system/conman.h>
-#include <nuttx/testing/unity_fixture.h>
+#include <apps/testing/unity_fixture.h>
 #include <stdbool.h>
 #include <string.h>
 

@@ -1,4 +1,5 @@
 source "$APPSDIR/tests/default_conman/Kconfig"
+source "$APPSDIR/tests/testing/Kconfig"
 source "$APPSDIR/tests/unity/Kconfig"
 source "$APPSDIR/tests/unity_conman/Kconfig"
 source "$APPSDIR/tests/unity_dev_err/Kconfig"

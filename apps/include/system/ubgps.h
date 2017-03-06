@@ -54,6 +54,10 @@ enum gps_state_e
 
   GPS_STATE_INITIALIZATION,
 
+  /* GPS module reinitialization */
+
+  GPS_STATE_REINITIALIZATION,
+
   /* GPS module cold start state */
 
   GPS_STATE_COLD_START,
@@ -135,9 +139,17 @@ enum gps_config_e
 
   GPS_CONFIG_NMEA_DATA = 0,
 
-  /* Navigation rate in ms. Data type is uint16 */
+  /* Navigation rate in ms. Data type is uint32 */
 
   GPS_CONFIG_NAVIGATION_RATE,
+
+  /* Search period in ms. Data type is uint32 */
+
+  GPS_CONFIG_SEARCH_PERIOD,
+
+  /* Update period in ms. Data type is uint32 */
+
+  GPS_CONFIG_UPDATE_PERIOD,
 
   /* Maximum configuration item value */
 
@@ -162,6 +174,10 @@ struct gps_time_validity_s
   bool time : 1;
 
   /* UTC Time of Day has been fully resolved (no seconds uncertainty) */
+
+  bool old_fully_resolved : 1;
+
+  /* UTC Time of Day has been fully resolved and is GPS fix based */
 
   bool fully_resolved : 1;
 };

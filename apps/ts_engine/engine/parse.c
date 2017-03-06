@@ -719,6 +719,8 @@ init_causes (cJSON *causes, struct ts_event *event)
 	}
 
       cause->parent = event;
+      cause->dyn.fd = -1;
+      cause->dyn.timer_id = -1;
       sq_addlast (&cause->entry, &event->conf.causes);
 
       static const struct ts_parse parse_cause[] =
@@ -1170,6 +1172,8 @@ profile_free (struct ts_profile *profile)
                       threshold = next_threshold;
                     }
                   next_cause = (struct ts_cause *) sq_next(&cause->entry);
+                  DEBUGASSERT(cause->dyn.fd < 0);       /* leak! */
+                  DEBUGASSERT(cause->dyn.timer_id < 0); /* leak! */
                   free (cause);
                   cause = next_cause;
                 }

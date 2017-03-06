@@ -91,7 +91,7 @@ $(AOBJS): %$(OBJEXT): %.S
 
 $(COBJS) $(MAINOBJ): %$(OBJEXT): %.c
 	$(call COMPILE, $<, $@)
-	$(Q) OBJCOPY=$(OBJCOPY) $(TOPDIR)/tools/unity/rename_symbols $(APPNAME) $@
+	$(Q) OBJCOPY=$(OBJCOPY) $(APPDIR)/tools/testing/unity/rename_symbols $(APPNAME) $@
 
 .built: $(OBJS)
 	$(call ARCHIVE, $(BIN), $(OBJS))

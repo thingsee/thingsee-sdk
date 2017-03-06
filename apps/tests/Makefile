@@ -1,7 +1,7 @@
 ############################################################################
 # apps/tests/Makefile
 #
-#   Copyright (C) Haltian Ltd. All rights reserved.
+#   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
 #   Author: Roman Saveljev <roman.saveljev@haltian.com>
 #
 # Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,21 @@
 ############################################################################
 
 -include $(TOPDIR)/.config # Current configuration
+-include $(TOPDIR)/Make.defs
+include $(APPDIR)/Make.defs
+
+ASRCS =
+AOBJS = $(ASRCS:.S=$(OBJEXT))
+
+CSRCS = unity.c unity_fixture.c
+
+DEPPATH = --dep-path .
+VPATH = .
+
+COBJS = $(CSRCS:.c=$(OBJEXT))
+
+SRCS = $(ASRCS) $(CSRCS)
+OBJS = $(AOBJS) $(COBJS)
 
 # Sub-directories
 
@@ -48,9 +63,22 @@ SUBDIRS = $(dir $(wildcard */Makefile))
 # variate the behavior according to the product configuration
 CNTXTDIRS = $(SUBDIRS)
 
-all: nothing
+all: .built
 
-.PHONY: nothing context depend clean distclean
+.PHONY: context .depend depend clean distclean
+
+$(AOBJS): %$(OBJEXT): %.S
+	$(call ASSEMBLE, $<, $@)
+
+$(COBJS): %$(OBJEXT): %.c
+	$(call COMPILE, $<, $@)
+
+$(BIN):	$(OBJS)
+	$(call ARCHIVE, $@, $(OBJS))
+
+.built: $(OBJS)
+	$(call ARCHIVE, $(BIN), $(OBJS))
+	@touch .built
 
 define SDIR_template
 $(1)_$(2):
@@ -62,16 +90,22 @@ $(foreach SDIR, $(SUBDIRS), $(eval $(call SDIR_template,$(SDIR),depend)))
 $(foreach SDIR, $(SUBDIRS), $(eval $(call SDIR_template,$(SDIR),clean)))
 $(foreach SDIR, $(SUBDIRS), $(eval $(call SDIR_template,$(SDIR),distclean)))
 
-nothing:
-
 install:
 
 context: $(foreach SDIR, $(CNTXTDIRS), $(SDIR)_context)
 
-depend: $(foreach SDIR, $(SUBDIRS), $(SDIR)_depend)
+.depend: Makefile $(SRCS)
+	$(Q) $(MKDEP) $(DEPPATH) "$(CC)" -- $(CFLAGS) -- $(SRCS) >Make.dep
+	$(Q) touch $@
+
+depend: $(foreach SDIR, $(SUBDIRS), $(SDIR)_depend) .depend
 
 clean: $(foreach SDIR, $(SUBDIRS), $(SDIR)_clean)
+	$(call DELFILE, $(BIN))
+	$(call CLEAN)
 
 distclean: $(foreach SDIR, $(SUBDIRS), $(SDIR)_distclean)
+	$(call DELFILE, Make.dep)
+	$(call DELFILE, .depend)
 
 -include Make.dep

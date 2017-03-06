@@ -79,7 +79,7 @@ button_handler (const struct pollfd * const pfd, void * const arg)
 
   cause->dyn.sense_value.value.valueint32 = power_button_pressed(cause->dyn.fd);
 
-  (void)handle_cause_event (cause);
+  (void)handle_cause_event (cause, NULL);
 
   return OK;
 }
@@ -131,7 +131,7 @@ sense_power_button_pressed_active_read(struct ts_cause *cause)
 {
   cause->dyn.sense_value.value.valueint32 = power_button_pressed(g_power_key_fd);
 
-  (void)handle_cause_event (cause);
+  (void)handle_cause_event (cause, NULL);
 
   return OK;
 }

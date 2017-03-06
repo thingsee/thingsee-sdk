@@ -67,11 +67,17 @@ ifeq ($(CONFIG_I2C_MAX1704X),y)
 CSRCS += max1704x.c
 endif
 
+# Add the BQ2742x I2C-based battery fuel gauge driver
+
+ifeq ($(CONFIG_BQ2742X),y)
+CSRCS += bq2742x.c
 endif
 
 endif
 
-# Include battery suport in the build
+endif
+
+# Add the BQ24251 I2C-based charger driver
 
 ifeq ($(CONFIG_BQ24251_CHARGER),y)
 CSRCS += bq24251.c

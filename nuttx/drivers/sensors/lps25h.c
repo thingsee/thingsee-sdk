@@ -199,6 +199,9 @@ static int lps25h_do_transfer(FAR struct lps25h_dev_t *dev,
         {
           /* Some error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == LPS25H_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(dev->i2c);
           if (ret < 0)
             {
@@ -206,7 +209,6 @@ static int lps25h_do_transfer(FAR struct lps25h_dev_t *dev,
               return ret;
             }
 #endif
-          continue;
         }
     }
 

@@ -57,6 +57,7 @@
 #include "stm32_rtc.h"
 #include "haltian-tsone.h"
 #include "up_modem.h"
+#include "up_gps.h"
 #include "up_gpio.h"
 
 /************************************************************************************
@@ -130,6 +131,13 @@ void board_deepsleep_with_stopmode_msecs(uint32_t msecs)
 
   millisecs = msecs;
 
+  if (!up_gps_deep_sleep_readiness(&millisecs))
+    {
+      dss_lldbg("INFO: GPS active, skipping deep-sleep!\n");
+
+      goto skip_deepsleep;
+    }
+
 #ifdef DEEPSLEEP_SLEEPTIME_DEBUG
   lldbg("sleep for %d msec\n", millisecs);
 #endif
@@ -167,13 +175,6 @@ void board_deepsleep_with_stopmode_msecs(uint32_t msecs)
   if (stm32_gpioread(GPIO_REGULATOR_WLAN))
     {
       lldbg("ERROR! Trying to deep-sleep when WLAN active!\n");
-
-      goto skip_deepsleep;
-    }
-
-  if (stm32_gpioread(GPIO_REGULATOR_GPS))
-    {
-      lldbg("ERROR! Trying to deep-sleep when GPS active!\n");
 
       goto skip_deepsleep;
     }

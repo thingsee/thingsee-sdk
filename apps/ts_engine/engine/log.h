@@ -60,6 +60,7 @@ enum logtypes
 
 struct send_log;
 
+bool __ts_engine_log_have_logs(void);
 int __ts_engine_log_start(struct send_log **handle, bool multisend,
                           struct url * const url);
 int __ts_engine_log_process(void * const priv, bool retry);

@@ -953,6 +953,21 @@
 #define MBEDTLS_SHA256_SMALLER
 
 /**
+ * \def MBEDTLS_SHA1_SMALLER
+ *
+ * Enable an implementation of SHA-1 that has lower ROM footprint but also
+ * lower performance.
+ *
+ * The default implementation is meant to be a reasonnable compromise between
+ * performance and size. This version optimizes more aggressively for size at
+ * the expense of performance. Eg on Cortex-M4 it reduces the size of
+ * mbedtls_sha1_process() from ~4KB to ~0.7KB.
+ *
+ * Uncomment to enable the smaller implementation of SHA1.
+ */
+#define MBEDTLS_SHA1_SMALLER
+
+/**
  * \def MBEDTLS_SSL_AEAD_RANDOM_IV
  *
  * Generate a random IV rather than using the record sequence number as a

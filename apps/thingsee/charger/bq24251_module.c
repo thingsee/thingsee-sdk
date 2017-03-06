@@ -80,7 +80,12 @@ typedef struct bq24251_charger_dev_t
     int timer;
     enum bq24251_plugged_state_e plugged;
     unsigned char det_attempts;
+    bool is_dead_fault;
     bq24251_state_t state;
+    struct
+    {
+      bool charging_allowed;
+    } config;
   } bq24251_charger_dev_t;
 
 
@@ -97,7 +102,9 @@ static bq24251_charger_dev_t g_charger = {
   .timer = -1,
   .plugged = PLUGGED_STATE_UNKNOWN,
   .det_attempts = 0,
+  .is_dead_fault = false,
   .state = BQ24251_READY_ST,
+  .config.charging_allowed = true,
 };
 
 static bq24251_chgr_cbks_t g_progress_cbks = {
@@ -205,7 +212,7 @@ static int bq24251_timer_callback(const int timer_id,
  * 	0 on success and -1 on ERROR
  *
  ****************************************************************************/
-static int bq24251_charger_stop_charging(bool is_dead_fault)
+static int bq24251_charger_stop_charging(bool is_dead_fault, bool force_ce)
 {
   int ret = OK;
   bq24251_data_t data = {
@@ -213,8 +220,12 @@ static int bq24251_charger_stop_charging(bool is_dead_fault)
     .enable_hz = false,
   };
 
-  if (is_dead_fault)
+  if (g_charger.file < 0)
+    return ERROR;
+
+  if (is_dead_fault || force_ce)
     {
+      data.enable_ce = !is_dead_fault;
       ret = ioctl(g_charger.file, BQ24251_IOC_SET_CHARGE_ENABLE,
                   (unsigned int)&data);
       if (ret < 0)
@@ -222,6 +233,8 @@ static int bq24251_charger_stop_charging(bool is_dead_fault)
           bq24251_dbg_perror("Failed to disable charger");
           goto fail;
         }
+
+      g_charger.is_dead_fault = is_dead_fault;
     }
 
   ret = ioctl(g_charger.file, BQ24251_IOC_SET_HZ, (unsigned int)&data);
@@ -249,6 +262,34 @@ fail:
   return ret;
 }
 
+/****************************************************************************
+ * Name: bq24251_charger_read_charge_enable
+ *
+ * Description:
+ *   Read charger enabled flag from charger chip
+ *
+ * Input Parameters:
+ *   ce    - output
+ *
+ * Returned Value:
+ *      0 on success and -1 on ERROR
+ *
+ ****************************************************************************/
+static int bq24251_charger_check_charge_enable(bool *ce)
+{
+  int ret;
+
+  if (g_charger.file < 0 || !ce)
+    return ERROR;
+
+  ret = ioctl(g_charger.file, BQ24251_IOC_GET_CHARGE_ENABLE, (unsigned int)ce);
+  if (ret < 0)
+    {
+      bq24251_dbg_perror("Failed to read CE");
+    }
+
+  return ret;
+}
 /****************************************************************************
  * Name: bq24251_charger_type_detection
  *
@@ -378,6 +419,22 @@ static int bq24251_charger_type_detection(enum bq24251_state_t status)
     {
       ret = -errno;
       bq24251_dbg_perror("Cannot set charger current");
+      goto fail;
+    }
+
+  if (!g_charger.config.charging_allowed)
+    {
+      /* Enabled charging, but config has charging disabled. */
+
+      data.enable_ce = false;
+      ret = ioctl(g_charger.file, BQ24251_IOC_SET_CHARGE_ENABLE,
+                  (unsigned int)&data);
+      if (ret < 0)
+        {
+          ret = -errno;
+          bq24251_dbg_perror("Failed to disable charger");
+          goto fail;
+        }
     }
 
 fail:
@@ -411,7 +468,7 @@ static int bq24251_charger_work_handler(bq24251_data_t * work_status)
   else
     {
       bq24251_charger_event(BQ24251_CHRG_EVENT_DONE);
-      bq24251_charger_stop_charging(false);
+      bq24251_charger_stop_charging(false, false);
     }
 
   bq24251_dbg("g_charger.det_attempts = %d\n",
@@ -432,6 +489,8 @@ static int bq24251_charger_work_handler(bq24251_data_t * work_status)
           bq24251_dbg_perror("Cannot reinit charger");
           goto fail;
         }
+
+      g_charger.is_dead_fault = false;
 
       ret = bq24251_charger_type_detection(work_status->sts->state);
 
@@ -513,7 +572,7 @@ static int bq24251_charger_fault_handler(bq24251_data_t * status_fault)
     case BQ24251_THERMAL_SHUTDOWN:
     case BQ24251_BATTERY_OVP:
       bq24251_dbg("Dead fault occurred\n");
-      bq24251_charger_stop_charging(true);
+      bq24251_charger_stop_charging(true, false);
       bq24251_charger_event(BQ24251_CHRG_EVENT_FAULT);
       break;
     case BQ24251_INPUT_UVLO:
@@ -522,7 +581,7 @@ static int bq24251_charger_fault_handler(bq24251_data_t * status_fault)
       if (g_charger.plugged != PLUGGED_STATE_FALSE) /* TRUE or UNKNOWN */
         {
           bq24251_dbg("Charger disconnected\n");
-          bq24251_charger_stop_charging(false);
+          bq24251_charger_stop_charging(false, true);
           bq24251_charger_event(BQ24251_CHRG_EVENT_NO_CHARGER);
           bq24251_notify_usb_connect(NULL);
           g_charger.plugged = PLUGGED_STATE_FALSE;
@@ -540,7 +599,7 @@ static int bq24251_charger_fault_handler(bq24251_data_t * status_fault)
     case BQ24251_NO_BATTERY_CONNECTED:
     case BQ24251_ISET_SHORT:
       bq24251_dbg("Device is still alive\n");
-      bq24251_charger_stop_charging(false);
+      bq24251_charger_stop_charging(false, false);
       bq24251_charger_event(BQ24251_CHRG_EVENT_FAULT);
       g_charger.plugged = PLUGGED_STATE_FALSE;
       g_charger.det_attempts = 0;
@@ -578,6 +637,13 @@ static int bq24251_check_status_bits(void)
     .sts = &sts
   };
 
+  if (g_charger.file < 0)
+    {
+      /* Module initialized yet. */
+
+      return ERROR;
+    }
+
   while (fault_count++ < BQ24251_MAX_CHG_FAULT)
     {
       ret = ioctl(g_charger.file, BQ24251_IOC_CHK_CHRG_STS, (unsigned int)&data);
@@ -589,7 +655,7 @@ static int bq24251_check_status_bits(void)
           /* If we cannot check status, and error is not transient we might as well
            * attempt to stop charging for safety. */
           if (!(ret == -EAGAIN || ret == -EINVAL))
-            bq24251_charger_stop_charging(false);
+            bq24251_charger_stop_charging(false, false);
           return ERROR;
         }
 
@@ -752,6 +818,7 @@ int bq24251_init_module(const bq24251_chgr_cbks_t * bq24251_cbks)
     }
 
   g_charger.timer = -1;
+  g_charger.is_dead_fault = false;
 
   g_charger.file = open(CHARGER_DEV_PATH, O_RDWR);
   if (g_charger.file < 0)
@@ -762,8 +829,8 @@ int bq24251_init_module(const bq24251_chgr_cbks_t * bq24251_cbks)
 
   /* Register charger poll callback. */
 
-  ret =
-    ts_core_fd_register(g_charger.file, POLLIN, bq24251_charger_callback, NULL);
+  ret = ts_core_fd_register(g_charger.file, POLLIN, bq24251_charger_callback,
+                            NULL);
   DEBUGASSERT(ret == OK);
 
   /* Check if charger plugged in already */
@@ -799,6 +866,47 @@ int bq24251_turnoff_dev(void)
     bq24251_dbg_perror("Cannot set SYSOFF bit");
 
   return ret;
+}
+
+/****************************************************************************
+ * Name: bq24251_set_charging_allowed
+ *
+ * Description:
+ *   Setup for if charging allowed or disallow
+ *
+ * Input Parameters:
+ *   allowed:  'true' if allowed, 'false' if disallowed
+ *
+ ****************************************************************************/
+void bq24251_set_charging_allowed(bool allowed)
+{
+  bool curr_ce = false;
+
+  if (g_charger.config.charging_allowed == allowed)
+    return;
+
+  g_charger.config.charging_allowed = allowed;
+
+  if (g_charger.file < 0)
+    return;
+
+  /* Check state. */
+
+  if (!g_charger.is_dead_fault &&
+      bq24251_charger_check_charge_enable(&curr_ce) >= 0 &&
+      curr_ce != allowed)
+    {
+      const bq24251_data_t data = { .enable_ce = allowed };
+
+      /* Disable or restore charging. */
+
+      (void)ioctl(g_charger.file, BQ24251_IOC_SET_CHARGE_ENABLE,
+                  (unsigned int)&data);
+    }
+
+  /* Setup and check state. */
+
+  (void)bq24251_check_status_bits();
 }
 
 /****************************************************************************

@@ -1,7 +1,7 @@
 /****************************************************************************
  * arch/arm/src/stm32/stm32_stepper.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
  *   Authors: Harri Luhtala <harri.luhtala@harri.luhtala@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -120,6 +120,8 @@ struct stm32_stepper_s
   uint8_t irq;                          /* Timer update IRQ */
   enum drive_direction_e direction;     /* Drive direction */
   uint8_t gpio_port;                    /* GPIO port number */
+  uint16_t min_freq;                    /* Minimum step pattern frequency */
+  uint16_t max_freq;                    /* Maximum step pattern frequency */
   uint32_t pattern_bkreg;               /* Pattern index backup register */
   uint32_t position_bkreg;              /* Position index backup register */
   uint32_t step[MAX_STEP_INDEX + 1];    /* Step pattern GPIO BSRR config */
@@ -203,6 +205,9 @@ static struct stm32_stepper_s g_stepper2dev =
 {
   .ops        = &g_stepperops,
 
+  .min_freq   = TIM2_STEPPER_MIN_FREQ,
+  .max_freq   = TIM2_STEPPER_MAX_FREQ,
+
   .step       = {
                 GPIO_BSRR_SET( (GPIO_PIN_MASK & TIM2_GPIO_P1_P) >> GPIO_PIN_SHIFT ) |
                 GPIO_BSRR_RESET( (GPIO_PIN_MASK & TIM2_GPIO_P1_N) >> GPIO_PIN_SHIFT ) |
@@ -252,6 +257,9 @@ static struct stm32_stepper_s g_stepper2dev =
 static struct stm32_stepper_s g_stepper3dev =
 {
   .ops        = &g_stepperops,
+
+  .min_freq   = TIM3_STEPPER_MIN_FREQ,
+  .max_freq   = TIM3_STEPPER_MAX_FREQ,
 
   .step       = {
                 GPIO_BSRR_SET( (GPIO_PIN_MASK & TIM3_GPIO_P1_P) >> GPIO_PIN_SHIFT ) |
@@ -303,6 +311,9 @@ static struct stm32_stepper_s g_stepper4dev =
 {
   .ops        =  &g_stepperops,
 
+  .min_freq   = TIM4_STEPPER_MIN_FREQ,
+  .max_freq   = TIM4_STEPPER_MAX_FREQ,
+
   .step       = {
                 GPIO_BSRR_SET( (GPIO_PIN_MASK & TIM4_GPIO_P1_P) >> GPIO_PIN_SHIFT ) |
                 GPIO_BSRR_RESET( (GPIO_PIN_MASK & TIM4_GPIO_P1_N) >> GPIO_PIN_SHIFT ) |
@@ -352,6 +363,9 @@ static struct stm32_stepper_s g_stepper4dev =
 static struct stm32_stepper_s g_stepper5dev =
 {
   .ops        = &g_stepperops,
+
+  .min_freq   = TIM5_STEPPER_MIN_FREQ,
+  .max_freq   = TIM5_STEPPER_MAX_FREQ,
 
   .step       = {
                 GPIO_BSRR_SET( (GPIO_PIN_MASK & TIM5_GPIO_P1_P) >> GPIO_PIN_SHIFT ) |
@@ -550,8 +564,6 @@ static void stepper_setup_frequency(FAR struct stm32_stepper_s *priv,
   uint32_t timclk;
   uint32_t reload;
 
-  DEBUGASSERT(frequency > 0);
-
   /* Calculate optimal values for the timer prescaler and for the timer
    * reload register. */
 
@@ -620,8 +632,6 @@ static int stepper_timer(FAR struct stm32_stepper_s *priv,
   DEBUGASSERT(priv != NULL);
 
   steppervdbg("TIM%d, freq:%d\n", priv->timid, info->frequency);
-
-  DEBUGASSERT(info->frequency > 0);
 
   /* Disable all interrupts and clear all pending status */
 
@@ -708,7 +718,7 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
 
   if (info->pos_type == POS_ABSOLUTE)
     {
-      duration = abs(info->position - priv->target_pos) /
+      duration = abs(info->position - getreg32(priv->position_bkreg)) /
         (float)info->frequency;
       priv->target_pos = info->position;
     }
@@ -723,9 +733,7 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
   priv->direction = priv->target_pos > getreg32(priv->position_bkreg)?
     DIR_CW: DIR_CCW;
 
-  /* Update frequency if duration is valid */
-
-  if (duration > 0.0)
+  if (duration > 0)
     {
       /* Calculate new frequency based on step pattern duration and
        * remaining steps.
@@ -734,9 +742,13 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
       frequency = (uint32_t)(abs(priv->target_pos - getreg32(
         priv->position_bkreg)) / duration);
 
-      if (frequency == 0)
+      if (frequency < priv->min_freq)
         {
-          frequency = 1;
+          frequency = priv->min_freq;
+        }
+      else if (frequency > priv->max_freq)
+        {
+          frequency = priv->max_freq;
         }
 
       /* Update step pattern frequency */
@@ -1037,7 +1049,7 @@ static int stepper_set_pos(FAR struct stepper_lowerhalf_s *dev,
   steppervdbg("TIM%d pos:%d (%s), freq:%d\n", priv->timid, info->position,
     info->pos_type == POS_ABSOLUTE? "abs" : "rel", info->frequency);
 
-  if (info->frequency == 0)
+  if (info->frequency < priv->min_freq || info->frequency > priv->max_freq)
     {
       stepperdbg("invalid frequency\n");
       return -EINVAL;

@@ -64,6 +64,7 @@ typedef struct bq24251_chgr_cbks_s
 #ifdef CONFIG_THINGSEE_CHARGER_MODULE
 
 int bq24251_init_module(const bq24251_chgr_cbks_t * bq24251_cbks);
+void bq24251_set_charging_allowed(bool allowed);
 int bq24251_turnoff_dev(void);
 bool bq24251_is_charging(void);
 

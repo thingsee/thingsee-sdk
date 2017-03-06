@@ -91,11 +91,29 @@
 #define UBX_CFG_RST                   0x04
 #define UBX_CFG_RST_LEN               4
 
-
 /* CFG-RATE: Navigation rate - 0x08 */
 
 #define UBX_CFG_RATE                  0x08
 #define UBX_CFG_RATE_LEN              6
+
+/* CFG-CFG: Clear, save and load configurations - 0x09 */
+
+#define UBX_CFG_CFG                   0x09
+#define UBX_CFG_CFG_LEN               12
+
+#define CFG_ACT_CLEAR                 1
+#define CFG_ACT_SAVE                  2
+#define CFG_ACT_LOAD                  3
+
+#define CFG_IO_CONF                   (1 << 0)
+#define CFG_MSG_CONF                  (1 << 1)
+#define CFG_INF_CONF                  (1 << 2)
+#define CFG_NAV_CONF                  (1 << 3)
+#define CFG_RXM_CONF                  (1 << 4)
+#define CFG_RINV_CONF                 (1 << 9)
+#define CFG_ANT_CONF                  (1 << 10)
+#define CFG_LOG_CONF                  (1 << 11)
+#define CFG_FTS_CONF                  (1 << 12)
 
 /* CFG-RXM: RXM configuration - 0x11 */
 
@@ -138,6 +156,34 @@
 
 #define SBAS_SCAN_MODE_AUTO           0
 
+/* CFG-NAV5: Navigation engine settings - 0x24 */
+
+#define UBX_CFG_NAV5                  0x24
+#define UBX_CFG_NAV5_LEN              36
+
+#define NAV5_MASK_MODEL               (1 << 0)
+#define NAV5_MASK_ELEV                (1 << 1)
+#define NAV5_MASK_FIX_MODE            (1 << 2)
+#define NAV5_MASK_POS_MASK            (1 << 4)
+#define NAV5_MASK_TIME_MASK           (1 << 5)
+#define NAV5_MASK_STATIC_HOLD         (1 << 6)
+#define NAV5_MASK_DGPS                (1 << 7)
+#define NAV5_MASK_CNO                 (1 << 8)
+#define NAV5_MASK_UTC                 (1 << 10)
+
+#define NAV5_MODEL_PORTABLE           0
+#define NAV5_MODEL_STATIONARY         2
+#define NAV5_MODEL_PEDESTRIAN         3
+#define NAV5_MODEL_AUTOMOTIVE         4
+#define NAV5_MODEL_SEA                5
+#define NAV5_MODEL_AIRBORNE_1G        6
+#define NAV5_MODEL_AIRBORNE_2G        7
+#define NAV5_MODEL_AIRBORNE_4G        8
+
+#define NAV5_FIXMODE_2D_ONLY          1
+#define NAV5_FIXMODE_3D_ONLY          2
+#define NAV5_FIXMODE_AUTO             3
+
 /* CFG-PM2: Power management configuration - 0x3B */
 
 #define UBX_CFG_PM2                   0x3B
@@ -152,6 +198,9 @@
 #define PM2_UPDATE_EPH                (1 << 12)
 #define PM2_NO_FIX_NO_OFF             (1 << 16)
 #define PM2_MODE_CYCLIC               (1 << 17)
+
+#define PM_CYCLIC_MIN_RATE            1000
+#define PM_CYCLIC_MAX_RATE            10000
 
 /* UBX NAV class (0x01) message id's */
 
@@ -178,6 +227,7 @@
 #define NAV_FLAG_PSM_TRK              (3 << 2)
 #define NAV_FLAG_PSM_POT              (4 << 2)
 #define NAV_FLAG_PSM_INA              (5 << 2)
+#define NAV_FLAG_PSM_MASK             (7 << 2)
 #define NAV_FLAG_HEADING_VALID        (1 << 5)
 
 /* UBX AID class (0x0B) message id's */

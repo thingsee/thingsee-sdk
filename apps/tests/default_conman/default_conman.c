@@ -41,7 +41,7 @@
 
 #include <nuttx/config.h>
 #include <stdbool.h>
-#include <nuttx/testing/unity_fixture.h>
+#include <apps/testing/unity_fixture.h>
 
 /****************************************************************************
  * Pre-processor Definitions

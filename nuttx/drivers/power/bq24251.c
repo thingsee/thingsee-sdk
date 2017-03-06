@@ -81,7 +81,7 @@
 #define BQ24251_ILIM_MASK               (0x07 << BQ24251_ILIM_SHIFT)
 #define BQ24251_EN_STAT                 (1 << 3)
 #define BQ24251_EN_TERM                 (1 << 2)
-#define BQ24251_CE                      (1 << 1)
+#define BQ24251_INV_CE                  (1 << 1)
 #define BQ24251_HZ_MODE                 (1 << 0)
 #define BQ24251_CLEAR_RST_MASK          0x7F
 
@@ -194,6 +194,9 @@ static int bq24251_do_transfer(FAR struct bq24251_dev_t *dev,
         {
           /* Some error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == BQ24251_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(dev->i2c);
           if (ret < 0)
             {
@@ -201,7 +204,6 @@ static int bq24251_do_transfer(FAR struct bq24251_dev_t *dev,
               return ret;
             }
 #endif
-          continue;
         }
     }
 
@@ -297,6 +299,27 @@ static int bq24251_reset_chrg(FAR struct bq24251_dev_t *priv)
   return ret;
 }
 
+static int bq24251_get_ce(FAR struct bq24251_dev_t *priv, bool *ce)
+{
+  int ret;
+  uint8_t value = 0;
+
+  if (!ce)
+    return ERROR;
+
+  ret = bq24251_read_reg8(priv, REG2, &value);
+  if (ret < 0)
+    {
+      bq24251_dbg("Cannot read REG#2\n");
+      goto fail;
+    }
+
+  *ce = !(value & BQ24251_INV_CE);
+
+fail:
+  return ret;
+}
+
 static int bq24251_enable_chrg(FAR struct bq24251_dev_t *priv, bool enable)
 {
   int ret;
@@ -312,11 +335,11 @@ static int bq24251_enable_chrg(FAR struct bq24251_dev_t *priv, bool enable)
   value &= BQ24251_CLEAR_RST_MASK;
   if (enable)
     {
-      value &= ~BQ24251_CE;
+      value &= ~BQ24251_INV_CE;
     }
   else
     {
-      value |= BQ24251_CE;
+      value |= BQ24251_INV_CE;
     }
 
   ret = bq24251_write_reg8(priv, REG2, value);
@@ -809,6 +832,9 @@ static int bq24251_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       break;
     case BQ24251_IOC_SET_CHARGE_ENABLE:
       ret = bq24251_enable_chrg(priv, ((bq24251_data_t *) arg)->enable_ce);
+      break;
+    case BQ24251_IOC_GET_CHARGE_ENABLE:
+      ret = bq24251_get_ce(priv, (bool *)arg);
       break;
     default:
       ret = -EINVAL;

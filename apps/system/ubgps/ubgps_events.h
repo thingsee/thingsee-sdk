@@ -53,7 +53,6 @@ enum sm_event_id_e
   SM_EVENT_UBX_MESSAGE,
   SM_EVENT_UBX_STATUS,
   SM_EVENT_AID_STATUS,
-  SM_EVENT_PSM_STATE,
 };
 typedef enum sm_event_id_e sm_event_id_t;
 

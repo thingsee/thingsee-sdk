@@ -2300,7 +2300,8 @@ config STM32_TIM2_STEPPER
 		then the following may also be defined to indicate that the timer is intended
 		to be used for stepper motor control. Your board configuration will have to
 		provide stepper motor GPIO configuration for TIM2_GPIO_P1_P, TIM2_GPIO_P1_N,
-		TIM2_GPIO_P2_P and TIM2_GPIO_P2_N.
+		TIM2_GPIO_P2_P, TIM2_GPIO_P2_N and step pattern frequency limits
+		TIM2_STEPPER_MIN_FREQ and TIM2_STEPPER_MAX_FREQ.
 
 config STM32_TIM3_STEPPER
 	bool "TIM3 stepper"
@@ -2313,7 +2314,8 @@ config STM32_TIM3_STEPPER
 		then the following may also be defined to indicate that the timer is intended
 		to be used for stepper motor control. Your board configuration will have to
 		provide stepper motor GPIO configuration for TIM3_GPIO_P1_P, TIM3_GPIO_P1_N,
-		TIM3_GPIO_P2_P and TIM3_GPIO_P2_N.
+		TIM3_GPIO_P2_P, TIM3_GPIO_P2_N and step pattern frequency limits
+		TIM3_STEPPER_MIN_FREQ and TIM3_STEPPER_MAX_FREQ.
 
 config STM32_TIM4_STEPPER
 	bool "TIM4 stepper"
@@ -2326,7 +2328,8 @@ config STM32_TIM4_STEPPER
 		then the following may also be defined to indicate that the timer is intended
 		to be used for stepper motor control. Your board configuration will have to
 		provide stepper motor GPIO configuration for TIM4_GPIO_P1_P, TIM4_GPIO_P1_N,
-		TIM4_GPIO_P2_P and TIM4_GPIO_P2_N.
+		TIM4_GPIO_P2_P, TIM4_GPIO_P2_N and step pattern frequency limits
+		TIM4_STEPPER_MIN_FREQ and TIM4_STEPPER_MAX_FREQ.
 
 config STM32_TIM5_STEPPER
 	bool "TIM5 stepper"
@@ -2339,7 +2342,8 @@ config STM32_TIM5_STEPPER
 		then the following may also be defined to indicate that the timer is intended
 		to be used for stepper motor control. Your board configuration will have to
 		provide stepper motor GPIO configuration for TIM5_GPIO_P1_P, TIM5_GPIO_P1_N,
-		TIM5_GPIO_P2_P and TIM5_GPIO_P2_N.
+		TIM5_GPIO_P2_P and TIM5_GPIO_P2_N and step pattern frequency limits
+		TIM5_STEPPER_MIN_FREQ and TIM5_STEPPER_MAX_FREQ.
 
 config STM32_TIM1_ADC
 	bool "TIM1 ADC"

@@ -54,6 +54,7 @@
 #include "haltian-tsone.h"
 #include "up_chipselect.h"
 #include "up_modem.h"
+#include "up_gps.h"
 #include "up_gpio.h"
 
 #include "stm32_flash.h"
@@ -403,6 +404,10 @@ void stm32_boardinitialize(void)
   /* Initialize modem gpios. */
 
   up_modem_initialize_gpios();
+
+  /* Initialize GPS gpios. */
+
+  up_gps_initialize_gpios();
 
   /* Initialize unused gpio pads. */
 

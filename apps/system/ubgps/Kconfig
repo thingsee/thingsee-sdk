@@ -31,6 +31,19 @@ config SYSTEM_UBGPS_LNA_CONTROL
 	---help---
 		Enable external low noise amplifier (LNA) control.
 
+config UBGPS_DISABLE_POWERSAVE
+	bool "Disable GPS power-save (force continuous mode)"
+	default n
+	---help---
+		Disable GPS power-save mode.
+
+config UBGPS_DISABLE_BOARD_POWERSAVE_CONTROL
+	bool "Disable GPS board-level PM control"
+	default n
+	---help---
+		Disable GPS board-level PM control (disallow MCU deep-sleep when GPS
+		on).
+
 config SYSTEM_UBGPS_LNA_PIN
 	int "Pin used for LNA control"
 	default 16
@@ -43,33 +56,47 @@ config UBGPS_ASSIST_UPDATER
 	---help---
 		Enable automatic assist data updates from u-blox server.
 
-config UBGPS_PSM_MODE
-	bool "Enable power save mode"
+config UBGPS_3DFIX_ONLY
+	bool "Only allow 3D fixes"
 	default n
 	---help---
-		Enable power save mode for GPS. GPS chip can be powered down
-		between update rate periods in order to reduce power consumption.
+		Only allow 3D fixes, disable degraded navigation solutions (2D, etc).
 
-if UBGPS_PSM_MODE
-
-config UBGPS_PSM_MODE_THRESHOLD
-	int "Navigation rate threshold in seconds to enable power save mode"
-	default 20
+config UBGPS_DISALLOW_ACQ_FIX
+	bool "Do not allow fixes from acquisition state"
+	default n
 	---help---
-		Navigation rate threshold value that enables power save mode (PSM).
+		Only allow fixes from 'tracking' and 'power-save optimized tracking'.
+		Acquisition fixes may not be fully stable and can have significant
+		inaccuracies.
 
-config UBGPS_PSM_ACCURACY_FILTER_DURATION
+config UBGPS_DYNAMIC_MODEL
+	int "Navigation engine dynamic platform model"
+	default 4
+	---help---
+		Adjust navigation engine dynamic platform model to the expected
+		application environment. 0 - portable, 2 - stationary, 3 - pedestrian,
+		4 - automotive, 5 - at sea, 6 - airborne 1g, 7 - airborne 2g,
+		8 - airborne 4g.
+
+config UBGPS_POSITION_ACCURACY_MASK
+	int "Position accuracy mask in meters"
+	default 100
+	---help---
+		Position accuracy in meters that defines threshold value for navigation
+		output filters whether the fix should be classified as valid or not.
+
+config UBGPS_ACCURACY_FILTER_DURATION
 	int "Time duration in seconds for horizontal accuracy filter"
 	default 10
 	---help---
-		Duration of horizontal accuracy filter for location events that are
-		received in power save mode. Accuracy filter collects location events
-		and publish the most accurate location received within filtering period.
-		Note that accuracy filter causes delay for requested navigation rate
-		that is equal for filter duration. Set threshold to 0 in order to disable
-		accuracy filter.
+		Duration of horizontal accuracy filter for location events. Accuracy
+		filter collects location events and publish the most accurate location
+		received within filtering period. Note that accuracy filter causes delay
+		for requested navigation rate that is equal for filter duration.
+		Set threshold to 0 in order to disable accuracy filter.
 
-config UBGPS_PSM_ACCURACY_FILTER_THRESHOLD
+config UBGPS_ACCURACY_FILTER_THRESHOLD
 	int "Horizontal accuracy threshold in meters"
 	default 100
 	---help---
@@ -77,8 +104,6 @@ config UBGPS_PSM_ACCURACY_FILTER_THRESHOLD
 		information. Horizontal accuracy value below threshold causes accuracy
 		filter to stop collecting location events. Set threshold to 0 in order
 		to disable threshold functionality.
-
-endif
 
 endif
 endmenu

@@ -150,6 +150,12 @@ config UBMODEM_DISABLE_FILESYSTEM
 	---help---
 		Disable modem filesystem access
 
+config UBMODEM_DISABLE_SELFTESTS
+	bool "Disable start-up selftests"
+	default n
+	---help---
+		Disable start-up selftests to reduce ROM usage.
+
 config UBMODEM_PARSER_DEBUG
 	bool "Enable AT-parser debugging"
 	default n

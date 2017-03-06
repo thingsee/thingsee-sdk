@@ -185,6 +185,9 @@ static int hts221_do_transfer(FAR struct hts221_dev_t *dev,
         {
           /* Some error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == HTS221_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(dev->i2c);
           if (ret < 0)
             {
@@ -192,7 +195,6 @@ static int hts221_do_transfer(FAR struct hts221_dev_t *dev,
               return ret;
             }
 #endif
-          continue;
         }
     }
 

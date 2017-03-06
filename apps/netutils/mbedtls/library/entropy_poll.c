@@ -77,7 +77,7 @@ int mbedtls_platform_entropy_poll( void *data, unsigned char *output, size_t len
 int mbedtls_platform_entropy_poll( void *data,
                            unsigned char *output, size_t len, size_t *olen )
 {
-    speckrandom_buf(output, len);
+    getrandom(output, len);
     *olen = len;
     return( 0 );
 }

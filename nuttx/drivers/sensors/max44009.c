@@ -137,6 +137,9 @@ static int max44009_do_transfer(FAR struct max44009_dev_t *dev,
         {
           /* Some error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == MAX44009_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(dev->i2c);
           if (ret < 0)
             {
@@ -144,7 +147,6 @@ static int max44009_do_transfer(FAR struct max44009_dev_t *dev,
               return ret;
             }
 #endif
-          continue;
         }
     }
 

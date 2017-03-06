@@ -5,7 +5,7 @@
     [Released under MIT License. Please refer to license.txt for details]
 ========================================== */
 
-#include <nuttx/testing/unity_fixture.h>
+#include <apps/testing/unity_fixture.h>
 
 static int data = -1;
 

@@ -50,9 +50,6 @@
 #include <debug.h>
 #include <queue.h>
 
-#include <arch/board/board-gps.h>
-#include <apps/thingsee/modules/ts_gps.h>
-
 #include "ubgps_internal.h"
 
 /****************************************************************************
@@ -63,6 +60,12 @@
  #define dbg_ubgps(...) dbg(__VA_ARGS__)
 #else
   #define dbg_ubgps(...)
+#endif
+
+#ifdef CONFIG_SYSTEM_UBGPS_VERBOSE_DEBUG
+ #define vdbg_ubgps(...) dbg(__VA_ARGS__)
+#else
+  #define vdbg_ubgps(...)
 #endif
 
 #define NMEA_BUFFER_LINE_LEN          128
@@ -94,6 +97,28 @@ static struct gps_assist_hint_s g_gps_hint;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+static uint32_t ubgps_adjust_rate(uint32_t input_rate)
+{
+  uint32_t output_rate = input_rate;
+
+#ifndef CONFIG_UBGPS_DISABLE_POWERSAVE
+  /* Adjust navigation rate to match cyclic mode update-rate limits. */
+
+  if (output_rate < PM_CYCLIC_MIN_RATE)
+    output_rate = PM_CYCLIC_MIN_RATE;
+  else if (output_rate > PM_CYCLIC_MAX_RATE)
+    output_rate = PM_CYCLIC_MAX_RATE;
+
+  /* Rate needs to be multiple of 500 msec, to that we can synchronize with
+   * acquiring state (fixed 2 Hz with power-save mode) */
+
+  output_rate /= 500;
+  output_rate *= 500;
+#endif
+
+  return output_rate;
+}
 
 /****************************************************************************
  * Public Functions
@@ -128,6 +153,7 @@ struct ubgps_s *ubgps_initialize(void)
 
   memset(gps, 0, sizeof(struct ubgps_s));
   gps->hint = &g_gps_hint;
+  sq_init(&gps->event_target_state_queue);
 
   /* Open GPS serial device */
 
@@ -137,6 +163,14 @@ struct ubgps_s *ubgps_initialize(void)
       dbg("Failed to open GPS device: %d\n", errno);
       return NULL;
     }
+
+#if defined(BOARD_HAS_GPS_PM_SET_NEXT_MESSAGE_TIME)
+  /* Disable board-level PM at start-up. */
+
+  struct timespec ts = {0, 0};
+
+  board_gps_pm_set_next_message_time(&ts);
+#endif
 
   /* Set file blocking */
 
@@ -154,9 +188,14 @@ struct ubgps_s *ubgps_initialize(void)
   gps->state.new_state = gps->state.current_state;
   gps->state.target_state = gps->state.current_state;
   gps->state.nmea_protocol_enabled = false;
-  gps->state.navigation_rate = DEFAULT_NAVIGATION_RATE;
+  gps->state.navigation_rate = ubgps_adjust_rate(DEFAULT_NAVIGATION_RATE);
+  gps->state.search_period = 0;
+  gps->state.update_period = 0;
   gps->state.target_state_pending = false;
   gps->state.target_timer_id = -1;
+  gps->state.aid_timer_id = -1;
+  gps->state.init_timer_id = -1;
+  gps->state.location_timer_id = -1;
 
   /* Initialize UBX receiver */
 
@@ -444,7 +483,15 @@ int ubgps_config(gps_config_t const config, void const * const value)
         {
           int status;
 
-          gps->state.navigation_rate = *((uint32_t *)value);
+          if (gps->state.navigation_rate ==
+              ubgps_adjust_rate(*((uint32_t *)value)))
+            {
+              /* No change. */
+
+              break;
+            }
+
+          gps->state.navigation_rate = ubgps_adjust_rate(*((uint32_t *)value));
 
           /* Update navigation rate immediately if initialization phase
              is already completed. */
@@ -452,26 +499,97 @@ int ubgps_config(gps_config_t const config, void const * const value)
           if (gps->state.current_state == GPS_STATE_SEARCHING_FIX ||
               gps->state.current_state == GPS_STATE_FIX_ACQUIRED)
             {
-#ifdef CONFIG_UBGPS_PSM_MODE
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
-                {
-                  /* Use default navigation rate for SW controlled PSM */
-
-                  status = ubgps_send_cfg_rate(gps, DEFAULT_NAVIGATION_RATE);
-                }
-              else
-                {
-                  status = ubgps_send_cfg_rate(gps, gps->state.navigation_rate);
-                }
-#else
               status = ubgps_send_cfg_rate(gps, gps->state.navigation_rate);
-#endif /* CONFIG_UBGPS_PSM_MODE */
 
               if (status != OK)
                 {
                   dbg("navigation rate update failed\n");
                   return ERROR;
                 }
+
+#ifndef CONFIG_UBGPS_DISABLE_POWERSAVE
+              /* FIXME: Above ubgps_send_cfg_rate changes internal state of
+               *        ubgps library so that following ubgps_send_cfg_pm2
+               *        will always fail. */
+              /* TODO: Find out / decide if PM2 is needed here. Need to fix
+               *       internal state to clear 'send timer' before writing
+               *       next command. */
+#if 0
+              uint32_t flags = PM2_MODE_CYCLIC | PM2_UPDATE_EPH | PM2_UPDATE_RTC;
+
+              if (gps->state.search_period == 0)
+                flags |= PM2_NO_FIX_NO_OFF;
+
+              status = ubgps_send_cfg_pm2(gps, flags,
+                                          gps->state.navigation_rate,
+                                          gps->state.search_period);
+              if (status != OK)
+                {
+                  dbg("cyclic mode rate update failed\n");
+                  return ERROR;
+                }
+#endif
+#endif
+            }
+
+          break;
+        }
+
+      case GPS_CONFIG_UPDATE_PERIOD:
+        {
+          if (gps->state.update_period == *((uint32_t *)value))
+            {
+              /* No change. */
+
+              break;
+            }
+
+          gps->state.update_period = *((uint32_t *)value);
+
+          /* Update update period immediately if initialization phase
+             is already completed. */
+
+          goto reconfigure_pm2;
+        }
+
+      case GPS_CONFIG_SEARCH_PERIOD:
+        {
+          if (gps->state.search_period == *((uint32_t *)value))
+            {
+              /* No change. */
+
+              break;
+            }
+
+          gps->state.search_period = *((uint32_t *)value);
+
+          /* Update search period immediately if initialization phase
+             is already completed. */
+
+reconfigure_pm2:
+          if (gps->state.current_state == GPS_STATE_SEARCHING_FIX ||
+              gps->state.current_state == GPS_STATE_FIX_ACQUIRED)
+            {
+#ifndef CONFIG_UBGPS_DISABLE_POWERSAVE
+              int status;
+              uint32_t flags = PM2_MODE_CYCLIC | PM2_UPDATE_EPH | PM2_UPDATE_RTC;
+              uint32_t update_period = gps->state.update_period;
+
+              if (update_period == 0)
+                update_period = gps->state.navigation_rate;
+
+              if (gps->state.search_period == 0)
+                flags |= PM2_NO_FIX_NO_OFF;
+
+              status = ubgps_send_cfg_pm2(gps, flags,
+                                          update_period,
+                                          gps->state.search_period);
+              if (status != OK)
+                {
+                  dbg("search period update failed\n");
+                  return ERROR;
+                }
+#endif
             }
 
           break;
@@ -509,19 +627,26 @@ int ubgps_request_state(gps_state_t const state, uint32_t const timeout)
   if (state < 0 || state > __GPS_STATE_MAX)
     return ERROR;
 
-  /* Mark target state transition as pending */
-
-  gps->state.target_state_pending = true;
-
   /* Construct target state event */
 
   event.super.id = SM_EVENT_TARGET_STATE;
   event.target_state = state;
   event.timeout = timeout;
 
-  /* Process event */
+  if (gps->state.in_sm_process)
+    {
+      return ubgps_queue_state_change(gps, &event);
+    }
+  else
+    {
+      /* Mark target state transition as pending */
 
-  return ubgps_sm_process(gps, (struct sm_event_s *)&event);
+      gps->state.target_state_pending = true;
+
+      /* Process event */
+
+      return ubgps_sm_process(gps, (struct sm_event_s *)&event);
+    }
 }
 
 /****************************************************************************
@@ -555,11 +680,24 @@ bool ubgps_deepsleep_callback(void * const priv)
 {
   struct ubgps_s * const gps = &g_gps;
 
+  if (gps->state.alpsrv_enabled && ubgps_get_state() == GPS_STATE_SEARCHING_FIX)
+    {
+      /* Do not allow deep-sleeping when acquiring fix and host is running as
+       * aiding data server. */
+
+      return false;
+    }
+
+#ifdef BOARD_HAS_GPS_PM_SET_NEXT_MESSAGE_TIME
+  return true;
+#else
+
   /* Allow deep sleep if GPS state is power_off and state transition is not
      pending */
 
   return (ubgps_get_state() == GPS_STATE_POWER_OFF &&
          !gps->state.target_state_pending);
+#endif
 }
 
 /****************************************************************************
@@ -592,56 +730,11 @@ int ubgps_set_aiding_params(bool const use_time,
                              uint32_t const accuracy)
 {
   struct ubgps_s * const gps = &g_gps;
+  int ret;
 
   dbg_ubgps("\n");
 
   (void)use_time;
-
-  /* Free previously set assistance data */
-
-  if (gps->assist)
-    {
-      if (gps->assist->alp_file)
-        free(gps->assist->alp_file);
-
-      free(gps->assist);
-      gps->assist = NULL;
-    }
-
-  gps->assist = zalloc(sizeof(*gps->assist));
-  if (!gps->assist)
-    return ERROR;
-
-  gps->assist->alp_file = NULL;
-  gps->assist->alp_file_id = 0;
-
-#ifdef CONFIG_UBGPS_ASSIST_UPDATER
-  /* Ignore input ALP file, use A-GPS updater provided file instead. */
-
-  (void)alp_file;
-
-  if (ubgps_check_alp_file_validity(ubgps_aid_get_alp_filename()))
-    {
-      /* AlmanacPlus file available */
-
-      gps->assist->alp_file = strdup(ubgps_aid_get_alp_filename());
-      gps->assist->alp_file_id = 1;
-    }
-#else
-  if (alp_file)
-    {
-      /* Check that AlmanacPlus file is present and valid */
-
-      if (ubgps_check_alp_file_validity(alp_file))
-        {
-          /* AlmanacPlus file available */
-
-          gps->assist->alp_file = strdup(alp_file);
-          gps->assist->alp_file_id = alp_file_id;
-        }
-    }
-#endif
-
   if (use_loc)
     {
       if (!g_gps_hint.have_location)
@@ -654,6 +747,59 @@ int ubgps_set_aiding_params(bool const use_time,
         }
     }
 
+  if (!gps->assist)
+    {
+      gps->assist = zalloc(sizeof(*gps->assist));
+      if (!gps->assist)
+        return ERROR;
+
+      gps->assist->alp_file = NULL;
+      gps->assist->alp_file_id = 0;
+      gps->state.current_alp_file_id = 0;
+    }
+
+  ret = pthread_mutex_trylock(&g_aid_mutex);
+  if (ret != 0)
+    return OK;
+
+  if (!gps->assist->alp_file || strcmp(gps->assist->alp_file, alp_file) != 0)
+    {
+#ifdef CONFIG_UBGPS_ASSIST_UPDATER
+      /* Ignore input ALP file, use A-GPS updater provided file instead. */
+
+      if (alp_file && ubgps_check_alp_file_validity(ubgps_aid_get_alp_filename()))
+        {
+          free(gps->assist->alp_file);
+          gps->assist->alp_file = NULL;
+
+          /* AlmanacPlus file available */
+
+          gps->assist->alp_file = strdup(ubgps_aid_get_alp_filename());
+
+          /* Increase file-id, this tells GPS chip that file has changed. */
+
+          gps->assist->alp_file_id = gps->state.current_alp_file_id + 1;
+        }
+#else
+      /* Check that AlmanacPlus file is present and valid */
+
+      if (alp_file && ubgps_check_alp_file_validity(alp_file))
+        {
+          free(gps->assist->alp_file);
+          gps->assist->alp_file = NULL;
+
+          /* AlmanacPlus file available */
+
+          gps->assist->alp_file = strdup(alp_file);
+
+          /* Increase file-id, this tells GPS chip that file has changed. */
+
+          gps->assist->alp_file_id = gps->state.current_alp_file_id + 1;
+        }
+#endif
+    }
+
+  pthread_mutex_unlock(&g_aid_mutex);
   return OK;
 }
 
@@ -711,7 +857,6 @@ int ubgps_give_location_hint(double const latitude,
         }
     }
 
-
   g_gps_hint.location_time = currtime;
   g_gps_hint.have_location = true;
   g_gps_hint.latitude = latitude * 1e7;
@@ -719,11 +864,11 @@ int ubgps_give_location_hint(double const latitude,
   g_gps_hint.altitude = altitude;
   g_gps_hint.accuracy = accuracy;
 
-  dbg_ubgps("New location hint:\n");
-  dbg_ubgps(" lat     : %d\n", g_gps_hint.latitude);
-  dbg_ubgps(" long    : %d\n", g_gps_hint.longitude);
-  dbg_ubgps(" alt     : %d meters\n", altitude);
-  dbg_ubgps(" accuracy: %u meters\n", g_gps_hint.accuracy);
+  vdbg_ubgps("New location hint:\n");
+  vdbg_ubgps(" lat     : %d\n", g_gps_hint.latitude);
+  vdbg_ubgps(" long    : %d\n", g_gps_hint.longitude);
+  vdbg_ubgps(" alt     : %d meters\n", altitude);
+  vdbg_ubgps(" accuracy: %u meters\n", g_gps_hint.accuracy);
 
   return OK;
 }

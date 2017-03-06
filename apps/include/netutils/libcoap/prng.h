@@ -39,7 +39,7 @@ coap_prng_impl(unsigned char *buf, size_t len) {
 #include <nuttx/random.h>
 
 /* Use platform CPRNG for prng(). */
-#define prng(Buf,Length) speckrandom_buf((Buf), (Length))
+#define prng(Buf,Length) getrandom((Buf), (Length))
 #define prng_init(Value) add_sw_randomness((Value))
 #else /* WITH_CONTIKI */
 #include <string.h>

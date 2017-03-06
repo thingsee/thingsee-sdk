@@ -1,8 +1,7 @@
 /****************************************************************************
  * apps/ts_engine/engine/watchdog.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
- *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
+ *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,6 +30,9 @@
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
+ * Authors:
+ *   Jussi Kivilinna <jussi.kivilinna@haltian.com>
+ *   Juha Niskanen <juha.niskanen@haltian.com>
  ****************************************************************************/
 
 /****************************************************************************
@@ -47,11 +49,11 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <errno.h>
-#include <stdio.h>
 
 #include <nuttx/board.h>
 #include <nuttx/timers/watchdog.h>
 #include <arch/board/board.h>
+#include <arch/board/board-device.h>
 
 #include <apps/thingsee/ts_core.h>
 
@@ -61,6 +63,7 @@
 #endif
 
 #include <apps/ts_engine/watchdog.h>
+#include "hwwdg.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -94,10 +97,6 @@ static struct {
   .fd = -1,
   .timer_id = -1
 };
-
-/****************************************************************************
- * Public Data
- ****************************************************************************/
 
 /****************************************************************************
  * Private Functions
@@ -261,42 +260,60 @@ void ts_watchdog_initialize(void)
       return;
     }
 
-  watchdog.fd = open(WATCHDOG_DEVNAME, O_RDONLY);
-  if (watchdog.fd < 0)
+#ifdef CONFIG_STM32_IWDG
+
+  /* This watchdog is for old Thingsee boards only. */
+
+  if (board_get_hw_ver() < BOARD_HWVER_B2_0)
     {
-      dbg("Could not open %s\n", WATCHDOG_DEVNAME);
-      return;
-    }
+      watchdog.fd = open(WATCHDOG_DEVNAME, O_RDONLY);
+      if (watchdog.fd < 0)
+        {
+          dbg("Could not open %s\n", WATCHDOG_DEVNAME);
+          return;
+        }
 
-  /* Setup watchdog. */
+      /* Setup watchdog. */
 
-  dbg("Setting up HW watchdog with timeout of %u.%03u seconds...\n",
-      WATCHDOG_TIMEOUT_MSEC / 1000,
-      WATCHDOG_TIMEOUT_MSEC % 1000);
-  ret = ioctl(watchdog.fd, WDIOC_SETTIMEOUT, (unsigned long)WATCHDOG_TIMEOUT_MSEC);
-  if (ret < 0)
+      dbg("Setting up HW watchdog with timeout of %u.%03u seconds...\n",
+          WATCHDOG_TIMEOUT_MSEC / 1000,
+          WATCHDOG_TIMEOUT_MSEC % 1000);
+      ret = ioctl(watchdog.fd, WDIOC_SETTIMEOUT, (unsigned long)WATCHDOG_TIMEOUT_MSEC);
+      if (ret < 0)
+        {
+          dbg("wdog_main: ioctl(WDIOC_SETTIMEOUT) failed: %d\n", errno);
+          close(watchdog.fd);
+          watchdog.fd = -1;
+          return;
+        }
+
+      ret = ioctl(watchdog.fd, WDIOC_START, 0);
+      if (ret < 0)
+        {
+          dbg("ioctl(WDIOC_START) failed: %d\n", errno);
+          close(watchdog.fd);
+          watchdog.fd = -1;
+          return;
+        }
+
+      wdog_setup_timer();
+
+      /*
+       * Watchdog handler has been setup successfully, now light-up LED and/or LCD
+       * for start-up/reset/boot indication.
+       */
+
+      light_on_startup();
+   }
+#endif /* CONFIG_STM32_IWDG */
+
+#ifdef CONFIG_BOARD_HALTIAN_HWWDG
+
+  /* New watchdog using a dedicated HW watchdog chip on board. */
+
+  if (board_get_hw_ver() >= BOARD_HWVER_B2_0)
     {
-      dbg("wdog_main: ioctl(WDIOC_SETTIMEOUT) failed: %d\n", errno);
-      close(watchdog.fd);
-      watchdog.fd = -1;
-      return;
+      engine_hwwdg_initialize();
     }
-
-  ret = ioctl(watchdog.fd, WDIOC_START, 0);
-  if (ret < 0)
-    {
-      dbg("ioctl(WDIOC_START) failed: %d\n", errno);
-      close(watchdog.fd);
-      watchdog.fd = -1;
-      return;
-    }
-
-  wdog_setup_timer();
-
-  /*
-   * Watchdog handler has been setup successfully, now light-up LED and/or LCD
-   * for start-up/reset/boot indication.
-   */
-
-  light_on_startup();
+#endif
 }

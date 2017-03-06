@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_voice_control.c
  *
- *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -901,7 +901,7 @@ void __ubmodem_voice_control_cleanup(struct ubmodem_s *modem)
     return;
 
   modem_voice_disconnected(modem, false);
-  ubmodem_audio_cleanup(modem);
+  __ubmodem_audio_cleanup(modem);
 
   __ubparser_unregister_response_handler(&modem->parser, urc_ATpCRING.name);
   __ubparser_unregister_response_handler(&modem->parser, urc_ATpUCALLSTAT.name);

@@ -5,7 +5,7 @@ use warnings;
 use feature 'say';
 
 say "/* THIS IS GENERATED FILE! DO NOT EDIT! DO NOT COMMIT! */";
-say '#include <nuttx/testing/unity_fixture.h>';
+say '#include <apps/testing/unity_fixture.h>';
 say '';
 
 my @run_test_group;

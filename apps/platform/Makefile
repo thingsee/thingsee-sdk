@@ -91,7 +91,7 @@ endif
 # Build targets
 
 all: .built
-.PHONY: context .depend depend clean distclean
+.PHONY: context .depend depend clean distclean dirlinks
 
 ifneq ($(ASRCS),)
 $(AOBJS): bin$(DELIM)%$(OBJEXT): %.S
@@ -118,7 +118,9 @@ $(PLATFORMDIR): $(TOPDIR)$(DELIM).config
 
 install:
 
-context: $(PLATFORMDIR)
+dirlinks: $(PLATFORMDIR)
+
+context: dirlinks
 
 # Dependencies
 

@@ -36,6 +36,7 @@
 #ifndef MAX44009_H_
 #define MAX44009_H_
 
+#include <nuttx/irq.h>
 #include <nuttx/i2c.h>
 
 /* IOCTL commands */

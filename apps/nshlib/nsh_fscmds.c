@@ -49,7 +49,11 @@
 # if !defined(CONFIG_DISABLE_MOUNTPOINT)
 #   ifdef CONFIG_FS_READABLE /* Need at least one filesytem in configuration */
 #     include <sys/mount.h>
-#     include <nuttx/fs/ramdisk.h>
+#     ifdef CONFIG_NUTTX_SDK_THINGSEE_ONE
+#       include <nuttx/fs/ramdisk.h>
+#     else
+#       include <nuttx/drivers/ramdisk.h>
+#     endif
 #   endif
 #   ifdef CONFIG_FS_FAT
 #     include <nuttx/fs/mkfatfs.h>
@@ -64,6 +68,13 @@
 #   endif
 #   ifdef CONFIG_RAMLOG_SYSLOG
 #     include <nuttx/syslog/ramlog.h>
+#   endif
+#   if !defined(CONFIG_NUTTX_SDK_THINGSEE_ONE)
+#     include <nuttx/drivers/drivers.h>
+#     ifdef CONFIG_DEV_LOOP
+#       include <sys/ioctl.h>
+#       include <nuttx/fs/loop.h>
+#     endif
 #   endif
 #endif
 #endif
@@ -883,6 +894,7 @@ int cmd_losetup(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
      goto errout_with_paths;
    }
 
+#ifdef CONFIG_NUTTX_SDK_THINGSEE_ONE
   /* Perform the teardown operation */
 
   if (teardown)
@@ -907,6 +919,67 @@ int cmd_losetup(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
           goto errout_with_paths;
         }
     }
+
+#else /* CONFIG_NUTTX_SDK_THINGSEE_ONE */
+
+#ifndef CONFIG_DEV_LOOP
+  (void)offset;
+  (void)readonly;
+  errno = ENOENT;
+  ret = ERROR;
+#else
+  struct losetup_s setup;
+  int fd;
+
+  /* Open the loop device */
+
+  fd = open("/dev/loop", O_RDONLY);
+  if (fd < 0)
+    {
+      nsh_output(vtbl, g_fmtcmdfailed, argv[0], "open", NSH_ERRNO);
+      goto errout_with_paths;
+    }
+
+  /* Perform the teardown operation */
+
+  if (teardown)
+    {
+      /* Tear down the loop device. */
+
+      ret = ioctl(fd, LOOPIOC_TEARDOWN, (unsigned long)((uintptr_t)loopdev));
+      if (ret < 0)
+        {
+          nsh_output(vtbl, g_fmtcmdfailed, argv[0], "ioctl", NSH_ERRNO);
+          goto errout_with_fd;
+        }
+    }
+  else
+    {
+      /* Set up the loop device */
+
+      setup.devname  = loopdev;   /* The loop block device to be created */
+      setup.filename = filepath;  /* The file or character device to use */
+      setup.sectsize = 512;       /* The sector size to use with the block device */
+      setup.offset   = offset;    /* An offset that may be applied to the device */
+      setup.readonly = readonly;    /* True: Read access will be supported only */
+
+      ret = ioctl(fd, LOOPIOC_SETUP, (unsigned long)((uintptr_t)&setup));
+      if (ret < 0)
+        {
+          nsh_output(vtbl, g_fmtcmdfailed, argv[0], "ioctl", NSH_ERRNO);
+          goto errout_with_fd;
+        }
+    }
+
+  ret = OK;
+
+  /* Free resources */
+
+errout_with_fd:
+  (void)close(fd);
+#endif /* CONFIG_DEV_LOOP */
+
+#endif /* CONFIG_NUTTX_SDK_THINGSEE_ONE */
 
   /* Free memory */
 

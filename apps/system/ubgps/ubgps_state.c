@@ -46,8 +46,6 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <nuttx/random.h>
-#include <apps/thingsee/ts_core.h>
-#include <arch/board/board-gps.h>
 
 #include "ubgps_internal.h"
 
@@ -59,6 +57,14 @@
  #define dbg_sm(...) dbg(__VA_ARGS__)
 #else
   #define dbg_sm(...)
+#endif
+
+#ifndef CONFIG_UBGPS_DYNAMIC_MODEL
+  #define CONFIG_UBGPS_DYNAMIC_MODEL  NAV5_DYNAMIC_MODEL
+#endif
+
+#ifndef CONFIG_UBGPS_POSITION_ACCURACY_MASK
+  #define CONFIG_UBGPS_POSITION_ACCURACY_MASK   100
 #endif
 
 #define GPS_POWERUP_DELAY             500
@@ -81,6 +87,15 @@
 
 #define AID_VALIDITY_TIME_1D          (24*60*60)
 
+/* Static hold velocity limit [cm/s]. Decreases the noise in the position
+   output when the velocity is below limit. */
+
+#define STATIC_HOLD_VELOCITY_LIMIT    100
+
+/* Static hold distance threshold [m] (to quit static hold). */
+
+#define STATIC_HOLD_DIST_LIMIT        10
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -89,16 +104,19 @@ enum gps_init_phase_e
 {
   INIT_PHASE_CFG_PRT = 0,
   INIT_PHASE_CFG_PRT_BAUD,
+  INIT_PHASE_RECEIVER_CONTINOUS_MODE,
 #ifdef CONFIG_SYSTEM_UBGPS_LNA_CONTROL
   INIT_PHASE_CFG_ANT_LNA,
 #endif
+  INIT_PHASE_NAV_SETTINGS,
   INIT_PHASE_SBAS_MODE,
-  INIT_PHASE_RECEIVER_MODE,
-  INIT_PHASE_PM_MODE,
-  INIT_PHASE_AID_SET_TIME,
-  INIT_PHASE_AID_ALPSRV_ENABLE,
   INIT_PHASE_NAV_PVT_RATE,
   INIT_PHASE_NAVIGATION_RATE,
+  INIT_PHASE_SAVE_CONFIG,
+  INIT_PHASE_AID_SET_TIME,
+  INIT_PHASE_AID_ALPSRV_ENABLE,
+  INIT_PHASE_PM_MODE,
+  INIT_PHASE_RECEIVER_MODE,
   INIT_PHASE_DONE,
 };
 
@@ -108,6 +126,7 @@ enum gps_init_phase_e
 
 static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const * const event);
 static int ubgps_sm_initialization(struct ubgps_s * const gps, struct sm_event_s const * const event);
+static int ubgps_sm_reinitialization(struct ubgps_s * const gps, struct sm_event_s const * const event);
 static int ubgps_sm_cold_start(struct ubgps_s * const gps, struct sm_event_s const * const event);
 static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const * const event);
 
@@ -122,6 +141,7 @@ const struct ubgps_sm_s ubgps_state_machines[__GPS_STATE_MAX] =
 #define SM(x, fn) [x] = { .func = fn, .name = #x }
   SM(GPS_STATE_POWER_OFF, ubgps_sm_poweroff),
   SM(GPS_STATE_INITIALIZATION, ubgps_sm_initialization),
+  SM(GPS_STATE_REINITIALIZATION, ubgps_sm_reinitialization),
   SM(GPS_STATE_COLD_START, ubgps_sm_cold_start),
   SM(GPS_STATE_SEARCHING_FIX, ubgps_sm_global),
   SM(GPS_STATE_FIX_ACQUIRED, ubgps_sm_global),
@@ -161,6 +181,19 @@ void ubgps_clear_override_sm(struct ubgps_s * const gps)
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: get_power_save_mode
+ ****************************************************************************/
+static uint8_t get_power_save_mode(struct ubgps_s * const gps)
+{
+#ifndef CONFIG_UBGPS_DISABLE_POWERSAVE
+  uint8_t mode = RXM_POWER_SAVE;
+#else
+  uint8_t mode = RXM_CONTINOUS;
+#endif
+  return mode;
+}
 
 /****************************************************************************
  * Name: ubgps_sm_poweroff
@@ -228,16 +261,6 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
                 }
             }
 #endif
-          /* Free GPS assistance data if PSM is not active */
-
-          if (gps->assist && gps->state.psm_timer_id < 0)
-            {
-              if (gps->assist->alp_file)
-                free(gps->assist->alp_file);
-
-              free(gps->assist);
-              gps->assist = NULL;
-            }
 
           return OK;
         }
@@ -248,16 +271,6 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
               (struct sm_event_target_state_s *)event;
 
           dbg_sm("SM_EVENT_TARGET_STATE -> %u\n", target->target_state);
-
-#ifdef CONFIG_UBGPS_PSM_MODE
-          /* Stop PSM timer */
-
-          if (gps->state.psm_timer_id > 0)
-            {
-              ts_core_timer_stop(gps->state.psm_timer_id);
-              gps->state.psm_timer_id = -1;
-            }
-#endif
 
           if (target->target_state != GPS_STATE_POWER_OFF)
             {
@@ -277,37 +290,11 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
             {
               /* Make current state the target state */
 
-              /* Free GPS assistance data */
-
-              if (gps->assist)
-                {
-                  if (gps->assist->alp_file)
-                    free(gps->assist->alp_file);
-
-                  free(gps->assist);
-                  gps->assist = NULL;
-                }
-
               gps->state.target_state = gps->state.current_state;
 
               /* Report target reached */
 
               ubgps_report_target_state(gps, false);
-            }
-
-          return OK;
-        }
-
-      case SM_EVENT_PSM_STATE:
-        {
-          struct sm_event_psm_event_s const * const psm_event =
-              (struct sm_event_psm_event_s *)event;
-          dbg_sm("SM_EVENT_PSM_STATE -> %u\n", psm_event->enable);
-
-          if (!psm_event->enable)
-            {
-              gps->state.target_state = GPS_STATE_FIX_ACQUIRED;
-              ubgps_set_new_state(gps, GPS_STATE_INITIALIZATION);
             }
 
           return OK;
@@ -341,6 +328,14 @@ static int ubgps_sm_poweroff(struct ubgps_s * const gps, struct sm_event_s const
 
               gps->state.powered = true;
             }
+
+#if defined(BOARD_HAS_GPS_PM_SET_NEXT_MESSAGE_TIME)
+          /* Disable board-level PM at start-up. */
+
+          struct timespec ts = {0, 0};
+
+          board_gps_pm_set_next_message_time(&ts);
+#endif
 
           return OK;
         }
@@ -459,37 +454,6 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
 
               return ubgps_send_aid_alp_poll(gps);
             }
-#ifdef CONFIG_UBGPS_PSM_MODE
-          else if (timeout->timer_id == gps->state.location_timer_id)
-            {
-              struct gps_event_location_s levent;
-
-              /* Publish the most accurate location event received so far. */
-
-              dbg_sm("location filter timeout, accuracy: %um\n",
-                  gps->filt_location.horizontal_accuracy / 1000);
-
-              levent.super.id = GPS_EVENT_LOCATION;
-              levent.time = &gps->time;
-              levent.location = &gps->filt_location;
-              ubgps_publish_event(gps, (struct gps_event_s *)&levent);
-
-              /* Reset filtered location event. */
-
-              gps->filt_location.horizontal_accuracy = 0;
-
-              /* Construct power save mode event */
-
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
-                {
-                  struct sm_event_psm_event_s psm;
-
-                  psm.super.id = SM_EVENT_PSM_STATE;
-                  psm.enable = true;
-                  ubgps_sm_process(gps, (struct sm_event_s *)&psm);
-                }
-            }
-#endif /* CONFIG_UBGPS_PSM_MODE */
 
           return OK;
         }
@@ -583,48 +547,49 @@ static int ubgps_sm_global(struct ubgps_s * const gps, struct sm_event_s const *
                 }
             }
 
-            if (gps->state.aid_timer_id >= 0)
-              {
-                __ubgps_remove_timer(gps, gps->state.aid_timer_id);
-              }
-
-            gps->state.aid_timer_id = __ubgps_set_timer(gps,
-                                                       timeout,
-                                                       ubgps_timeout,
-                                                       gps);
-#endif /* CONFIG_UBGPS_ASSIST_UPDATER */
-          return OK;
-        }
-
-#ifdef CONFIG_UBGPS_PSM_MODE
-      case SM_EVENT_PSM_STATE:
-        {
-          struct sm_event_psm_event_s const * const psm_event =
-              (struct sm_event_psm_event_s *)event;
-          dbg_sm("SM_EVENT_PSM_STATE -> %u\n", psm_event->enable);
-
-          if (psm_event->enable)
+          if (gps->state.aid_timer_id >= 0)
             {
-              /* Start SW controlled power save mode (PSM). */
-
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
-                {
-                  struct timespec ts = {};
-
-                  clock_gettime(CLOCK_MONOTONIC, &ts);
-                  ts.tv_sec += gps->state.navigation_rate / 1000;
-                  gps->state.psm_timer_id = ts_core_timer_setup_date(&ts,
-                      ubgps_psm_timer_cb, gps);
-
-                  dbg_sm("gps->state.psm_timer_id:%d, set POWER_OFF\n",
-                      gps->state.psm_timer_id);
-                  ubgps_set_new_state(gps, GPS_STATE_POWER_OFF);
-                }
+              __ubgps_remove_timer(gps, gps->state.aid_timer_id);
             }
 
+          gps->state.aid_timer_id = __ubgps_set_timer(gps,
+                                                     timeout,
+                                                     ubgps_timeout,
+                                                     gps);
+
+          if (gps->state.powered &&
+              (gps->state.current_state == GPS_STATE_SEARCHING_FIX ||
+               gps->state.current_state == GPS_STATE_FIX_ACQUIRED))
+            {
+              int ret;
+
+              /* Check whether there is updated aiding data available */
+
+              ret = pthread_mutex_trylock(&g_aid_mutex);
+              if (ret == 0)
+                {
+                  if (gps->assist->alp_file && gps->assist->alp_file_id &&
+                      gps->assist->alp_file_id != gps->state.current_alp_file_id)
+                    {
+                      gps->state.current_alp_file_id = gps->assist->alp_file_id;
+
+                      gps->state.reinit_cold = false;
+                      ubgps_set_new_state(gps, GPS_STATE_REINITIALIZATION);
+                    }
+
+                  pthread_mutex_unlock(&g_aid_mutex);
+                }
+              else
+                {
+                  dbg_sm("mutex_trylock failed: %d\n", ret);
+                }
+
+              return OK;
+            }
+#endif /* CONFIG_UBGPS_ASSIST_UPDATER */
+
           return OK;
         }
-#endif /* CONFIG_UBGPS_PSM_MODE */
 
       default:
         return OK;
@@ -642,7 +607,6 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
 {
   bool waiting_for_response = false;
   int status = OK;
-  static bool init_retry_done = false;
 
   DEBUGASSERT(gps);
 
@@ -667,7 +631,7 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
       dbg("GPS initialization failed at phase %d, retries %d.\n",
           gps->state.init_phase, GPS_INIT_RETRY_COUNT);
 
-      if (init_retry_done)
+      if (gps->state.init_retry_done)
         {
           /* Fail back to power down state */
 
@@ -686,7 +650,7 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
 
           dbg_sm("Retry init from the beginning\n");
 
-          init_retry_done = true;
+          gps->state.init_retry_done = true;
           gps->state.init_phase = 0;
 
           /* Toggle supply voltage */
@@ -786,20 +750,31 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
               break;
             }
 
+          case INIT_PHASE_RECEIVER_CONTINOUS_MODE:
+            {
+              dbg_sm("INIT_PHASE_RECEIVER_CONTINOUS_MODE\n");
+
+              /* Disable power-save mode for initialization phase. */
+
+              /* Send CFG-RXM message. */
+
+              status = ubgps_send_cfg_rxm(gps, RXM_CONTINOUS);
+              if (status == OK)
+                {
+                  /* Exit and wait for response */
+
+                  waiting_for_response = true;
+
+                  gps->state.power_mode = RXM_CONTINOUS;
+                }
+
+              break;
+            }
+
 #ifdef CONFIG_SYSTEM_UBGPS_LNA_CONTROL
           case INIT_PHASE_CFG_ANT_LNA:
             {
               dbg_sm("INIT_PHASE_CFG_ANT_LNA\n");
-
-              if (gps->state.target_state_pending &&
-                  gps->state.target_state == GPS_STATE_COLD_START)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-
-                  break;
-                }
 
               /* Send CFG-ANT message. Setup LNA pin and reconfigure. */
 
@@ -818,19 +793,46 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
             }
 #endif /* CONFIG_SYSTEM_UBGPS_LNA_CONTROL */
 
-          case INIT_PHASE_SBAS_MODE:
+          case INIT_PHASE_NAV_SETTINGS:
             {
-              dbg_sm("INIT_PHASE_SBAS_MODE\n");
+#ifdef CONFIG_UBGPS_3DFIX_ONLY
+              uint8_t fix_mode = NAV5_FIXMODE_3D_ONLY;
+#else
+              uint8_t fix_mode = NAV5_FIXMODE_AUTO;
+#endif
 
               if (gps->state.target_state_pending &&
                   gps->state.target_state == GPS_STATE_COLD_START)
                 {
-                  /* Move to next state */
+                  /* Ignore rest of the initialization steps for cold start */
 
-                  gps->state.init_phase++;
+                  gps->state.init_phase = INIT_PHASE_DONE;
 
                   break;
                 }
+
+              dbg_sm("INIT_PHASE_NAV_SETTINGS\n");
+
+              /* Send CFG-NAV5 message. */
+
+              status = ubgps_send_cfg_nav5(gps, NAV5_MASK_MODEL |
+                NAV5_MASK_STATIC_HOLD | NAV5_MASK_FIX_MODE | NAV5_MASK_POS_MASK,
+                CONFIG_UBGPS_DYNAMIC_MODEL, fix_mode, STATIC_HOLD_VELOCITY_LIMIT,
+                STATIC_HOLD_DIST_LIMIT, CONFIG_UBGPS_POSITION_ACCURACY_MASK);
+
+              if (status == OK)
+                {
+                  /* Exit and wait for response */
+
+                  waiting_for_response = true;
+                }
+
+              break;
+            }
+
+          case INIT_PHASE_SBAS_MODE:
+            {
+              dbg_sm("INIT_PHASE_SBAS_MODE\n");
 
               /* Send CFG-SBAS message. Disable SBAS subsystem when PSM is enabled */
 
@@ -846,152 +848,11 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
               break;
             }
 
-          case INIT_PHASE_RECEIVER_MODE:
-            {
-              dbg_sm("INIT_PHASE_RECEIVER_MODE\n");
-
-              if (gps->state.target_state_pending &&
-                  gps->state.target_state == GPS_STATE_COLD_START)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-
-                  break;
-                }
-
-              /* Send CFG-RXM message */
-
-              status = ubgps_send_cfg_rxm(gps, RXM_CONTINOUS);
-
-              if (status == OK)
-                {
-                  /* Exit and wait for response */
-
-                  waiting_for_response = true;
-                }
-
-              break;
-            }
-
-          case INIT_PHASE_PM_MODE:
-            {
-              dbg_sm("INIT_PHASE_PM_MODE\n");
-
-              if (gps->state.target_state_pending &&
-                  gps->state.target_state == GPS_STATE_COLD_START)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-
-                  break;
-                }
-
-              /* Send CFG-PM2 message */
-
-              status = ubgps_send_cfg_pm2(gps,
-                  PM2_MODE_CYCLIC | PM2_NO_FIX_NO_OFF,
-                  gps->state.navigation_rate, 10000);
-
-              if (status == OK)
-                {
-                  /* Exit and wait for response */
-
-                  waiting_for_response = true;
-                }
-
-              break;
-            }
-
-          case INIT_PHASE_AID_SET_TIME:
-            {
-              dbg_sm("INIT_PHASE_AID_SET_TIME\n");
-              /* Check if need to setup GPS aiding */
-
-              if (gps->state.target_state_pending &&
-                  gps->state.target_state == GPS_STATE_COLD_START)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-
-                  break;
-                }
-
-              /* Send AID-INI message */
-
-              status = ubgps_send_aid_ini(gps);
-
-              if (status == OK)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-                }
-
-              break;
-            }
-
-          case INIT_PHASE_AID_ALPSRV_ENABLE:
-            {
-              dbg_sm("INIT_PHASE_AID_ALPSRV_ENABLE\n");
-
-              /* Check if need to setup GPS aiding */
-
-              if (gps->state.target_state_pending &&
-                  gps->state.target_state == GPS_STATE_COLD_START)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-
-                  break;
-                }
-
-              /* Check if AssistNow Offline is enabled */
-
-              if (gps->assist)
-                {
-                  /* Enable AID-ALPSRV message */
-
-                  status = ubgps_send_cfg_msg(gps,
-                                            UBX_CLASS_AID,
-                                            UBX_AID_ALPSRV,
-                                            1);
-
-                  if (status == OK)
-                    {
-                      /* Exit and wait for response */
-
-                      waiting_for_response = true;
-                    }
-                }
-              else
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-                }
-
-              break;
-            }
-
           case INIT_PHASE_NAV_PVT_RATE:
             {
               dbg_sm("INIT_PHASE_NAV_PVT_RATE\n");
 
               /* Check if NAV-PVT setup is needed */
-
-              if (gps->state.target_state_pending &&
-                  gps->state.target_state == GPS_STATE_COLD_START)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-
-                  break;
-                }
 
               /* Set NAV-PVT message rate */
 
@@ -1016,38 +877,167 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
 
               /* Check if navigation rate setup is needed */
 
-              if (gps->state.target_state_pending &&
-                  gps->state.target_state == GPS_STATE_COLD_START)
-                {
-                  /* Move to next state */
-
-                  gps->state.init_phase++;
-
-                  break;
-                }
-
               /* Set GPS navigation rate */
 
-#ifdef CONFIG_UBGPS_PSM_MODE
-              if (gps->state.navigation_rate >= CONFIG_UBGPS_PSM_MODE_THRESHOLD * 1000)
-                {
-                  /* Use default navigation rate for SW controlled PSM */
-
-                  status = ubgps_send_cfg_rate(gps, DEFAULT_NAVIGATION_RATE);
-                }
-              else
-                {
-                  status = ubgps_send_cfg_rate(gps, gps->state.navigation_rate);
-                }
-#else
               status = ubgps_send_cfg_rate(gps, gps->state.navigation_rate);
-#endif
 
               if (status == OK)
                 {
                   /* Exit and wait for response */
 
                   waiting_for_response = true;
+                }
+
+              break;
+            }
+
+          case INIT_PHASE_SAVE_CONFIG:
+            {
+              dbg_sm("INIT_PHASE_SAVE_CONFIG\n");
+
+              /* Send CFG-CFG message */
+
+              status = ubgps_send_cfg_cfg(gps, CFG_ACT_SAVE, CFG_IO_CONF |
+                  CFG_MSG_CONF | CFG_NAV_CONF | CFG_RXM_CONF | CFG_ANT_CONF);
+
+              if (status == OK)
+                {
+                  /* Exit and wait for response */
+
+                  waiting_for_response = true;
+                }
+
+              break;
+            }
+
+          case INIT_PHASE_PM_MODE:
+            {
+              dbg_sm("INIT_PHASE_PM_MODE\n");
+
+              /* Send CFG-PM2 message */
+              uint32_t flags = PM2_MODE_CYCLIC | PM2_UPDATE_EPH | PM2_UPDATE_RTC;
+              uint32_t update_period = gps->state.update_period;
+              uint32_t search_period = gps->state.search_period;
+
+              if (update_period == 0)
+                update_period = gps->state.navigation_rate;
+
+              if (search_period == 0)
+                flags |= PM2_NO_FIX_NO_OFF;
+
+              status = ubgps_send_cfg_pm2(gps, flags,
+                                          update_period,
+                                          search_period);
+              if (status == OK)
+                {
+                  /* Exit and wait for response */
+
+                  waiting_for_response = true;
+                }
+
+              break;
+            }
+
+          case INIT_PHASE_RECEIVER_MODE:
+            {
+              uint8_t mode = get_power_save_mode(gps);
+
+              dbg_sm("INIT_PHASE_RECEIVER_MODE (%s)\n",
+                     mode == RXM_CONTINOUS ? "RXM_CONTINOUS" : "RXM_POWER_SAVE");
+
+              /* Send CFG-RXM message */
+
+              status = ubgps_send_cfg_rxm(gps, mode);
+
+              if (status == OK)
+                {
+                  /* Exit and wait for response */
+
+                  waiting_for_response = true;
+
+                  gps->state.power_mode = mode;
+                }
+
+              break;
+            }
+
+          case INIT_PHASE_AID_SET_TIME:
+            {
+              dbg_sm("INIT_PHASE_AID_SET_TIME\n");
+
+              /* Check if need to setup GPS aiding */
+
+              /* Send AID-INI message */
+
+              status = ubgps_send_aid_ini(gps);
+
+              if (status == OK)
+                {
+                  /* Move to next state */
+
+                  gps->state.init_phase++;
+                }
+
+              break;
+            }
+
+          case INIT_PHASE_AID_ALPSRV_ENABLE:
+            {
+              bool alpsrv_enabled = false;
+
+              dbg_sm("INIT_PHASE_AID_ALPSRV_ENABLE\n");
+
+              /* Check if need to setup GPS aiding */
+
+              /* Check if AssistNow Offline is enabled */
+
+              if (gps->assist)
+                {
+                  int ret;
+
+                  /* Check that AssistNow Offline data is available */
+
+                  ret = pthread_mutex_trylock(&g_aid_mutex);
+                  if (ret == 0)
+                    {
+                      if (gps->assist->alp_file && gps->assist->alp_file_id &&
+                          ubgps_check_alp_file_validity(gps->assist->alp_file))
+                        {
+                          alpsrv_enabled = true;
+                        }
+                      pthread_mutex_unlock(&g_aid_mutex);
+                    }
+                  else
+                    {
+                      dbg_sm("mutex_trylock failed: %d\n", ret);
+                    }
+                }
+
+              gps->state.alpsrv_enabled = alpsrv_enabled;
+
+              if (alpsrv_enabled)
+                {
+                  gps->state.current_alp_file_id = gps->assist->alp_file_id;
+
+                  /* Enable AID-ALPSRV message */
+
+                  status = ubgps_send_cfg_msg(gps,
+                                            UBX_CLASS_AID,
+                                            UBX_AID_ALPSRV,
+                                            1);
+
+                  if (status == OK)
+                    {
+                      /* Exit and wait for response */
+
+                      waiting_for_response = true;
+                    }
+                }
+              else
+                {
+                  /* Move to next state */
+
+                  gps->state.init_phase++;
                 }
 
               break;
@@ -1082,7 +1072,7 @@ static int ubgps_init_process_phase(struct ubgps_s * const gps, bool next)
 
               /* Reset init retry flag */
 
-              init_retry_done = false;
+              gps->state.init_retry_done = false;
 
               return OK;
             }
@@ -1151,14 +1141,21 @@ static int ubgps_sm_initialization(struct ubgps_s * const gps,
               return ERROR;
             }
 
-          /* Initialize GPS location data */
+          if (!gps->state.is_reinit)
+            {
+              /* Reset initialization phase & retry counter */
 
-          memset(&gps->location, 0, sizeof(gps->location));
-
-          /* Reset initialization phase & retry counter */
-
-          gps->state.init_phase = 0;
-          gps->state.init_count = 0;
+              gps->state.init_phase = 0;
+              gps->state.init_count = 0;
+              gps->state.init_retry_done = false;
+            }
+          else
+            {
+              gps->state.init_phase = 0;
+              gps->state.init_count = GPS_INIT_RETRY_COUNT + 1;
+              gps->state.init_retry_done = false;
+              gps->state.is_reinit = false;
+            }
 
           return OK;
         }
@@ -1202,7 +1199,8 @@ static int ubgps_sm_initialization(struct ubgps_s * const gps,
              (ubx->msg_id == UBX_CFG_PRT || ubx->msg_id == UBX_CFG_MSG ||
               ubx->msg_id == UBX_CFG_RATE || ubx->msg_id == UBX_CFG_SBAS ||
               ubx->msg_id == UBX_CFG_PM2 || ubx->msg_id == UBX_CFG_RXM ||
-              ubx->msg_id == UBX_CFG_ANT))
+              ubx->msg_id == UBX_CFG_ANT || ubx->msg_id == UBX_CFG_CFG ||
+              ubx->msg_id == UBX_CFG_NAV5))
             {
               if (ubx->status != UBX_STATUS_ACK)
                 {
@@ -1328,7 +1326,7 @@ static int ubgps_sm_cold_start(struct ubgps_s * const gps, struct sm_event_s con
 
           /* Reset receiver */
 
-          status = ubgps_send_cfg_rst(gps);
+          status = ubgps_send_cfg_rst(gps, true);
 
           if (status != OK)
             {
@@ -1392,4 +1390,81 @@ static int ubgps_sm_cold_start(struct ubgps_s * const gps, struct sm_event_s con
   /* Pass to global state handler */
 
   return ubgps_sm_global(gps, event);
+}
+
+/****************************************************************************
+ * Name: ubgps_sm_reinitialization
+ *
+ * Description:
+ *   State machine for reinitialization
+ *
+ ****************************************************************************/
+static int ubgps_sm_reinitialization(struct ubgps_s * const gps, struct sm_event_s const * const event)
+{
+  DEBUGASSERT(gps && event);
+
+  /* Check event */
+
+  switch (event->id)
+    {
+      case SM_EVENT_ENTRY:
+        {
+          int status;
+
+          dbg_sm("SM_EVENT_ENTRY\n");
+
+          dbg("Performing GPS receiver %s reset.\n", gps->state.reinit_cold ? "COLD" : "HOT");
+
+          /* Reset receiver (cold or hot start) */
+
+          status = ubgps_send_cfg_rst(gps, gps->state.reinit_cold);
+
+          if (status != OK)
+            {
+              /* Fail back to power down state */
+
+              ubgps_set_new_state(gps, GPS_STATE_POWER_OFF);
+            }
+
+          return OK;
+        }
+
+      case SM_EVENT_UBX_STATUS:
+        {
+          struct sm_event_ubx_status_s const * const ubx =
+              (struct sm_event_ubx_status_s *)event;
+
+          dbg_sm("SM_EVENT_UBX_STATUS\n");
+
+          if (ubx->class_id == UBX_CLASS_CFG && ubx->msg_id == UBX_CFG_RST)
+            {
+              if (ubx->status != UBX_STATUS_ACK)
+                {
+                  /* Fail back to power down state */
+
+                  ubgps_set_new_state(gps, GPS_STATE_POWER_OFF);
+                }
+              else
+                {
+                  /* Move to GPS initialization */
+
+                  gps->state.is_reinit = true;
+                  gps->state.reinit_cold = false;
+                  ubgps_set_new_state(gps, GPS_STATE_INITIALIZATION);
+                }
+
+              return OK;
+            }
+
+          dbg_sm("Unhandled SM_EVENT_UBX_STATUS. Class 0x%02x, message 0x%02x\n",
+              ubx->class_id, ubx->msg_id);
+
+          return OK;
+        }
+
+      default:
+        break;
+    }
+
+  return OK;
 }

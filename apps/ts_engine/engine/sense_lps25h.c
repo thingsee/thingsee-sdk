@@ -82,7 +82,7 @@ int sense_lps25h_active_read_pressure(struct ts_cause *cause)
   cause->dyn.sense_value.value.valuedouble = (double) p.pressure_Pa
       / (double) 100000;
 
-  handle_cause(cause);
+  handle_cause_event(cause, NULL);
 
   close(fd);
   return OK;
@@ -130,7 +130,7 @@ int sense_lps25h_active_read_temperature(struct ts_cause *cause)
   cause->dyn.sense_value.value.valuedouble = (double) t.int_temper
       / LPS25H_TEMPER_DIVIDER;
 
-  handle_cause(cause);
+  handle_cause_event(cause, NULL);
 
   close(fd);
   return OK;

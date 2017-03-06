@@ -49,6 +49,8 @@
  * Definitions
  ************************************************************************************/
 
+#define BOARD_HAS_GPS_PM_SET_NEXT_MESSAGE_TIME 1
+
 #ifndef __ASSEMBLY__
 
 #undef EXTERN
@@ -91,6 +93,18 @@ EXTERN int board_gps_initialize(void);
  ****************************************************************************/
 
 EXTERN int board_gps_deinitialize(int fd);
+
+/****************************************************************************
+ * Name: board_gps_pm_set_next_message_time
+ *
+ * Description:
+ *   Power-management hint for board level. GPS library can inform board level
+ *   when next (navigation) message is expected to be received over UART.
+ *   Expected time is given as absolute time in CLOCK_MONOTONIC domain.
+ *
+ ****************************************************************************/
+
+EXTERN void board_gps_pm_set_next_message_time(const struct timespec *msg_abstime);
 
 /****************************************************************************
  * Name: board_gps_tx_buffer_empty

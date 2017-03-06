@@ -345,7 +345,7 @@ static int resolve_address(const str *server, struct sockaddr *dst)
   if (naddr <= 0)
     return -1;
 
-  speckrandom_buf(&ridx, sizeof(ridx));
+  getrandom(&ridx, sizeof(ridx));
 
   dst_inet->sin_family = AF_INET;
   dst_inet->sin_port = 0;

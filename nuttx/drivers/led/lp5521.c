@@ -398,6 +398,10 @@ static int lp5521_i2c_read(FAR struct lp5521_dev_s *dev, uint8_t reg,
         }
       else
         {
+#ifdef CONFIG_I2C_RESET
+          if (retries == LP5521_I2C_RETRIES - 1)
+            break;
+
           /* Some other error. Try to reset I2C bus and keep trying. */
 
           ret = up_i2creset(dev->i2c);
@@ -406,8 +410,7 @@ static int lp5521_i2c_read(FAR struct lp5521_dev_s *dev, uint8_t reg,
               lp5521_dbg("up_i2creset failed: %d\n", ret);
               return ret;
             }
-
-          continue;
+#endif
         }
     }
 

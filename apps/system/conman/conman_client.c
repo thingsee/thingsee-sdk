@@ -992,6 +992,31 @@ int conman_client_call_audio_control(struct conman_client_s *client,
 }
 
 /****************************************************************************
+ * Name: conman_client_play_audio_resource
+ *
+ * Description:
+ *   Play modem audio resource.
+ *
+ * Input Parameters:
+ *   client    : client handle
+ *   resource  : audio resource selection and configuration
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_play_audio_resource(struct conman_client_s *client,
+        struct conman_event_play_audio_resource *resource)
+{
+  struct conman_msg_play_audio_resource_s data = { .resource = *resource };
+
+  return do_command_no_payload(client, CONMAN_MSG_PLAY_AUDIO_RESOURCE,
+                               &data, sizeof(data));
+}
+
+/****************************************************************************
  * Name: conman_client_start_celllocate
  *
  * Description:

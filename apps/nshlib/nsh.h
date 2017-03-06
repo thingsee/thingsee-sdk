@@ -75,6 +75,21 @@
 #  undef CONFIG_NSH_CMDPARMS
 #endif
 
+/* Suppress unused file utilities */
+
+#define NSH_HAVE_CATFILE          1
+#define NSH_HAVE_READFILE         1
+#define NSH_HAVE_FOREACH_DIRENTRY 1
+#define NSH_HAVE_TRIMDIR          1
+#define NSH_HAVE_TRIMSPACES       1
+
+#if CONFIG_NFILE_DESCRIPTORS <= 0
+#  undef NSH_HAVE_CATFILE
+#  undef NSH_HAVE_READFILE
+#  undef NSH_HAVE_FOREACH_DIRENTRY
+#  undef NSH_HAVE_TRIMDIR
+#endif
+
 /* rmdir, mkdir, rm, and mv are only available if mountpoints are enabled
  * AND there is a writeable file system OR if these operations on the
  * pseudo-filesystem are not disabled.
@@ -701,6 +716,14 @@ struct nsh_parser_s
 struct nsh_vtbl_s; /* Defined in nsh_console.h */
 typedef int (*cmd_t)(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv);
 
+/* This is the form of a callback from nsh_foreach_direntry() */
+
+struct dirent;     /* Defined in dirent.h */
+typedef CODE int (*nsh_direntry_handler_t)(FAR struct nsh_vtbl_s *vtbl,
+                                           FAR const char *dirpath,
+                                           FAR struct dirent *entryp,
+                                           FAR void *pvarg);
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/
@@ -1031,6 +1054,114 @@ void nsh_usbtrace(void);
 #  ifndef CONFIG_NSH_DISABLE_URLENCODE
       int cmd_urldecode(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv);
 #  endif
+#endif
+
+/****************************************************************************
+ * Name: nsh_catfile
+ *
+ * Description:
+ *   Dump the contents of a file to the current NSH terminal.
+ *
+ * Input Paratemets:
+ *   vtbl     - The console vtable
+ *   cmd      - NSH command name to use in error reporting
+ *   filepath - The full path to the file to be dumped
+ *
+ * Returned Value:
+ *   Zero (OK) on success; -1 (ERROR) on failure.
+ *
+ ****************************************************************************/
+
+#ifdef NSH_HAVE_CATFILE
+int nsh_catfile(FAR struct nsh_vtbl_s *vtbl, FAR const char *cmd,
+                FAR const char *filepath);
+#endif
+
+/****************************************************************************
+ * Name: nsh_readfile
+ *
+ * Description:
+ *   Read a small file into a user-provided buffer.  The data is assumed to
+ *   be a string and is guaranteed to be NUL-termined.  An error occurs if
+ *   the file content (+terminator)  will not fit into the provided 'buffer'.
+ *
+ * Input Paramters:
+ *   vtbl     - The console vtable
+ *   cmd      - NSH command name to use in error reporting
+ *   filepath - The full path to the file to be read
+ *   buffer   - The user-provided buffer into which the file is read.
+ *   buflen   - The size of the user provided buffer
+ *
+ * Returned Value:
+ *   Zero (OK) is returned on success; -1 (ERROR) is returned on any
+ *   failure to read the fil into the buffer.
+ *
+ ****************************************************************************/
+
+#ifdef NSH_HAVE_READFILE
+int nsh_readfile(FAR struct nsh_vtbl_s *vtbl, FAR const char *cmd,
+                 FAR const char *filepath, FAR char *buffer, size_t buflen);
+#endif
+
+/****************************************************************************
+ * Name: nsh_foreach_direntry
+ *
+ * Description:
+ *    Call the provided 'handler' for each entry found in the directory at
+ *    'dirpath'.
+ *
+ * Input Parameters
+ *   vtbl     - The console vtable
+ *   cmd      - NSH command name to use in error reporting
+ *   dirpath  - The full path to the directory to be traversed
+ *   handler  - The handler to be called for each entry of the directory
+ *   pvarg    - User provided argument to be passed to the 'handler'
+ *
+ * Returned Value:
+ *   Zero (OK) returned on success; -1 (ERROR) returned on failure.
+ *
+ ****************************************************************************/
+
+#ifdef NSH_HAVE_FOREACH_DIRENTRY
+int nsh_foreach_direntry(FAR struct nsh_vtbl_s *vtbl, FAR const char *cmd,
+                         FAR const char *dirpath,
+                         nsh_direntry_handler_t handler, void *pvarg);
+#endif
+
+/****************************************************************************
+ * Name: nsh_trimdir
+ *
+ * Description:
+ *   Skip any trailing '/' characters (unless it is also the leading '/')
+ *
+ * Input Parmeters:
+ *   dirpath - The directory path to be trimmed.  May be modified!
+ *
+ * Returned value:
+ *   None
+ *
+ ****************************************************************************/
+
+#ifdef NSH_HAVE_TRIMDIR
+void nsh_trimdir(FAR char *dirpath);
+#endif
+
+/****************************************************************************
+ * Name: nsh_trimspaces
+ *
+ * Description:
+ *   Trim any leading or trailing spaces from a string.
+ *
+ * Input Parmeters:
+ *   str - The sring to be trimmed.  May be modified!
+ *
+ * Returned value:
+ *   The new string pointer.
+ *
+ ****************************************************************************/
+
+#ifdef NSH_HAVE_TRIMSPACES
+FAR char *nsh_trimspaces(FAR char *str);
 #endif
 
 #endif /* __APPS_NSHLIB_NSH_H */

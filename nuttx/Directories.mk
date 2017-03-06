@@ -69,7 +69,7 @@ endif
 #   be cleaned to prevent garbage from collecting in them when changing
 #   configurations.
 
-NONFSDIRS = sched testing configs $(ARCH_SRC) $(NUTTX_ADDONS)
+NONFSDIRS = sched configs $(ARCH_SRC) $(NUTTX_ADDONS)
 FSDIRS = fs drivers binfmt
 CONTEXTDIRS = $(APPDIR)
 USERDIRS =

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_parser.h
  *
- *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -80,12 +80,14 @@
 /* Allow unaligned memory accesses when supported by HW. */
 
 #undef HAS_UNALIGNED_LE_MEMACCESS
-#if defined(__ARM_FEATURE_UNALIGNED) && __ARM_FEATURE_UNALIGNED > 0 && \
-    defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
-    __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#  define HAS_UNALIGNED_LE_MEMACCESS 1
-#elif defined(__i386__) || defined (__x86_64__)
-#  define HAS_UNALIGNED_LE_MEMACCESS 1
+#if defined(__GNUC__) && __GNUC__ > 3
+#  if defined(__ARM_FEATURE_UNALIGNED) && __ARM_FEATURE_UNALIGNED > 0 && \
+      defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+      __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#    define HAS_UNALIGNED_LE_MEMACCESS 1
+#  elif defined(__i386__) || defined (__x86_64__)
+#    define HAS_UNALIGNED_LE_MEMACCESS 1
+#  endif
 #endif
 
 /* Ideally read buffer size should match serial buffer RX buffer size. */
@@ -153,6 +155,11 @@ struct at_resp_info_s
   int errorcode:16;               /* Error-code for error statuses */
   int num_params:12;              /* Number of parameters read and binarized */
 };
+
+#ifdef HAS_UNALIGNED_LE_MEMACCESS
+typedef uint32_t uint32_alias_t __attribute__((may_alias, aligned(1)));
+typedef uint16_t uint16_alias_t __attribute__((may_alias, aligned(1)));
+#endif
 
 /****************************************************************************
  * Name: modem_response_callback_t
@@ -365,7 +372,7 @@ __ubmodem_stream_get_int16(const uint8_t **stream, size_t *stream_len,
     return false;
 
 #ifdef HAS_UNALIGNED_LE_MEMACCESS
-  val = *(uint16_t*)pos;
+  val = *(uint16_alias_t *)pos;
   pos += sizeof(int16_t);
 #else
   val = *pos++;
@@ -407,7 +414,7 @@ __ubmodem_stream_get_int32(const uint8_t **stream, size_t *stream_len,
     return false;
 
 #ifdef HAS_UNALIGNED_LE_MEMACCESS
-  val = *(uint32_t*)pos;
+  val = *(uint32_alias_t *)pos;
   pos += sizeof(int32_t);
 #else
   val = *pos++;

@@ -211,7 +211,10 @@ static inline int max1704x_reset(FAR struct max1704x_dev_s *priv);
 static int max1704x_state(struct battery_dev_s *dev, int *status);
 static int max1704x_online(struct battery_dev_s *dev, bool *status);
 static int max1704x_voltage(struct battery_dev_s *dev, b16_t *value);
+static int max1704x_current(struct battery_dev_s *dev, b16_t *value);
+static int max1704x_power(struct battery_dev_s *dev, b16_t *value);
 static int max1704x_capacity(struct battery_dev_s *dev, b16_t *value);
+static int max1704x_capacity_full(struct battery_dev_s *dev, b16_t *value);
 
 /****************************************************************************
  * Private Data
@@ -222,7 +225,10 @@ static const struct battery_operations_s g_max1704xops =
   max1704x_state,
   max1704x_online,
   max1704x_voltage,
-  max1704x_capacity
+  max1704x_current,
+  max1704x_power,
+  max1704x_capacity,
+  max1704x_capacity_full
 };
 
 /****************************************************************************
@@ -477,10 +483,38 @@ static int max1704x_voltage(struct battery_dev_s *dev, b16_t *value)
 }
 
 /****************************************************************************
+ * Name: max1704x_current
+ *
+ * Description:
+ *   Battery current in mA. Negative value indicates discharging and
+ *   positive value charging.
+ *
+ ****************************************************************************/
+
+static int max1704x_current(struct battery_dev_s *dev, b16_t *value)
+{
+  return -ENOTTY;
+}
+
+/****************************************************************************
+ * Name: max1704x_power
+ *
+ * Description:
+ *   Current battery power in mW. Negative value indicates discharging and
+ *   positive value charging.
+ *
+ ****************************************************************************/
+
+static int max1704x_power(struct battery_dev_s *dev, b16_t *value)
+{
+  return -ENOTTY;
+}
+
+/****************************************************************************
  * Name: max1704x_capacity
  *
  * Description:
- *   Battery capacity
+ *   Battery state of charge in percentage.
  *
  ****************************************************************************/
 
@@ -488,6 +522,19 @@ static int max1704x_capacity(struct battery_dev_s *dev, b16_t *value)
 {
   FAR struct max1704x_dev_s *priv = (FAR struct max1704x_dev_s *)dev;
   return max1704x_getsoc(priv, value);
+}
+
+/****************************************************************************
+ * Name: max1704x_capacity_full
+ *
+ * Description:
+ *   Battery full capacity in mAh.
+ *
+ ****************************************************************************/
+
+static int max1704x_capacity_full(struct battery_dev_s *dev, b16_t *value)
+{
+  return -ENOTTY;
 }
 
 /****************************************************************************

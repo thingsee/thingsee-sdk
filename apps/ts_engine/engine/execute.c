@@ -1366,6 +1366,12 @@ send_log (struct ts_engine_app *app, struct url * const url)
   const struct ts_connector *con;
   int ret;
 
+  if (!__ts_engine_log_have_logs())
+    {
+      eng_dbg("no logs to send\n");
+      return;
+    }
+
   eng_dbg ("send log to connector %d\n", 0);
 
   ret = ts_engine_select_connector(0, &con);
@@ -1428,8 +1434,11 @@ do_event_actions (struct ts_event *event)
 bool
 handle_cause (struct ts_cause *cause)
 {
+  struct timespec timestamp;
   void *cause_iterator;
   bool state_changing = false;
+
+  clock_gettime (CLOCK_REALTIME, &timestamp);
 
   cause_iterator = sq_peek(&cause->parent->parent->dyn.active_causes);
 
@@ -1443,7 +1452,7 @@ handle_cause (struct ts_cause *cause)
         {
           memcpy (&cause_container->dyn.sense_value, &cause->dyn.sense_value,
                   sizeof(cause->dyn.sense_value));
-          if (handle_cause_event (cause_container) == true)
+          if (handle_cause_event (cause_container, &timestamp) == true)
             {
               state_changing = true;
             }
@@ -1456,7 +1465,7 @@ handle_cause (struct ts_cause *cause)
 }
 
 bool
-handle_cause_event (struct ts_cause *cause)
+handle_cause_event (struct ts_cause *cause, struct timespec *timestamp)
 {
   int ret;
   struct ts_event *event = cause->parent;
@@ -1473,7 +1482,14 @@ handle_cause_event (struct ts_cause *cause)
 
   /* Timestamp the sense */
 
-  clock_gettime (CLOCK_REALTIME, &cause->dyn.sense_value.ts);
+  if (timestamp)
+    {
+      cause->dyn.sense_value.ts = *timestamp;
+    }
+  else
+    {
+      clock_gettime (CLOCK_REALTIME, &cause->dyn.sense_value.ts);
+    }
 
   if (cause->conf.measurement.send)
     {
@@ -1560,6 +1576,9 @@ init_cause (struct ts_cause *cause)
 {
   eng_dbg ("sId: 0x%08x\n", cause->dyn.sense_value.sId);
 
+  DEBUGASSERT(cause->dyn.timer_id < 0); /* leak! */
+  DEBUGASSERT(cause->dyn.fd < 0);       /* leak! */
+
   cause->dyn.timer_id = -1;
   cause->dyn.fd = -1;
   cause->dyn.triggered = false;
@@ -1613,12 +1632,13 @@ uninit_cause (struct ts_cause *cause)
 
   sq_rem (&cause->active_entry, &cause->parent->parent->dyn.active_causes);
 
-  if (cause->dyn.timer_id != -1)
+  if (cause->dyn.timer_id >= 0)
     {
       stop_cause_timer (cause);
+      cause->dyn.timer_id = -1;
     }
 
-  if (cause->dyn.fd != -1)
+  if (cause->dyn.fd >= 0)
     {
       eng_dbg ("closing fd: %d\n", cause->dyn.fd);
 
@@ -1629,6 +1649,7 @@ uninit_cause (struct ts_cause *cause)
         }
 
       close (cause->dyn.fd);
+      cause->dyn.fd = -1;
     }
 
   if (cause->conf.measurement.interval > 0 && cause->dyn.sense_info->ops.active.read)

@@ -5,9 +5,29 @@
 config BATTERY
 	bool "Battery support"
 	default n
-	
+
+config BATTERY_NPOLLWAITERS
+	int "Number of waiters to poll"
+	default 1
+	depends on BATTERY
+
+config BQ2742X
+	bool "BQ2742x battery fuel gauge support"
+	default n
+	select I2C
+	depends on BATTERY
+	---help---
+		BQ2742x is a single-cell battery fuel gauge with pre-programmed chemistry
+		profiles. Supports configurable interrupts.
+
+config BQ2742X_DEBUG
+	bool "Enable trace support for BQ2742x fuel gauge"
+	default n
+	depends on DEBUG
+	depends on BQ2742X
+
 config MAX1704X
-	bool "MAX1704X Battery charger support"
+	bool "MAX1704X battery fuel gauge support"
 	default n
 	select I2C
 	select I2C_MAX1704X
@@ -21,7 +41,7 @@ config MAX1704X
 config I2C_MAX1704X
 	bool
 	default y if MAX1704X
-	
+
 config BQ24251_CHARGER
     bool "Charger driver support BQ24251 RGE"
     default y

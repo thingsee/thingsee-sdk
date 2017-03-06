@@ -352,6 +352,7 @@ void up_reconfigure_gpios_for_pmstop(void)
 
   gpio_add_excluded(excluded_gpios, GPIO_USART1_RX & ppmask);
   gpio_add_excluded(excluded_gpios, GPIO_USART1_TX & ppmask);
+  gpio_add_excluded(excluded_gpios, GPIO_REGULATOR_GPS & ppmask);
 
   /* These modem GPIOs need to be left as is, as otherwise
    * modem level-shifters might start oscillate.

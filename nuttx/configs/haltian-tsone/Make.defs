@@ -105,6 +105,15 @@ ARCHWARNINGSXX = -Wall -Werror -Wno-error=cpp -Wshadow -Wshadow -Wno-unused-func
 ARCHDEFINES =
 ARCHPICFLAGS = -fpic -msingle-pic-base -mpic-register=r10
 
+GCCMAJ = $(shell $(CC) -dumpversion | sed -e 's/\.[0-9]\{1,\}//g')
+GCCMIN = $(shell $(CC) -dumpversion | sed -e 's/[0-9]\{1,\}\.//;s/\.[0-9]\{1,\}//g')
+GCCMAJ_GT_5 = $(shell if [ $(GCCMAJ) -gt 5 ]; then echo y; else echo n; fi)
+
+ifeq ($(GCCMAJ_GT_5),y)
+  ARCHWARNINGS += -Wno-unused-const-variable
+  ARCHWARNINGSXX += -Wno-unused-const-variable
+endif
+
 ifeq ($(CONFIG_FORCE_COLORED_DIAGNOSTICS),y)
   DIAGNOSTICS_COLORATION = -fdiagnostics-color=always
 else

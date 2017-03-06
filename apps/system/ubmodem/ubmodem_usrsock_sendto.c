@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_usrsock_sendto.c
  *
- *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -644,8 +644,14 @@ void __ubmodem_sendto_socket(struct modem_socket_s *sock)
   /* Adjust buffer size to temporary buffer max-length. */
 
   tmpbuflen = get_sendto_tmpbuf_length(sock);
-  if (tmpbuflen < sock->send.buflen)
+  if (sock->send.buflen > tmpbuflen)
     sock->send.buflen = tmpbuflen;
+
+  /* Sendto commands have hard-limit for how long buffers allowed
+   * per one command. */
+
+  if (sock->send.buflen > MODEM_MAX_BINARY_SOCKET_WRITE_BYTES)
+    sock->send.buflen = MODEM_MAX_BINARY_SOCKET_WRITE_BYTES;
 
   if (sock->type == SOCK_DGRAM)
     {

@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_substate_gprs.c
  *
- *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -61,10 +61,13 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define CGATT_TRY_DELAY_MSEC 1000
-#define CGATT_TRY_COUNT 5
+#define CGATT_TRY_DELAY_MSEC (5 * 1000)
+#define CGATT_TRY_COUNT 6
 
 #define GPRS_DISCONNECT_CGATT_ABORT_RETRIES 20
+
+#define UPSND_CHECK_RETRY_DELAY_SECS 10
+#define UPSND_CHECK_RETRIES 6
 
 /****************************************************************************
  * Type Declarations
@@ -191,6 +194,9 @@ static void set_ATpCGATT_handler(struct ubmodem_s *modem,
                                  size_t stream_len, void *priv);
 
 static int retry_check_cgatt(struct ubmodem_s *modem, const int timer_id,
+                             void * const arg);
+
+static int retry_upsnd_check(struct ubmodem_s *modem, const int timer_id,
                              void * const arg);
 
 /****************************************************************************
@@ -574,9 +580,10 @@ static void check_ATpUPSND_handler(struct ubmodem_s *modem,
                                    const uint8_t *resp_stream,
                                    size_t stream_len, void *priv)
 {
-  struct modem_sub_gprs_s *sub = priv;
+  struct modem_sub_gprs_s *sub = &modem->sub.gprs;
   int8_t val;
   int err;
+  int ret;
 
   /*
    * Response handler for 'AT+UPSND=0,8'
@@ -596,29 +603,31 @@ static void check_ATpUPSND_handler(struct ubmodem_s *modem,
 
   /* Read profile ID. */
 
-  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &val) || val != 0)
+  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &val) ||
+      val != 0)
     {
-      /* Should not happen. */
-      MODEM_DEBUGASSERT(modem, false);
-      return;
+      /* Should not happen. Retry. */
+
+      goto retry;
     }
 
   /* Read parameter tag. */
 
-  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &val) || val != 8)
+  if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &val) ||
+      val != 8)
     {
-      /* Should not happen. */
-      MODEM_DEBUGASSERT(modem, false);
-      return;
+      /* Should not happen. Retry. */
+
+      goto retry;
     }
 
   /* Read parameter value. */
 
   if (!__ubmodem_stream_get_int8(&resp_stream, &stream_len, &val))
     {
-      /* Should not happen. */
-      MODEM_DEBUGASSERT(modem, false);
-      return;
+      /* Should not happen. Retry. */
+
+      goto retry;
     }
 
   if (val == 0)
@@ -637,18 +646,44 @@ static void check_ATpUPSND_handler(struct ubmodem_s *modem,
   err = __ubmodem_send_cmd(modem, &cmd_ATpUPSDA_deactivate,
                        deactivate_ATpUPSDA_handler, sub, "%s", "=0,4");
   MODEM_DEBUGASSERT(modem, err == OK);
+  return;
+
+retry:
+  if (sub->retry++ >= UPSND_CHECK_RETRIES)
+    {
+      __ubmodem_level_transition_failed(modem,
+          "GPRS: Could not read state of internal PDP context.");
+      return;
+    }
+
+  /* Modem not ready to proceed. */
+
+  ret = __ubmodem_set_timer(modem, UPSND_CHECK_RETRY_DELAY_SECS * 1000,
+                            &retry_upsnd_check, sub);
+  MODEM_DEBUGASSERT(modem, ret != ERROR);
+}
+
+static int retry_upsnd_check(struct ubmodem_s *modem, const int timer_id,
+                             void * const arg)
+{
+  struct modem_sub_gprs_s *sub = &modem->sub.gprs;
+  int err;
+
+  /* Check state of PDP context. */
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpUPSND_query_int8,
+                           check_ATpUPSND_handler, sub, "%s", "=0,8");
+  MODEM_DEBUGASSERT(modem, err == OK);
+
+  return OK;
 }
 
 static void start_setup_internal_pdp_context(struct ubmodem_s *modem)
 {
   struct modem_sub_gprs_s *sub = &modem->sub.gprs;
-  int err;
 
-  /* Check +CGATT. */
-
-  err = __ubmodem_send_cmd(modem, &cmd_ATpUPSND_query_int8, check_ATpUPSND_handler,
-                       sub, "%s", "=0,8");
-  MODEM_DEBUGASSERT(modem, err == OK);
+  sub->retry = 0;
+  retry_upsnd_check(modem, -1, sub);
 }
 
 static int modem_set_cgatt_retry_timer_handler(struct ubmodem_s *modem,

@@ -39,7 +39,7 @@
  ****************************************************************************/
 #include "power_button_stimulus.h"
 
-#include <nuttx/testing/unity_fixture.h>
+#include <apps/testing/unity_fixture.h>
 #include <unistd.h>
 
 #include "stm32.h"

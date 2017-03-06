@@ -256,6 +256,9 @@ static int lsm9ds1_read_reg8(struct lsm9ds1_dev_t *dev, uint8_t * regaddr,
         {
           /* Some error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == LSM9DS1_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(dev->i2c);
           if (ret < 0)
             {
@@ -263,7 +266,6 @@ static int lsm9ds1_read_reg8(struct lsm9ds1_dev_t *dev, uint8_t * regaddr,
               return ret;
             }
 #endif
-          continue;
         }
     }
 

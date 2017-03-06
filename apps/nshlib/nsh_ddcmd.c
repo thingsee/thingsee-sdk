@@ -52,6 +52,9 @@
 #include <errno.h>
 
 #include <nuttx/fs/fs.h>
+#if !defined(CONFIG_NUTTX_SDK_THINGSEE_ONE)
+#  include <nuttx/drivers/drivers.h>
+#endif
 
 #include "nsh.h"
 #include "nsh_console.h"

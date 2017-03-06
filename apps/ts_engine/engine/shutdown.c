@@ -41,13 +41,13 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <sys/types.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <debug.h>
 #include <assert.h>
 #include <sys/stat.h>
-#include <string.h>
 #include <sys/wait.h>
 
 #include <apps/thingsee/ts_core.h>
@@ -81,14 +81,17 @@
 
 #ifdef CONFIG_SYSTEM_CONMAN
 
-struct
+static struct
 {
   void (*done_cb)(void *priv);
   void *done_priv;
   int time_count;
   pthread_t guard_threadid;
   pthread_mutex_t mutex;
-} g_conman_shutdown;
+} g_conman_shutdown =
+  {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+  };
 
 static void *guard_stop_conman(void *priv)
 {
@@ -195,14 +198,6 @@ static void stop_conman(void (*stopped_callback)(void *priv), void *priv)
 
   eng_dbg("> Stopping connection manager...\n");
 
-  ret = pthread_mutex_init(&g_conman_shutdown.mutex, NULL);
-  if (ret < 0)
-    {
-      eng_dbg("pthread_mutex_init failed, err: %d\n", ret);
-      stopped_callback(priv);
-      return;
-    }
-
   /* Launch thread that will sleep 10 seconds and commence with shutdown
    * procedure. In case mainloop is not stuck, that thread is cancelled
    * before it will wake. If mainloop is stuck, that thread will ensure
@@ -213,7 +208,8 @@ static void stop_conman(void (*stopped_callback)(void *priv), void *priv)
   attr.stacksize = 1024 * 1.5;
   ret = pthread_create(&g_conman_shutdown.guard_threadid, &attr,
                        guard_stop_conman, priv);
-  if (ret < 0)
+  pthread_attr_destroy(&attr);
+  if (ret != 0)
     {
       eng_dbg("pthread_create guard_stop_conman failed, err: %d\n", ret);
       goto err_done;

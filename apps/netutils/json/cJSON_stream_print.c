@@ -115,123 +115,150 @@ static void stream_print_number(cJSON *item, cJSON_outstream *stream)
   int int_d = cJSON_int(item);
   double id = int_d;
   size_t slen;
+  bool round_up = false;
 
-  /* Get type and needed length output string. */
-
-  if (int_d == 0 && d == 0.0)
+  do
     {
-      /* Handle zero separately as it's relation to DBL_EPSILON is special one
-       * and as zero has two exact presentations in floating point format (positive
-       * zero and negative zero). */
+      /* Get type and needed length output string. */
 
-      if (!signbit(d))
+      if (int_d == 0 && d == 0.0)
         {
-          /* Simply zero. */
+          /* Handle zero separately as it's relation to DBL_EPSILON is special one
+           * and as zero has two exact presentations in floating point format (positive
+           * zero and negative zero). */
 
-          str[0] = '0';
-          str[1] = '\0';
-          slen = 1;
+          if (!signbit(d))
+            {
+              /* Simply zero. */
+
+              str[0] = '0';
+              str[1] = '\0';
+              slen = 1;
+            }
+          else
+            {
+              /* Negative zero. */
+
+              slen = snprintf(str, sizeof(str), "%s", "-0.0");
+            }
+
+          ASSERT(slen < sizeof(str) - 1);
+        }
+      else if (int_d != 0 && (d <= INT_MAX && d >= INT_MIN) && dbl_equal(d, id))
+        {
+          /* Integer value can accurately represent this value. */
+
+          slen = snprintf(str, sizeof(str), "%d", int_d);
+
+          ASSERT(slen < sizeof(str) - 1);
+        }
+      else if (fabs(d) < 1.0e-6 || fabs(d) > 1.0e14)
+        {
+          /* Double can represent 15 significant digits. */
+
+          /* NuttX printf formatter has problems printing large and small
+           * numbers, so do exponent formatting manually. */
+
+          int expo = (int)log10(fabs(d));
+          double scaled_d;
+
+          if (expo < 0)
+            {
+              expo--;
+            }
+
+          scaled_d = d * pow(10, -expo);
+          slen = snprintf(str, sizeof(str), "%.14f", scaled_d);
+
+          if (strchr(str, '.'))
+            {
+              /* Remove trailing zeros. */
+
+              slen -= 1;
+
+              while (slen > 0)
+                {
+                  if (str[--slen] != '0')
+                    break;
+
+                  str[slen] = '\0';
+                }
+
+              /* Remove trailing dot. */
+
+              if (slen > 0 && str[slen] == '.')
+                str[slen--] = '\0';
+
+              slen += 1;
+            }
+
+          /* Add exponent. */
+
+          slen += snprintf(str + slen, sizeof(str) - slen, "e%d", expo);
+
+          ASSERT(slen < sizeof(str) - 1);
         }
       else
         {
-          /* Negative zero. */
+          int ndigits_before_dot = (int)log10(fabs(d));
+          int ndigits_after_dot = 15 - ndigits_before_dot;
+          char *pdot;
+          char fmtstr[8];
 
-          slen = snprintf(str, sizeof(str), "%s", "-0.0");
-        }
+          /* Double can represent 15 significant digits. */
 
-      DEBUGASSERT(slen < sizeof(str) - 1);
-    }
-  else if (int_d != 0 && (d <= INT_MAX && d >= INT_MIN) && dbl_equal(d, id))
-    {
-      /* Integer value can accurately represent this value. */
+          if (ndigits_after_dot < 0)
+            ndigits_after_dot = 0;
 
-      slen = snprintf(str, sizeof(str), "%d", int_d);
+          snprintf(fmtstr, sizeof(fmtstr), "%%.%df", ndigits_after_dot);
 
-      DEBUGASSERT(slen < sizeof(str) - 1);
-    }
-  else if (fabs(d) < 1.0e-6 || fabs(d) > 1.0e14)
-    {
-      /* Double can represent 15 significant digits. */
+          slen = snprintf(str, sizeof(str), fmtstr, d);
 
-      /* NuttX printf formatter has problems printing large and small
-       * numbers, so do exponent formatting manually. */
+          ASSERT(slen < sizeof(str) - 1);
 
-      int expo = (int)log10(fabs(d));
-      double scaled_d;
-
-      if (expo < 0)
-        {
-          expo--;
-        }
-
-      scaled_d = d * pow(10, -expo);
-      slen = snprintf(str, sizeof(str), "%.14f", scaled_d);
-
-      if (strchr(str, '.'))
-        {
-          /* Remove trailing zeros. */
-
-          slen -= 1;
-
-          while (slen > 0)
+          pdot = strchr(str, '.');
+          if (pdot && !round_up)
             {
-              if (str[--slen] != '0')
-                break;
+              ssize_t ndigits = &str[slen] - (pdot + 1);
 
-              str[slen] = '\0';
+              if (ndigits > 2 && str[slen - 1] == '9' && str[slen - 2] == '9')
+                {
+                  /* Detected trailing nines rounding error. Round up last
+                   * digit. */
+
+                  d += copysign(pow(10, -ndigits), d);
+                  int_d = d;
+                  id = int_d;
+                  round_up = true;
+
+                  continue; /* Retry printing with rounded up number. */
+                }
             }
 
-          /* Remove trailing dot. */
-
-          if (slen > 0 && str[slen] == '.')
-            str[slen--] = '\0';
-
-          slen += 1;
-        }
-
-      /* Add exponent. */
-
-      slen += snprintf(str + slen, sizeof(str) - slen, "e%d", expo);
-
-      DEBUGASSERT(slen < sizeof(str) - 1);
-    }
-  else
-    {
-      int ndigits_before_dot = (int)log10(fabs(d));
-      int ndigits_after_dot = 15 - ndigits_before_dot;
-      char fmtstr[8];
-
-      /* Double can represent 15 significant digits. */
-
-      if (ndigits_after_dot < 0)
-        ndigits_after_dot = 0;
-
-      snprintf(fmtstr, sizeof(fmtstr), "%%.%df", ndigits_after_dot);
-
-      slen = snprintf(str, sizeof(str), fmtstr, d);
-
-      DEBUGASSERT(slen < sizeof(str) - 1);
-
-      if (strchr(str, '.'))
-        {
-          /* Remove trailing zeros. */
-
-          slen -= 1;
-
-          while (slen > 0)
+          if (pdot)
             {
-              if (str[--slen] != '0')
-                break;
+              /* Remove trailing zeros. */
 
-              str[slen] = '\0';
+              slen -= 1;
+
+              while (slen > 0)
+                {
+                  if (str[--slen] != '0')
+                    break;
+
+                  str[slen] = '\0';
+                }
+
+              /* Remove trailing dot. */
+
+              if (slen > 0 && str[slen] == '.')
+                str[slen] = '\0';
             }
-
-          /* Remove trailing dot. */
-
-          if (slen > 0 && str[slen] == '.')
-            str[slen] = '\0';
         }
+
+      break; /* Done, no need for restart. */
     }
+  while (true);
 
   stream_puts(stream, str);
 }

@@ -405,7 +405,7 @@ int sense_ambient_light_irq_init(struct ts_cause *cause)
     }
 
   ret = ts_core_fd_register(cause->dyn.fd, POLLIN, als_threshold_callback,
-      cause);
+                            cause);
   DEBUGASSERT(ret == OK);
 
   return OK;
@@ -477,7 +477,7 @@ int sense_ambient_light_active_read(struct ts_cause *cause)
       return ERROR;
     }
 
-  handle_cause(cause);
+  handle_cause_event(cause, NULL);
 
   return OK;
 }

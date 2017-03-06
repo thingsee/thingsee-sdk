@@ -79,16 +79,25 @@
  * BATIOC_VOLTAGE - Return the current battery voltage.  The returned value
  *   is a fixed preceision number in units of volts.
  *   Input value:  A pointer to type b16_t.
+ * BATIOC_CURRENT - Return average current. Returned value is signed integer.
+ * BATIOC_POWER - Return a signed integer value of average power during
+ *   charging or discharging of the battery. Returned value is negative during
+ *   discharge and positive during charge.
  * BATIOC_CAPACITY - Return the current battery capacity or State of Charge
  *   (SoC).  The returned value is a fixed precision percentage of the
  *   batteries full capacity.
  *   Input value:  A pointer to type b16_t.
+ * BATIOC_CAPACITY_FULL - Return  capacity of the battery when fully charged,
+ *   in mAh unit.
  */
 
-#define BATIOC_STATE    _BATIOC(0x0001)
-#define BATIOC_ONLINE   _BATIOC(0x0002)
-#define BATIOC_VOLTAGE  _BATIOC(0x0003)
-#define BATIOC_CAPACITY _BATIOC(0x0004)
+#define BATIOC_STATE          _BATIOC(0x0001)
+#define BATIOC_ONLINE         _BATIOC(0x0002)
+#define BATIOC_VOLTAGE        _BATIOC(0x0003)
+#define BATIOC_CURRENT        _BATIOC(0x0004)
+#define BATIOC_POWER          _BATIOC(0x0005)
+#define BATIOC_CAPACITY       _BATIOC(0x0006)
+#define BATIOC_CAPACITY_FULL  _BATIOC(0x0007)
 
 /****************************************************************************
  * Public Types
@@ -104,7 +113,7 @@ enum battery_status_e
   BATTERY_DISCHARGING  /* Probably not full, discharging */
 };
 
- /* This structure defines the lower half battery interface */
+/* This structure defines the lower half battery interface */
 
 struct battery_dev_s;
 struct battery_operations_s
@@ -113,17 +122,29 @@ struct battery_operations_s
 
   int (*state)(struct battery_dev_s *dev, int *status);
 
-  /* Return true if the batter is online */
+  /* Return true if the battery is online */
 
   int (*online)(struct battery_dev_s *dev, bool *status);
 
-  /* Current battery voltage */
+  /* Return current battery voltage */
 
   int (*voltage)(struct battery_dev_s *dev, b16_t *value);
 
-  /* Battery capacity */
+  /* Return current battery average current */
+
+  int (*current)(struct battery_dev_s *dev, b16_t *value);
+
+  /* Return current battery average power */
+
+  int (*power)(struct battery_dev_s *dev, b16_t *value);
+
+  /* Return current battery capacity */
 
   int (*capacity)(struct battery_dev_s *dev, b16_t *value);
+
+  /* Return battery full capacity */
+
+  int (*capacity_full)(struct battery_dev_s *dev, b16_t *value);
 };
 
 /* This structure defines the battery driver state structure */
@@ -134,7 +155,10 @@ struct battery_dev_s
 
   FAR const struct battery_operations_s *ops; /* Battery operations */
   sem_t batsem;  /* Enforce mutually exclusive access */
-
+#ifndef CONFIG_DISABLE_POLL
+  struct pollfd *fds[CONFIG_BATTERY_NPOLLWAITERS];
+  volatile bool int_pending;
+#endif
   /* Data fields specific to the lower-half driver may follow */
 };
 

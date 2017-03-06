@@ -53,7 +53,7 @@ bool
 handle_cause (struct ts_cause *cause);
 
 bool
-handle_cause_event (struct ts_cause *cause);
+handle_cause_event (struct ts_cause *cause, struct timespec *timestamp);
 
 int
 profile_stop(struct ts_engine *engine, bool free, bool uninit_connector);

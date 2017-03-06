@@ -195,6 +195,7 @@ enum conman_msgs_ids
   CONMAN_MSG_CALL_ANSWER,
   CONMAN_MSG_CALL_HANGUP,
   CONMAN_MSG_CALL_AUDIO_CONTROL,
+  CONMAN_MSG_PLAY_AUDIO_RESOURCE,
   /* u-blox modem specific commands: */
   CONMAN_MSG_START_CELLLOCATE,
   CONMAN_MSG_AID_CELLLOCATE,
@@ -244,6 +245,11 @@ struct conman_msg_call_answer_s
 struct conman_msg_call_audioctl_s
 {
   bool audio_out_on;
+} packed_struct;
+
+struct conman_msg_play_audio_resource_s
+{
+  struct conman_event_play_audio_resource resource;
 } packed_struct;
 
 struct conman_msg_start_celllocate_s
@@ -309,6 +315,9 @@ int __conman_ubmodem_call_hangup(struct conman_s *conman);
 int __conman_ubmodem_call_audioctl(struct conman_s *conman,
                                    const struct conman_msg_call_audioctl_s *ctl);
 
+int __conman_ubmodem_play_audio_resource(struct conman_s *conman,
+                                         const struct conman_msg_play_audio_resource_s *ctl);
+
 int __conman_ubmodem_start_celllocate(struct conman_s *conman,
                                 const struct conman_msg_start_celllocate_s *ctl);
 
@@ -323,7 +332,8 @@ int __conman_ubmodem_filesystem_delete(struct conman_s *conman,
 
 int __conman_cc3000_initialize(struct conman_s *conman);
 
-int __conman_cc3000_request_connection(struct conman_s *conman, enum conman_connection_type_e type);
+int __conman_cc3000_request_connection(struct conman_s *conman,
+                                       enum conman_connection_type_e type);
 
 int __conman_cc3000_get_status_connection(struct conman_s *conman,
                                           struct conman_status_s *status);

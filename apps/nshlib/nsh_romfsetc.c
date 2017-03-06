@@ -43,7 +43,11 @@
 #include <debug.h>
 #include <errno.h>
 
-#include <nuttx/fs/ramdisk.h>
+#ifdef CONFIG_NUTTX_SDK_THINGSEE_ONE
+#  include <nuttx/fs/ramdisk.h>
+#else
+#  include <nuttx/drivers/ramdisk.h>
+#endif
 
 #include "nsh.h"
 

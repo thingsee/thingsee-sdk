@@ -4,9 +4,9 @@
     [Released under MIT License. Please refer to license.txt for details]
 ========================================== */
 
-#include <nuttx/testing/unity.h>
+#include <apps/testing/unity.h>
 
-#include <nuttx/testing/cmock_internals.h>
+#include <apps/testing/cmock_internals.h>
 
 //private variables
 #ifdef CMOCK_MEM_DYNAMIC

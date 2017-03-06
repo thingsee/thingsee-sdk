@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_command.h
  *
- *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -61,7 +61,7 @@
 /* Timeouts for different command classes */
 
 #define MODEM_CMD_DEFAULT_TIMEOUT              (5 * 10) /* 5 sec */
-#define MODEM_CMD_NETWORK_TIMEOUT              ((int)(1.5 * 60 + 10) * 10) /* ~1.5 min */
+#define MODEM_CMD_NETWORK_TIMEOUT              ((3 * 60 + 20) * 10) /* 3 min + 20 sec */
 #define MODEM_CMD_NETWORK_REGISTRATION_TIMEOUT (MODEM_CMD_NETWORK_TIMEOUT + 5 * 10)
 #define MODEM_CMD_SOCKET_TIMEOUT               (10 * 10) /* 10 sec */
 #define MODEM_CMD_SOCKET_CONNECT_TIMEOUT       (20 * 10) /* 20 sec */

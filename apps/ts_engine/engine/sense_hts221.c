@@ -68,7 +68,7 @@ struct client
 {
   sq_entry_t entry;
   struct ts_cause *cause;
-  bool active :1;
+  bool active:1;
 };
 
 struct hts221
@@ -81,40 +81,48 @@ struct hts221
 
 static struct hts221 g_hts221 =
   {
-  .fd = -1, .refcount = 0,
+    .fd = -1,
+    .refcount = 0,
   };
 
 static int publish_measurements(struct hts221 *hts221)
 {
+  struct timespec timestamp;
   struct client *client;
-  struct ts_cause *cause;
+
+  clock_gettime (CLOCK_REALTIME, &timestamp);
 
   client = (struct client *) sq_peek(&hts221->clients);
 
   while (client)
     {
-      cause = client->cause;
-
-      switch (cause->dyn.sense_info->sId & 0xffffff00)
+      if (client->active)
         {
-        case SENSE_ID_TEMPERATURE:
-          {
-            cause->dyn.sense_value.value.valuedouble =
-                hts221->values.temperature
-                    / (double) HTS221_TEMPERATURE_PRECISION;
-          }
-        break;
-        case SENSE_ID_HUMIDITY:
-          {
-            cause->dyn.sense_value.value.valuedouble = hts221->values.humidity
-                / (double) HTS221_HUMIDITY_PRECISION;
-          }
-        break;
-        }
+          struct ts_cause *cause = client->cause;
 
-      if (handle_cause(cause) == true)
-        {
-          break;
+          client->active = false;
+
+          switch (cause->dyn.sense_info->sId & 0xffffff00)
+            {
+            case SENSE_ID_TEMPERATURE:
+              {
+                cause->dyn.sense_value.value.valuedouble =
+                    hts221->values.temperature
+                        / (double) HTS221_TEMPERATURE_PRECISION;
+              }
+            break;
+            case SENSE_ID_HUMIDITY:
+              {
+                cause->dyn.sense_value.value.valuedouble = hts221->values.humidity
+                    / (double) HTS221_HUMIDITY_PRECISION;
+              }
+            break;
+            }
+
+          if (handle_cause_event(cause, &timestamp))
+            {
+              break; /* state changing. */
+            }
         }
 
       client = (struct client *) sq_next(&client->entry);
@@ -177,6 +185,8 @@ static int sense_hts221_start_measurement(struct hts221 *hts221)
 {
   int ret;
 
+  DEBUGASSERT(hts221->fd < 0); /* leak! */
+
   hts221->fd = open(HTS221_DEVPATH, O_RDONLY);
   if (hts221->fd < 0)
     {
@@ -207,7 +217,8 @@ static int sense_hts221_start_measurement(struct hts221 *hts221)
 
   return OK;
 
-  errout_close: close(hts221->fd);
+errout_close:
+  close(hts221->fd);
   hts221->fd = -1;
 
   return ERROR;
@@ -236,13 +247,14 @@ int sense_hts221_active_init(struct ts_cause *cause)
       client = (struct client *) sq_next(&client->entry);
     }
 
-  client = malloc(sizeof(*client));
+  client = calloc(1, sizeof(*client));
   if (!client)
     {
       eng_dbg("malloc failed\n");
       return ERROR;
     }
 
+  client->active = false;
   client->cause = cause;
 
   sq_addlast(&client->entry, &hts221->clients);
@@ -265,6 +277,14 @@ int sense_hts221_active_uninit(struct ts_cause *cause)
           sq_rem(&client->entry, &hts221->clients);
           free(client);
           hts221->refcount--;
+
+          if (hts221->refcount == 0 && hts221->fd >= 0)
+            {
+              ts_core_fd_unregister(hts221->fd);
+              close(hts221->fd);
+              hts221->fd = -1;
+            }
+
           return OK;
         }
 
@@ -277,9 +297,21 @@ int sense_hts221_active_uninit(struct ts_cause *cause)
 int sense_hts221_active_read(struct ts_cause *cause)
 {
   struct hts221 *hts221 = &g_hts221;
+  struct client *client;
   int ret;
 
-  if (hts221->fd == -1)
+  client = (struct client *) sq_peek(&hts221->clients);
+  while (client)
+    {
+      if (client->cause == cause)
+        {
+          client->active = true;
+        }
+
+      client = (struct client *) sq_next(&client->entry);
+    }
+
+  if (hts221->fd < 0)
     {
       ret = sense_hts221_start_measurement(hts221);
       if (ret < 0)

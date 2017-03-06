@@ -107,6 +107,26 @@ bool __ts_engine_sdcard_inserted(void)
   return inserted;
 }
 
+cJSON *__ts_engine_sdcard_read_json(const char * const filename)
+{
+  int fd;
+  cJSON *obj;
+
+  eng_dbg ("filename: %s\n", filename);
+
+  fd = open(filename, O_RDONLY);
+  if (fd < 0)
+    {
+      perror("open");
+      return NULL;
+    }
+
+  obj = cJSON_Parse_fd(fd, INT_MAX, NULL);
+  close(fd);
+
+  return obj;
+}
+
 const char *__ts_engine_sdcard_read(const char * const filename)
 {
   int fd;

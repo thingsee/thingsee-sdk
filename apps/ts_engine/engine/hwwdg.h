@@ -34,6 +34,3 @@
 
 int engine_hwwdg_initialize(void);
 
-/* Legacy interface for < B2.0 */
-void ts_watchdog_initialize(void);
-

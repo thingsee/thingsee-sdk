@@ -43,8 +43,10 @@
 #include <stdbool.h>
 #include <semaphore.h>
 #include <errno.h>
+#include <poll.h>
 #include <debug.h>
 
+#include <nuttx/arch.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/power/battery.h>
 
@@ -72,8 +74,11 @@
 static int     bat_open(FAR struct file *filep);
 static int     bat_close(FAR struct file *filep);
 static ssize_t bat_read(FAR struct file *, FAR char *, size_t nbytes);
-static ssize_t bat_write(FAR struct file *filep, FAR const char *buffer, size_t buflen);
-static int     bat_ioctl(FAR struct file *filep,int cmd,unsigned long arg);
+static ssize_t bat_write(FAR struct file *filep, FAR const char *buffer,
+                         size_t buflen);
+static int     bat_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
+static int     bat_poll(FAR struct file *filep, FAR struct pollfd *fds,
+                        bool setup);
 
 /****************************************************************************
  * Private Data
@@ -88,7 +93,7 @@ static const struct file_operations g_batteryops =
   0,
   bat_ioctl
 #ifndef CONFIG_DISABLE_POLL
-  , 0
+  , bat_poll
 #endif
 };
 
@@ -151,20 +156,18 @@ static ssize_t bat_write(FAR struct file *filep, FAR const char *buffer,
 static int bat_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 {
   FAR struct inode *inode = filep->f_inode;
-  FAR struct battery_dev_s *dev  = inode->i_private;
-  int ret;
+  FAR struct battery_dev_s *dev = inode->i_private;
+  int ret = -EINVAL;
 
-  /* Inforce mutually exclusive access to the battery driver */
+  /* Enforce mutually exclusive access to the battery driver */
 
-  ret = sem_wait(&dev->batsem);
-  if (ret < 0)
+  if (sem_wait(&dev->batsem) < 0)
     {
       return -errno; /* Probably EINTR */
     }
 
-  /* Procss the IOCTL command */
+  /* Process the IOCTL command */
 
-  ret = -EINVAL;  /* Assume a bad argument */
   switch (cmd)
     {
       case BATIOC_STATE:
@@ -197,12 +200,42 @@ static int bat_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         }
         break;
 
+      case BATIOC_CURRENT:
+        {
+          FAR b16_t *ptr = (FAR b16_t *)((uintptr_t)arg);
+          if (ptr)
+            {
+              ret = dev->ops->current(dev, ptr);
+            }
+        }
+        break;
+
+      case BATIOC_POWER:
+        {
+          FAR b16_t *ptr = (FAR b16_t *)((uintptr_t)arg);
+          if (ptr)
+            {
+              ret = dev->ops->power(dev, ptr);
+            }
+        }
+        break;
+
       case BATIOC_CAPACITY:
         {
           FAR b16_t *ptr = (FAR b16_t *)((uintptr_t)arg);
           if (ptr)
             {
               ret = dev->ops->capacity(dev, ptr);
+            }
+        }
+        break;
+
+      case BATIOC_CAPACITY_FULL:
+        {
+          FAR b16_t *ptr = (FAR b16_t *)((uintptr_t)arg);
+          if (ptr)
+            {
+              ret = dev->ops->capacity_full(dev, ptr);
             }
         }
         break;
@@ -216,6 +249,95 @@ static int bat_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
   sem_post(&dev->batsem);
   return ret;
 }
+
+/****************************************************************************
+ * Name: bat_poll
+ ****************************************************************************/
+#ifndef CONFIG_DISABLE_POLL
+
+static int bat_poll(FAR struct file *filep, FAR struct pollfd *fds, bool setup)
+{
+  FAR struct inode *inode;
+  FAR struct battery_dev_s *dev;
+  int ret = OK;
+  int i;
+  irqstate_t flags;
+
+  assert(filep && fds);
+  inode = filep->f_inode;
+
+  DEBUGASSERT(inode && inode->i_private);
+  dev = inode->i_private;
+
+  while (sem_wait(&dev->batsem) != 0)
+    {
+      assert(errno == EINTR);
+    }
+
+  if (setup)
+    {
+      /* Ignore waits that do not include POLLIN */
+
+      if ((fds->events & POLLIN) == 0)
+        {
+          ret = -EDEADLK;
+          goto out;
+        }
+
+      /* This is a request to set up the poll.  Find an available slot for the
+       * poll structure reference */
+
+      for (i = 0; i < CONFIG_BATTERY_NPOLLWAITERS; i++)
+        {
+          /* Find an available slot */
+
+          if (!dev->fds[i])
+            {
+              /* Bind the poll structure and this slot */
+
+              dev->fds[i] = fds;
+              fds->priv = &dev->fds[i];
+              break;
+            }
+        }
+
+      if (i >= CONFIG_BATTERY_NPOLLWAITERS)
+        {
+          fds->priv = NULL;
+          ret = -EBUSY;
+          goto out;
+        }
+
+      flags = irqsave();
+
+      if (dev->int_pending)
+        {
+          dev->int_pending = false;
+          fds->revents |= POLLIN;
+          dbg("Report events: %02x\n", fds->revents);
+          sem_post(fds->sem);
+        }
+
+      irqrestore(flags);
+    }
+  else if (fds->priv)
+    {
+      /* This is a request to tear down the poll. */
+
+      struct pollfd **slot = (struct pollfd **)fds->priv;
+      DEBUGASSERT(slot != NULL);
+
+      /* Remove all memory of the poll setup */
+
+      *slot = NULL;
+      fds->priv = NULL;
+    }
+
+out:
+  sem_post(&dev->batsem);
+  return ret;
+}
+#endif
 
 /****************************************************************************
  * Public Functions

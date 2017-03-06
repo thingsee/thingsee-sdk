@@ -4,7 +4,7 @@
     [Released under MIT License. Please refer to license.txt for details]
 ============================================================================ */
 
-#include <nuttx/testing/unity.h>
+#include <apps/testing/unity.h>
 #include <pthread.h>
 
 #define UNITY_FAIL_AND_BAIL   { Unity.CurrentTestFailed  = 1; UnityAbort(); }

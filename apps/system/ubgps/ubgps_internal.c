@@ -49,7 +49,7 @@
 #include <debug.h>
 #include <queue.h>
 #include <poll.h>
-#include <apps/thingsee/ts_core.h>
+#include <nuttx/random.h>
 
 #include "ubgps_internal.h"
 
@@ -66,6 +66,12 @@
 /****************************************************************************
  * Private Types
  ****************************************************************************/
+
+struct queued_event_s
+{
+  sq_entry_t node;
+  struct sm_event_target_state_s event;
+};
 
 /****************************************************************************
  * Private Function Prototypes
@@ -87,15 +93,62 @@ pthread_mutex_t g_aid_mutex;
  * Private Functions
  ****************************************************************************/
 
+static void nav_flags_to_str(char *buf, size_t buflen, uint8_t flags)
+{
+  const char *valid = (flags & NAV_FLAG_FIX_OK) ? "FixOK" : "FixNOK";
+  const char *headvalid = (flags & NAV_FLAG_HEADING_VALID) ? ",HeadOK" : "";
+  const char *psm_state;
 
-#ifdef CONFIG_UBGPS_PSM_MODE
+  switch (flags & NAV_FLAG_PSM_MASK)
+    {
+    case 0:
+      psm_state = "";
+      break;
+    case NAV_FLAG_PSM_EN:
+      psm_state = ",pEN";
+      break;
+    case NAV_FLAG_PSM_ACQ:
+      psm_state = ",pACQ";
+      break;
+    case NAV_FLAG_PSM_TRK:
+      psm_state = ",pTRK";
+      break;
+    case NAV_FLAG_PSM_POT:
+      psm_state = ",pPOT";
+      break;
+    case NAV_FLAG_PSM_INA:
+      psm_state = ",pINA";
+      break;
+    default:
+      psm_state = ",p???";
+      break;
+    }
+
+  snprintf(buf, buflen, "%s%s%s", valid, headvalid, psm_state);
+}
+
+static void utctime_to_gpstime(const struct timespec *ts, uint16_t *week,
+                               uint32_t *wmsec)
+{
+  const time_t gps_utc_leap_sec_diff_2017 = 18;
+  const time_t gps_epoch_secs = 315964800;
+  const time_t seconds_per_week = 7 * 24 * 60 * 60;
+  time_t gps_secs;
+
+  gps_secs = ts->tv_sec - gps_epoch_secs + gps_utc_leap_sec_diff_2017;
+
+  *week = gps_secs / seconds_per_week;
+  gps_secs %= seconds_per_week;
+
+  *wmsec = gps_secs * 1000 + ts->tv_nsec / (1000 * 1000);
+}
+
 /****************************************************************************
  * Name: ubgps_filter_location
  *
  * Description:
- *   Filter location events in power save mode. Location events are published
- *   until horizontal accuracy is below defined threshold or location filter
- *   timeout occurs.
+ *   Filter location events and publish until horizontal accuracy is below
+ *   defined threshold or location filter timeout occurs.
  *
  * Input Parameters:
  *   gps         - GPS object
@@ -107,22 +160,23 @@ pthread_mutex_t g_aid_mutex;
 static void ubgps_filter_location(struct ubgps_s * const gps,
   struct gps_event_location_s const * const levent)
 {
+#ifdef CONFIG_UBGPS_ACCURACY_FILTER_DURATION
+  const int accuracy_filter_duration = CONFIG_UBGPS_ACCURACY_FILTER_DURATION;
+#else
+  const int accuracy_filter_duration = 10;
+#endif
+#ifdef CONFIG_UBGPS_ACCURACY_FILTER_THRESHOLD
+  const int accuracy_filter_threshold = CONFIG_UBGPS_ACCURACY_FILTER_THRESHOLD;
+#else
+  const int accuracy_filter_threshold = 100;
+#endif
+
   DEBUGASSERT(gps && levent);
 
-  if (gps->state.navigation_rate < CONFIG_UBGPS_PSM_MODE_THRESHOLD*1000)
-    {
-      /* Navigation rate less than PSM threshold. */
-
-      ubgps_publish_event(gps, (struct gps_event_s *)levent);
-      return;
-    }
-
-  if (CONFIG_UBGPS_PSM_ACCURACY_FILTER_DURATION == 0 ||
+  if (accuracy_filter_duration == 0 ||
       (levent->location->horizontal_accuracy / 1000 <
-      CONFIG_UBGPS_PSM_ACCURACY_FILTER_THRESHOLD))
+       accuracy_filter_threshold))
     {
-      struct sm_event_psm_event_s psm;
-
       /* Filter disabled or accuracy below threshold */
 
       ubgps_publish_event(gps, (struct gps_event_s *)levent);
@@ -136,12 +190,6 @@ static void ubgps_filter_location(struct ubgps_s * const gps,
 
       gps->filt_location.horizontal_accuracy = 0;
 
-      /* Construct power save mode event */
-
-      psm.super.id = SM_EVENT_PSM_STATE;
-      psm.enable = true;
-      ubgps_sm_process(gps, (struct sm_event_s *)&psm);
-
       return;
     }
 
@@ -151,7 +199,7 @@ static void ubgps_filter_location(struct ubgps_s * const gps,
          start timeout timer to collect location events. */
 
       gps->state.location_timer_id = __ubgps_set_timer(gps,
-        CONFIG_UBGPS_PSM_ACCURACY_FILTER_DURATION*1000, ubgps_timeout, gps);
+        accuracy_filter_duration * 1000, ubgps_timeout, gps);
     }
 
   if (gps->filt_location.horizontal_accuracy == 0 ||
@@ -164,7 +212,18 @@ static void ubgps_filter_location(struct ubgps_s * const gps,
       return;
     }
 }
-#endif /* CONFIG_UBGPS_PSM_MODE */
+
+/****************************************************************************
+ * Name: ubgps_process_event_timer
+ ****************************************************************************/
+static int ubgps_process_event_timer(const int timer_id, void * const priv)
+{
+  struct ubgps_s * const gps = priv;
+
+  ubgps_process_state_change_queue(gps);
+
+  return OK;
+}
 
 /****************************************************************************
  * Public Functions
@@ -186,15 +245,38 @@ static void ubgps_filter_location(struct ubgps_s * const gps,
  ****************************************************************************/
 int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const event)
 {
+  gps_state_t before_state;
+  gps_state_t after_state;
   gps_state_t state;
   int status;
 
   DEBUGASSERT(gps && event);
 
+  /* Proceed pending state changes */
+
+  ubgps_process_state_change_queue(gps);
+
+  ++gps->state.in_sm_process;
+
+  if (gps->state.in_state_change)
+    {
+      dbg("WARNING! processing event while in state change!\n");
+    }
+
   /* Inject event to state machine */
 
   state = gps->state.current_state;
+  before_state = state;
   status = ubgps_sm(gps, state)->func(gps, event);
+  after_state = gps->state.current_state;
+
+  if (before_state != after_state)
+    {
+      dbg("WARNING! ubgps_sm_process() was re-entered from gps_sm[state](),"
+          "and current_state changed (before %s, after %s).\n",
+          ubgps_get_statename(before_state), ubgps_get_statename(after_state));
+      state = after_state;
+    }
 
   /* Check status */
 
@@ -210,6 +292,8 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
     {
       struct sm_event_s sevent;
       struct gps_event_state_change_s cevent;
+
+      gps->state.in_state_change = true;
 
       /* Construct and send exit event to old state */
 
@@ -231,11 +315,111 @@ int ubgps_sm_process(struct ubgps_s * const gps, struct sm_event_s const * const
       cevent.super.id = GPS_EVENT_STATE_CHANGE;
       cevent.state = state;
       ubgps_publish_event(gps, (struct gps_event_s *)&cevent);
+
+      gps->state.in_state_change = false;
     }
+
+  gps->state.in_sm_process--;
+
+  /* Proceed pending state changes */
+
+  ubgps_process_state_change_queue(gps);
 
   return status;
 }
 
+/****************************************************************************
+ * Name: ubgps_process_state_change_queue
+ *
+ * Description:
+ *   Process deferred state changes.
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *
+ ****************************************************************************/
+void ubgps_process_state_change_queue(struct ubgps_s * const gps)
+{
+  struct queued_event_s *pqevent;
+
+  if (gps->state.in_queue_process)
+    {
+      return;
+    }
+  if (gps->state.in_sm_process > 0)
+    {
+      return;
+    }
+
+  gps->state.in_queue_process = true;
+
+  /* Process pending state changes. */
+
+  pqevent = (void *)sq_remfirst(&gps->event_target_state_queue);
+  while (pqevent)
+    {
+      struct sm_event_target_state_s nevent = pqevent->event;
+
+      free(pqevent);
+
+      dbg_int("Process deferred state change request "
+              "(target_state: %d, timeout: %d),\n",
+              nevent.target_state, nevent.timeout);
+
+      /* Mark target state transition as pending */
+
+      gps->state.target_state_pending = true;
+
+      /* Process event */
+
+      ubgps_sm_process(gps, (struct sm_event_s *)&nevent);
+
+      /* Next event */
+
+      pqevent = (void *)sq_remfirst(&gps->event_target_state_queue);
+    }
+
+  gps->state.in_queue_process = false;
+}
+
+/****************************************************************************
+ * Name: ubgps_queue_state_change
+ *
+ * Description:
+ *   Queue state change deferred processing
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *   event       - Pointer to processed event
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+int ubgps_queue_state_change(struct ubgps_s * const gps,
+                             struct sm_event_target_state_s *event)
+{
+  struct queued_event_s *pqevent;
+  int timer_id;
+
+  pqevent = calloc(1, sizeof(*pqevent));
+  if (!pqevent)
+    return ERROR;
+
+  pqevent->event = *event;
+
+  /* Defer event processing to prevent ubgps_sm_process re-entry. */
+
+  timer_id = __ubgps_set_timer(gps, 0, ubgps_process_event_timer, NULL);
+  if (timer_id < 0)
+    {
+      free(pqevent);
+      return ERROR;
+    }
+
+  sq_addlast(&pqevent->node, &gps->event_target_state_queue);
+  return OK;
+}
 
 /****************************************************************************
  * Name: ubx_callback
@@ -900,6 +1084,69 @@ int ubgps_send_cfg_sbas(struct ubgps_s * const gps, bool enable)
 }
 
 /****************************************************************************
+ * Name: ubgps_send_cfg_nav5
+ *
+ * Description:
+ *   Send UBX CFG-NAV5 message (navigation engine settings)
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *   mask        - parameters to be applied
+ *   dyn_model   - Dynamic platform model
+ *   fix_mode    - Fix mode
+ *   hold_thr    - static hold velocity threshold
+ *   hold_dist   - static hold distance threshold (to quit static hold)
+ *   pos_acc     - position accuracy mask
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+int ubgps_send_cfg_nav5(struct ubgps_s * const gps, uint16_t mask,
+    uint8_t dyn_model, uint8_t fix_mode, uint8_t hold_thr, uint16_t hold_dist,
+    uint16_t pos_acc)
+{
+  struct ubx_msg_s * msg;
+  int status = OK;
+
+  DEBUGASSERT(gps);
+
+  /* Check if UBX receiver is busy */
+
+  if (ubx_busy(&gps->state.ubx_receiver))
+    return ERROR;
+
+  /* Allocate and setup CFG-NAV5 message */
+
+  msg = UBX_MSG_ALLOC(CFG, NAV5);
+  if (!msg)
+    return ERROR;
+
+  UBX_SET_X2(msg, 0, mask);       /* Mask - parameters to be applied */
+  UBX_SET_U1(msg, 2, dyn_model);  /* Dynamic platform model */
+  UBX_SET_U1(msg, 3, fix_mode);   /* fixMode */
+  UBX_SET_I4(msg, 4, 0);          /* fixedAlt, N/A in auto mode */
+  UBX_SET_U4(msg, 8, 0);          /* fixedAltVar, N/A in auto mode */
+  UBX_SET_I1(msg, 12, 5);         /* minElev */
+  UBX_SET_U2(msg, 14, 250);       /* pDop [1e-1] */
+  UBX_SET_U2(msg, 16, 250);       /* tDop [1e-1] */
+  UBX_SET_U2(msg, 18, pos_acc);   /* pAcc [m] */
+  UBX_SET_U2(msg, 20, 300);       /* tAcc */
+  UBX_SET_U2(msg, 22, hold_thr);  /* staticHoldThresh [cm/s] */
+  UBX_SET_U1(msg, 23, 60);        /* dgpsTimeout */
+  UBX_SET_U1(msg, 24, 0);         /* cnoThreshNumSVs */
+  UBX_SET_U1(msg, 25, 0);         /* cnoThreshold */
+  UBX_SET_U2(msg, 28, hold_dist); /* staticHoldMaxDist [m] */
+  UBX_SET_U1(msg, 30, 0);         /* utcStandard */
+
+  status = ubx_msg_send(gps, gps->fd, msg);
+
+  UBX_MSG_FREE(msg);
+
+  return status;
+}
+
+/****************************************************************************
  * Name: ubgps_send_cfg_pm2
  *
  * Description:
@@ -935,16 +1182,17 @@ int ubgps_send_cfg_pm2(struct ubgps_s * const gps, uint32_t flags,
     return ERROR;
 
   UBX_SET_U1(msg, 0,  1);             /* message version */
+  UBX_SET_U1(msg, 2,  0);             /* maxStartupStateDur [s] */
   UBX_SET_X4(msg, 4,  flags);         /* PSM flags */
 
   /* Update period is limited in cyclic mode between 1000-10000ms. Update
      period configures update rate for power optimized tracking (POT) state in
      cyclic mode. Update rate of tracking state is configured with CFG-RATE. */
 
-  if (update_period < 1000)
-    update_period = 1000;
-  else if (update_period > 10000)
-    update_period = 10000;
+  if (update_period < PM_CYCLIC_MIN_RATE)
+    update_period = PM_CYCLIC_MIN_RATE;
+  else if (update_period > PM_CYCLIC_MAX_RATE)
+    update_period = PM_CYCLIC_MAX_RATE;
 
   UBX_SET_U4(msg, 8,  update_period);
 
@@ -952,9 +1200,9 @@ int ubgps_send_cfg_pm2(struct ubgps_s * const gps, uint32_t flags,
      doNotEnterPowerOff is defined in flags */
 
   UBX_SET_U4(msg, 12, search_period); /* search period [ms] */
-  UBX_SET_U4(msg, 16, 0);             /* grid offset [ms] */
-  UBX_SET_U2(msg, 20, 1);             /* on time [s] */
-  UBX_SET_U2(msg, 22, 1);             /* acquisition timeout [s] */
+  UBX_SET_U4(msg, 16, 0);             /* grid offset [ms], ignored in cyclic mode */
+  UBX_SET_U2(msg, 20, 0);             /* on time [s], 0: enter POT state as soon as possible */
+  UBX_SET_U2(msg, 22, 0);             /* acquisition timeout [s] */
 
   status = ubx_msg_send(gps, gps->fd, msg);
 
@@ -1005,6 +1253,67 @@ int ubgps_send_cfg_rxm(struct ubgps_s * const gps, uint8_t mode)
 }
 
 /****************************************************************************
+ * Name: ubgps_send_cfg_cfg
+ *
+ * Description:
+ *   Send UBX CFG-CFG message (clear, save and load configurations)
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *   action      - clear, save, load
+ *   mask        - configuration sub-sections
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+int ubgps_send_cfg_cfg(struct ubgps_s * const gps, uint8_t action, uint32_t mask)
+{
+  struct ubx_msg_s * msg;
+  int status = OK;
+
+  DEBUGASSERT(gps);
+
+  /* Check if UBX receiver is busy */
+
+  if (ubx_busy(&gps->state.ubx_receiver))
+    return ERROR;
+
+  /* Allocate and setup CFG-CFG message */
+
+  msg = UBX_MSG_ALLOC(CFG, CFG);
+  if (!msg)
+    return ERROR;
+
+  switch (action)
+    {
+      case CFG_ACT_CLEAR:
+        UBX_SET_X4(msg, 0, mask);
+        break;
+
+      case CFG_ACT_SAVE:
+        UBX_SET_X4(msg, 4, mask);
+        break;
+
+      case CFG_ACT_LOAD:
+        UBX_SET_X4(msg, 8, mask);
+        break;
+
+      default:
+        dbg_int("unknown action\n");
+        status = ERROR;
+        goto error;
+    }
+
+  status = ubx_msg_send(gps, gps->fd, msg);
+
+error:
+  UBX_MSG_FREE(msg);
+
+  return status;
+}
+
+/****************************************************************************
  * Name: ubgps_send_cfg_rst
  *
  * Description:
@@ -1012,12 +1321,13 @@ int ubgps_send_cfg_rxm(struct ubgps_s * const gps, uint8_t mode)
  *
  * Input Parameters:
  *   gps         - GPS object
+ *   cold        - true for cold reset, otherwise hot
  *
  * Returned Values:
  *   Status
  *
  ****************************************************************************/
-int ubgps_send_cfg_rst(struct ubgps_s * const gps)
+int ubgps_send_cfg_rst(struct ubgps_s * const gps, bool cold)
 {
   struct ubx_msg_s * msg;
   int status = OK;
@@ -1035,7 +1345,7 @@ int ubgps_send_cfg_rst(struct ubgps_s * const gps)
   if (!msg)
     return ERROR;
 
-  UBX_SET_U2(msg, 0, 0xffff);
+  UBX_SET_U2(msg, 0, cold ? 0xffff : 0x0000);
   UBX_SET_U2(msg, 2, 0x0002);
 
   status = ubx_msg_send(gps, gps->fd, msg);
@@ -1099,13 +1409,12 @@ int ubgps_send_aid_alp_poll(struct ubgps_s * const gps)
 int ubgps_send_aid_ini(struct ubgps_s * const gps)
 {
   struct ubx_msg_s * msg;
-  struct tm t;
   uint32_t latitude = 0;
   uint32_t longitude = 0;
   int32_t altitude = 0;
   uint32_t accuracy = 0;
-  uint16_t yymm = 0;
-  uint32_t ddhhmmss = 0;
+  uint16_t gps_week = 0;
+  uint32_t gps_week_msec = 0;
   uint32_t flags = 0;
   int status;
 
@@ -1118,23 +1427,19 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
 
   if (board_rtc_time_is_set(NULL))
     {
-      time_t currtime;
+      struct timespec currtime;
 
       dbg_int("Using system time for GPS.\n");
 
       /* Construct time and date for GPS */
 
-      currtime = time(0);
-      gmtime_r(&currtime, &t);
-      yymm = ((t.tm_year - 100) << 8) + (t.tm_mon + 1);
-      ddhhmmss = ((uint32_t)t.tm_mday << 24) +
-                  ((uint32_t)t.tm_hour << 16) +
-                  ((uint32_t)t.tm_min << 8) +
-                  t.tm_sec;
+      clock_gettime(CLOCK_REALTIME, &currtime);
+      utctime_to_gpstime(&currtime, &gps_week, &gps_week_msec);
 
-      /* Time is valid and Time is in UTC format */
+      /* Time is valid and Time is in WEEK/MSEC format */
 
-      flags |= (1 << 1) | (1 << 10);
+      flags |= (1 << 1);
+      flags &= ~(1 << 10);
     }
 
   if (gps->assist && gps->assist->alp_file)
@@ -1155,6 +1460,22 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
           ((uint64_t)HINT_LOCATION_ACCURACY_DEGRADE_SPEED_MPS *
            (currtime.tv_sec - gps->hint->location_time.tv_sec));
 
+      if (current_accuracy > HINT_LOCATION_MAX_ACCURACY)
+        {
+          dbg_int("Location hint accuracy too poor: %lld meters (max allowed: %d meters)\n",
+                  current_accuracy, HINT_LOCATION_MAX_ACCURACY);
+        }
+      else
+        {
+          /* Position is given in lat / long / alt */
+
+          flags |= (1 << 5);
+
+          /* Position is valid. */
+
+          flags |= (1 << 0);
+        }
+
       current_accuracy *= 100; /* m => cm */
       if (current_accuracy > UINT32_MAX)
         current_accuracy = UINT32_MAX;
@@ -1169,20 +1490,15 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
       longitude = gps->hint->longitude;
       accuracy = current_accuracy;
 
-      dbg_int("Using last known position:\n");
-      dbg_int(" lat     : %d\n", gps->hint->latitude);
-      dbg_int(" long    : %d\n", gps->hint->longitude);
-      dbg_int(" alt     : %d meters\n", altitude / 100);
-      dbg_int(" acc_old : %u meters\n", gps->hint->accuracy);
-      dbg_int(" acc_curr: %u meters\n", (uint32_t)current_accuracy / 100);
-
-      /* Position is given in lat / long / alt */
-
-      flags |= (1 << 5);
-
-      /* Position is valid. */
-
-      flags |= (1 << 0);
+      if (flags & (1 << 0))
+        {
+          dbg_int("Using last known position:\n");
+          dbg_int(" lat     : %d\n", gps->hint->latitude);
+          dbg_int(" long    : %d\n", gps->hint->longitude);
+          dbg_int(" alt     : %d meters\n", altitude / 100);
+          dbg_int(" acc_old : %u meters\n", gps->hint->accuracy);
+          dbg_int(" acc_curr: %u meters\n", (uint32_t)current_accuracy / 100);
+        }
     }
 
   /* Allocate and setup AID-INI message */
@@ -1196,8 +1512,8 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
   UBX_SET_I4(msg, 8, altitude);   /* Altitude in centimeters */
   UBX_SET_U4(msg, 12, accuracy);  /* Position accuracy in centimeters */
   UBX_SET_X2(msg, 16, 0);         /* Time mark configuration */
-  UBX_SET_U2(msg, 18, yymm);      /* Year / month */
-  UBX_SET_U4(msg, 20, ddhhmmss);  /* Day / hour / minute / seconds (ddhhmmss) */
+  UBX_SET_U2(msg, 18, gps_week);  /* GPS week */
+  UBX_SET_U4(msg, 20, gps_week_msec); /* Time of week (msec) */
   UBX_SET_I4(msg, 24, 0);         /* Fractional part of time of week */
   UBX_SET_U4(msg, 28, 10000);     /* Milliseconds part of time accuracy */
   UBX_SET_U4(msg, 32, 0);         /* Nanoseconds part of time accuracy */
@@ -1229,8 +1545,10 @@ int ubgps_send_aid_ini(struct ubgps_s * const gps)
  *   Status
  *
  ****************************************************************************/
-int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * const msg)
+int ubgps_parse_nav_pvt(struct ubgps_s * const gps,
+                        struct ubx_msg_s const * const msg, uint8_t *nav_flags)
 {
+  char flags_str[32];
   uint8_t valid = UBX_GET_X1(msg, 11);
   uint8_t fix_type = UBX_GET_X1(msg, 20);
   uint8_t flags = UBX_GET_X1(msg, 21);
@@ -1241,9 +1559,24 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
 
   /* Get time / date validity */
 
-  gps->time.validity.date = (valid & (1 << 0) ? true : false);
-  gps->time.validity.time = (valid & (1 << 1) ? true : false);
-  gps->time.validity.fully_resolved = (valid & (1 << 2) ? true : false);
+  gps->time.validity.date = !!(valid & (1 << 0));
+  gps->time.validity.time = !!(valid & (1 << 1));
+  gps->time.validity.old_fully_resolved = !!(valid & (1 << 2));
+
+  if (fix_type > GPS_FIX_NOT_AVAILABLE && fix_type < __GPS_FIX_MAX &&
+      (flags & NAV_FLAG_FIX_OK))
+    {
+      gps->time.validity.fully_resolved = gps->time.validity.old_fully_resolved;
+    }
+  else
+    {
+      /* Do not consider GPS time resolved unless acquired fix. Otherwise time
+       * maybe A-GPS or MCU RTC based and potentially invalid. */
+
+      gps->time.validity.date = false;
+      gps->time.validity.time = false;
+      gps->time.validity.fully_resolved = false;
+    }
 
   if (gps->time.validity.date || gps->time.validity.fully_resolved)
     {
@@ -1252,9 +1585,6 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
       gps->time.year = UBX_GET_U2(msg, 4);
       gps->time.month = UBX_GET_U1(msg, 6);
       gps->time.day = UBX_GET_U1(msg, 7);
-
-      dbg_int("valid:0x%02X, year:%04d, month:%02d, day:%02d\n",
-              valid, gps->time.year, gps->time.month,  gps->time.day);
     }
 
   if (gps->time.validity.time || gps->time.validity.fully_resolved)
@@ -1262,10 +1592,38 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
       gps->time.hour = UBX_GET_U1(msg, 8);
       gps->time.min = UBX_GET_U1(msg, 9);
       gps->time.sec = UBX_GET_U1(msg, 10);
-
-      dbg_int("valid:0x%02X, hour:%02d, min:%02d, sec:%02d\n",
-              valid, gps->time.hour, gps->time.min,  gps->time.sec);
     }
+
+#ifdef CONFIG_SYSTEM_UBGPS_VERBOSE_DEBUG
+  if (gps->time.validity.fully_resolved)
+    {
+      struct timespec ts_mcu;
+      struct timespec ts_gps;
+      struct tm gps_t = {};
+
+      /* Prepate time structure */
+
+      gps_t.tm_year = gps->time.year - 1900;
+      gps_t.tm_mon = gps->time.month - 1;
+      gps_t.tm_mday = gps->time.day;
+      gps_t.tm_hour = gps->time.hour;
+      gps_t.tm_min = gps->time.min;
+      gps_t.tm_sec = gps->time.sec;
+
+      ts_gps.tv_sec = mktime (&gps_t);
+      ts_gps.tv_nsec = 0;
+
+      (void)clock_gettime(CLOCK_REALTIME, &ts_mcu);
+      (void)ts_gps.tv_sec;
+
+      /* Check difference between MCU RTC (should be UTC) and GPS time. */
+
+      dbg_int("GPS time: %d, MCU time: %d, MCU ahead of GPS time by: %d secs\n",
+              ts_gps.tv_sec, ts_mcu.tv_sec, ts_mcu.tv_sec - ts_gps.tv_sec);
+    }
+#endif
+
+  /* Get location data if there's a fix */
 
   /* Initialize location data */
 
@@ -1273,109 +1631,97 @@ int ubgps_parse_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * con
 
   /* Get fix type */
 
-  if (fix_type < __GPS_FIX_MAX && (flags & NAV_FLAG_FIX_OK))
-    gps->location.fix_type = fix_type;
-  else
-    gps->location.fix_type = GPS_FIX_NOT_AVAILABLE;
+  gps->location.fix_type = fix_type;
 
-  /* Get location data if there's a fix */
+  /* Get number of satellites used in navigation solution */
 
-  if (fix_type < __GPS_FIX_MAX)
+  gps->location.num_of_used_satellites = UBX_GET_U1(msg, 23);
+
+  /* Get longitude [1e-7 deg], latitude [1e-7 deg] and horizontal accuracy [mm] */
+
+  gps->location.longitude = UBX_GET_I4(msg, 24);
+  gps->location.latitude = UBX_GET_I4(msg, 28);
+  gps->location.horizontal_accuracy = UBX_GET_U4(msg, 40);
+
+  /* Get height [mm] and vertical accuracy [mm] */
+
+  gps->location.height = UBX_GET_I4(msg, 36);
+  gps->location.vertical_accuracy = UBX_GET_U4(msg, 44);
+
+  /* Get ground speed [mm/s] and accuracy [mm/s] */
+
+  gps->location.ground_speed = UBX_GET_I4(msg, 60);
+  gps->location.ground_speed_accuracy = UBX_GET_U4(msg, 68);
+
+  /* Get heading [1e-5 deg] and heading accuracy estimate [1e-5 deg] */
+
+  gps->location.heading = UBX_GET_I4(msg, 64);
+  gps->location.heading_accuracy = UBX_GET_U4(msg, 72);
+
+  nav_flags_to_str(flags_str, sizeof(flags_str), flags);
+
+  dbg_int("fix:%d, flags:0x%02X (%s), sat:%u, lat:%d, lon:%d, acc:%um, height:%dm,\n"
+          "acc:%um, speed:%dcm/s, acc:%ucm/s, heading:%ddeg, acc:%udeg\n",
+           gps->location.fix_type,
+           flags,
+           flags_str,
+           gps->location.num_of_used_satellites,
+           gps->location.latitude,
+           gps->location.longitude,
+           gps->location.horizontal_accuracy/1000,
+           gps->location.height/1000,
+           gps->location.vertical_accuracy/1000,
+           gps->location.ground_speed/10,
+           gps->location.ground_speed_accuracy/10,
+           gps->location.heading/100000,
+           gps->location.heading_accuracy/100000);
+
+#ifdef CONFIG_UBGPS_DISALLOW_ACQ_FIX
+  if ((fix_type > GPS_FIX_NOT_AVAILABLE && fix_type < __GPS_FIX_MAX) &&
+      (flags & NAV_FLAG_PSM_MASK) == NAV_FLAG_PSM_ACQ &&
+      (flags & NAV_FLAG_FIX_OK))
     {
-      struct gps_location_s location = {};
+      flags &= ~NAV_FLAG_FIX_OK;
 
-      location.fix_type = gps->location.fix_type;
-
-      /* Get number of satellites used in navigation solution */
-
-      location.num_of_used_satellites = UBX_GET_U1(msg, 23);
-
-      /* Get longitude [1e-7 deg], latitude [1e-7 deg] and horizontal accuracy [mm] */
-
-      location.longitude = UBX_GET_I4(msg, 24);
-      location.latitude = UBX_GET_I4(msg, 28);
-      location.horizontal_accuracy = UBX_GET_U4(msg, 40);
-
-      /* Get height [mm] and vertical accuracy [mm] */
-
-      location.height = UBX_GET_I4(msg, 36);
-      location.vertical_accuracy = UBX_GET_U4(msg, 44);
-
-      /* Get ground speed [mm/s] and accuracy [mm/s] */
-
-      location.ground_speed = UBX_GET_I4(msg, 60);
-      location.ground_speed_accuracy = UBX_GET_U4(msg, 68);
-
-      /* Get heading [1e-5 deg] and heading accuracy estimate [1e-5 deg] */
-
-      location.heading = UBX_GET_I4(msg, 64);
-      location.heading_accuracy = UBX_GET_U4(msg, 72);
-
-      dbg_int("fix:%d (%s), flags:0x%02X, sat:%u, lat:%d, lon:%d, acc:%um, height:%dm, "
-              "acc:%um, speed:%dm/s, acc:%um/s, heading:%ddeg, acc:%udeg\n",
-              fix_type,
-              gps->location.fix_type != GPS_FIX_NOT_AVAILABLE ? "OK" : "NOK",
-              flags,
-              location.num_of_used_satellites,
-              location.latitude,
-              location.longitude,
-              location.horizontal_accuracy/1000,
-              location.height/1000,
-              location.vertical_accuracy/1000,
-              location.ground_speed/1000,
-              location.ground_speed_accuracy/1000,
-              location.heading/100000,
-              location.heading_accuracy/100000);
-
-      if (location.fix_type != GPS_FIX_NOT_AVAILABLE)
-        {
-          gps->location = location;
-
-          /* Update location hint for A-GPS. */
-
-          (void)ubgps_give_location_hint((double)location.latitude / 1e7,
-                                         (double)location.longitude / 1e7,
-                                         location.height / 1000,
-                                         location.horizontal_accuracy / 1000);
-        }
+      dbg_int("%s => %s (blocking %s because in %s)\n",
+              "FixOK", "FixNOK", "FixOK", "pACQ");
     }
+#endif
 
-  return OK;
-}
-
-/****************************************************************************
- * Name: ubgps_psm_timer_cb
- *
- * Description:
- *   timeout handler for PSM callback
- *
- * Input Parameters:
- *
- * Returned Values:
- *   Status
- *
- ****************************************************************************/
-int ubgps_psm_timer_cb(const int timer_id, const struct timespec *date,
-                       void * const priv)
-{
-  struct ubgps_s * const gps = (struct ubgps_s *)priv;
-
-  /* Off-time expired, acquire fix */
-
-  if (timer_id == gps->state.psm_timer_id)
+  if (fix_type > GPS_FIX_NOT_AVAILABLE && fix_type < __GPS_FIX_MAX &&
+      (flags & NAV_FLAG_FIX_OK))
     {
-      struct sm_event_psm_event_s psm;
+      uint32_t tmp;
 
-      psm.super.id = SM_EVENT_PSM_STATE;
-      psm.enable = false;
-      ubgps_sm_process(gps, (struct sm_event_s *)&psm);
+      /* Update location hint for A-GPS. */
 
-      ts_core_timer_stop(gps->state.psm_timer_id);
-      gps->state.psm_timer_id = -1;
+      (void)ubgps_give_location_hint((double)gps->location.latitude / 1e7,
+                                     (double)gps->location.longitude / 1e7,
+                                     gps->location.height / 1000,
+                                     gps->location.horizontal_accuracy / 1000);
+
+      /* Collect least significant bits and feed to entropy pool. */
+
+      tmp = gps->location.longitude << 0;
+      tmp += gps->location.latitude << 3;
+      tmp += gps->location.horizontal_accuracy << 6;
+      tmp += gps->location.height << 9;
+      tmp += gps->location.vertical_accuracy << 12;
+      tmp += gps->location.num_of_used_satellites << 15;
+      tmp += gps->location.ground_speed << 18;
+      tmp += gps->location.ground_speed_accuracy << 21;
+      tmp += gps->location.heading << 24;
+      tmp += gps->location.heading_accuracy << 27;
+      add_sensor_randomness(tmp);
     }
   else
     {
-      dbg("invalid timer id\n");
+      gps->location.fix_type = GPS_FIX_NOT_AVAILABLE;
+    }
+
+  if (nav_flags)
+    {
+      *nav_flags = flags;
     }
 
   return OK;
@@ -1399,12 +1745,70 @@ int ubgps_handle_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * co
 {
   struct gps_event_time_s tevent;
   struct gps_event_location_s levent;
+  uint8_t nav_flags = 0;
+#if defined(BOARD_HAS_GPS_PM_SET_NEXT_MESSAGE_TIME) && \
+    !defined(CONFIG_UBGPS_DISABLE_BOARD_POWERSAVE_CONTROL)
+  struct timespec next_msg_ts;
+  unsigned int next_msg_msec;
+
+  (void)clock_gettime(CLOCK_MONOTONIC, &next_msg_ts);
+#endif
 
   DEBUGASSERT(gps && msg);
 
   /* Parse UBX NAV-PVT message */
 
-  ubgps_parse_nav_pvt(gps, msg);
+  ubgps_parse_nav_pvt(gps, msg, &nav_flags);
+
+#if defined(BOARD_HAS_GPS_PM_SET_NEXT_MESSAGE_TIME) && \
+    !defined(CONFIG_UBGPS_DISABLE_BOARD_POWERSAVE_CONTROL)
+
+  if (gps->state.current_state == GPS_STATE_FIX_ACQUIRED ||
+      gps->state.current_state == GPS_STATE_SEARCHING_FIX)
+    {
+      if (gps->state.power_mode != RXM_POWER_SAVE)
+        {
+          /* In continuous mode, message rate is fixed. */
+
+          next_msg_msec = gps->state.navigation_rate;
+        }
+      else
+        {
+          /* In cyclic mode, message rate depends on tracking mode. */
+
+          if ((nav_flags & NAV_FLAG_PSM_MASK) == NAV_FLAG_PSM_POT ||
+              (nav_flags & NAV_FLAG_PSM_MASK) == NAV_FLAG_PSM_TRK)
+            {
+              /* In tracking and power optimized tracking, messages received at
+               * cyclic-mode update rate. */
+
+              next_msg_msec = gps->state.navigation_rate;
+            }
+          else
+            {
+              /* In other modes (ACQ), message rate is fixed 2 hz. */
+
+              next_msg_msec = 1000 / 2;
+            }
+        }
+
+      /* Give board level power-management an estimate when next NAV message is
+       * expected to be received. */
+
+      (void)clock_gettime(CLOCK_MONOTONIC, &next_msg_ts);
+      next_msg_ts.tv_sec += next_msg_msec / MSEC_PER_SEC;
+      next_msg_ts.tv_nsec += (next_msg_msec % MSEC_PER_SEC) * NSEC_PER_MSEC;
+      while (next_msg_ts.tv_nsec >= NSEC_PER_SEC)
+        {
+          next_msg_ts.tv_sec++;
+          next_msg_ts.tv_nsec -= NSEC_PER_SEC;
+        }
+
+      board_gps_pm_set_next_message_time(&next_msg_ts);
+
+      dbg_int("next message in: %d msec\n", next_msg_msec);
+    }
+#endif
 
   /* Check if GPS fix state has changed */
 
@@ -1446,12 +1850,7 @@ int ubgps_handle_nav_pvt(struct ubgps_s * const gps, struct ubx_msg_s const * co
       levent.time = &gps->time;
       levent.location = &gps->location;
 
-#ifdef CONFIG_UBGPS_PSM_MODE
       ubgps_filter_location(gps, &levent);
-#else
-      ubgps_publish_event(gps, (struct gps_event_s *)&levent);
-#endif
-
     }
 
   return OK;

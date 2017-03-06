@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/ubmodem/ubmodem_voice.h
  *
- *   Copyright (C) 2015-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -116,6 +116,19 @@ void __ubmodem_audio_presetup(struct ubmodem_s *modem, bool out_on,
 
 void __ubmodem_audio_postsetup(struct ubmodem_s *modem, bool out_on,
                                bool in_on);
+
+/****************************************************************************
+ * Name: __ubmodem_audio_cleanup
+ *
+ * Description:
+ *  Audio setup cleanup
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+void __ubmodem_audio_cleanup(struct ubmodem_s *modem);
 
 /****************************************************************************
  * Name: __ubmodem_audio_cleanup_additional

@@ -127,6 +127,21 @@ static int button_pressed_down_handler(int irq, FAR void *context)
   return 0;
 }
 
+static int charger_connected_handler(int irq, FAR void *context)
+{
+  standby_do_trace('Y');
+
+  clear_rst_stdby_flags();
+
+  /* Do system reset. */
+
+  up_systemreset();
+
+  for(;;);
+
+  return 0;
+}
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -262,10 +277,24 @@ void up_boot_standby_mode(void)
       stm32_gpiosetevent(GPIO_BTN_POWERKEY, true, false, true,
                          button_pressed_down_handler);
 
+      /* Setup 'charger_stat'-pin as EXTI for wake-up */
+
+      stm32_configgpio(GPIO_BQ24251_STAT);
+      stm32_gpiosetevent(GPIO_BQ24251_STAT, false, true, true,
+                         charger_connected_handler);
+
       /* Our standby-mode is really ARM core's stop-mode.
          Enter stop-mode with MCU internal regulator in low-power mode. */
 
       (void)stm32_pmstop(true);
+
+      /* Stop mode disables HSE/HSI/PLL and wake happens with default system
+       * clock (MSI, 2Mhz). Reconfigure clocks to enable USART2.
+       */
+
+      stm32_clockconfig();
+
+      /* Stop mode loop traces. This probably should not happen. */
 
       standby_do_trace('p');
     }

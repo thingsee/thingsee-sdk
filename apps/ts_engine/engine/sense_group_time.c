@@ -50,7 +50,9 @@ static int timer_callback_date(const int timer_id, const struct timespec *date,
 {
   struct ts_cause *cause = priv;
 
-  return handle_cause(cause);
+  cause->dyn.timer_id = -1; /* one-shot! */
+
+  return handle_cause_event(cause, NULL);
 }
 
 int sense_time_init(struct ts_cause *cause)
@@ -68,7 +70,6 @@ int sense_time_init(struct ts_cause *cause)
     {
     case SENSE_ID_UNIX_TIME:
       {
-
         if (cause->conf.threshold.relative)
           {
             clock_gettime(CLOCK_MONOTONIC, ts);

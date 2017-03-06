@@ -44,8 +44,10 @@
 # define uidbg(...) ((void)0)
 #endif
 
-void start_thingsee_UI(void (*system_do_shutdown_fn)(const char *reset_type), void *app);
-void thingsee_UI_set_purpose_and_state(const char * const purpose, const char * const state);
+void start_thingsee_UI(void (*system_do_shutdown_fn)(const char *reset_type),
+                       bool force_power_on, void *app);
+void thingsee_UI_set_purpose_and_state(const char * const purpose,
+                                       const char * const state);
 void thingsee_UI_set_state(const char * const state);
 void thingsee_UI_set_charger_state(bool bCharging);
 void thingsee_UI_sense_event(const char *format, ...);

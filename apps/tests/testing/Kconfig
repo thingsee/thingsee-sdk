@@ -1,0 +1,14 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config BUILD_GTEST
+    bool "Build google-test applications"
+    default n
+    ---help---
+        Google-test framework is suited very good for isolated high-performance
+        unit testing. This configuration option enables compilation of included
+        test applications along with the NuttX codebase.
+
+        The executables will be collected under tests/apps folder.

@@ -47,6 +47,7 @@ CSRCS += alloc_dbg.c
 CSRCS += time_from_file.c
 CSRCS += value.c
 CSRCS += geofence.c
+CSRCS += system_config.c
 CSRCS += $(wildcard *button.c)
 
 ifeq ($(CONFIG_ARCH_SIM),y)

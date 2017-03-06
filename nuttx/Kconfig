@@ -235,16 +235,6 @@ config NUTTX_USERSPACE
 
 endif # Build 2-pass
 
-config BUILD_GTEST
-    bool "Build google-test applications"
-    default n
-    ---help---
-        Google-test framework is suited very good for isolated high-performance
-        unit testing. This configuration option enables compilation of included
-        test applications along with the NuttX codebase.
-
-        The executables will be collected under tests/apps folder.
-
 endmenu # Build Setup
 
 menu "Binary Output Formats"

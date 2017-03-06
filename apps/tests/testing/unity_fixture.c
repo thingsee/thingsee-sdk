@@ -8,8 +8,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <pthread.h>
-#include <nuttx/testing/unity_fixture.h>
-#include <nuttx/testing/unity_internals.h>
+#include <apps/testing/unity_fixture.h>
+#include <apps/testing/unity_internals.h>
 
 UNITY_FIXTURE_T UnityFixture;
 

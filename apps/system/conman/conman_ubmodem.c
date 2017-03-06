@@ -195,7 +195,7 @@ static void event_ip_address(struct ubmodem_s *modem,
       const struct in_addr *pdns2;
       uint8_t b;
 
-      speckrandom_buf(&b, 1);
+      getrandom(&b, 1);
 
       pdns1 = (b & 1) ? &ipcfg->dns1 : &ipcfg->dns2;
       pdns2 = (b & 1) ? &ipcfg->dns2 : &ipcfg->dns1;
@@ -224,7 +224,7 @@ static void event_ip_address(struct ubmodem_s *modem,
       gdns1.s_addr = inet_addr("8.8.8.8");
       gdns2.s_addr = inet_addr("8.8.4.4");
 
-      speckrandom_buf(&b, 1);
+      getrandom(&b, 1);
 
       pdns1 = (b & 1) ? &gdns1 : &gdns2;
       pdns2 = (b & 1) ? &gdns2 : &gdns1;
@@ -1703,6 +1703,97 @@ int __conman_ubmodem_call_audioctl(struct conman_s *conman,
   return ERROR;
 #endif
 }
+
+/****************************************************************************
+ * Name: __conman_ubmodem_play_audio_resource
+ *
+ * Description:
+ *   Play modem audio resource.
+ *
+ * Input Parameters:
+ *   conman  : connection manager handle
+ *   ctl     : audio resource
+ *
+ * Returned Value:
+ *   OK if successfully queued for sending.
+ *   Negated error code if case of error.
+ ****************************************************************************/
+
+#ifndef CONFIG_UBMODEM_VOICE
+int __conman_ubmodem_play_audio_resource(struct conman_s *conman,
+    const struct conman_msg_play_audio_resource_s *ctl)
+{
+  return ERROR;
+}
+#else
+int __conman_ubmodem_play_audio_resource(struct conman_s *conman,
+    const struct conman_msg_play_audio_resource_s *ctl)
+{
+  int ret = OK;
+
+  if (conman->ub.status != CONMAN_STATUS_ESTABLISHED)
+    {
+      return ERROR;
+    }
+
+  switch (ctl->resource.type)
+    {
+    default:
+    case CONMAN_AUDIO_RESOURCE_TYPE_STOP:
+      {
+        unsigned int audio_resource = 0; /* tone generator */
+
+        ret = ubmodem_stop_audio_resource(conman->ub.modem, audio_resource);
+      }
+      break;
+
+    case CONMAN_AUDIO_RESOURCE_TYPE_TONE_ID:
+      {
+        /* See u-blox AT Commands manual, "AT+UPAR" */
+
+        unsigned int audio_resource = 0; /* tone generator */
+        unsigned int tone_id = ctl->resource.tone_id.tone_id;
+
+        /* Play audio. */
+
+        ret = ubmodem_play_audio_resource(conman->ub.modem, audio_resource,
+                                          tone_id,
+                                          ctl->resource.tone_id.nrepetitions);
+      }
+      break;
+
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_0:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_1:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_2:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_3:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_4:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_5:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_6:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_7:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_8:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_9:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_HASH:
+    case CONMAN_AUDIO_RESOURCE_TYPE_DTMF_ASTERISK:
+      {
+        unsigned int audio_resource = 0; /* tone generator */
+        unsigned int tone_id;
+
+        /* Convert DTMF type to u-blox tone_id. */
+
+        tone_id = ctl->resource.type - CONMAN_AUDIO_RESOURCE_TYPE_DTMF_0;
+
+        /* Play audio. */
+
+        ret = ubmodem_play_audio_resource(conman->ub.modem, audio_resource,
+                                          tone_id,
+                                          ctl->resource.dtmf.nrepetitions);
+      }
+      break;
+    }
+
+  return ret;
+}
+#endif
 
 /****************************************************************************
  * Name: __conman_ubmodem_start_celllocate

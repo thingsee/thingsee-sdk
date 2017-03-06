@@ -1108,7 +1108,7 @@ static void build_ports(char *p)
           for (x = 0; x <= (hi - lo); x++)
             {
               unsigned int rnd;
-              speckrandom_buf(&rnd, sizeof(rnd));
+              getrandom(&rnd, sizeof(rnd));
               y = (rnd & 0xFFFF) % (hi - lo);
               c = portlist[x];
               portlist[x] = portlist[y];

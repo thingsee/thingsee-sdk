@@ -198,6 +198,7 @@
 /* Alternate Pin Functions **********************************************************/
 
 /* USART1 connected to GPS (no HW flow control, baud: 9600) */
+#  define GPS_USART_NUM          1
 #  define GPS_SERIAL_DEVNAME     "/dev/ttyS0"
 #  define GPIO_USART1_RX         GPIO_USART1_RX_1 /* PA10 */
 #  define GPIO_USART1_TX         GPIO_USART1_TX_1 /* PA9 */

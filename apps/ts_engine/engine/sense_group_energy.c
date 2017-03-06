@@ -126,7 +126,7 @@ int sense_energy(struct ts_cause *cause)
     case SENSE_ID_BATTERY_FULL_CAPACITY:
       {
         cause->dyn.sense_value.value.valuedouble = board_get_battery_capacity();
-        handle_cause(cause);
+        handle_cause_event(cause, NULL);
       }
     break;
 
@@ -153,7 +153,7 @@ int sense_energy(struct ts_cause *cause)
         percentage = board_get_battery_level(voltage, temperature);
 
         cause->dyn.sense_value.value.valuedouble = percentage;
-        handle_cause(cause);
+        handle_cause_event(cause, NULL);
       }
     break;
 
@@ -169,14 +169,14 @@ int sense_energy(struct ts_cause *cause)
           }
 
         cause->dyn.sense_value.value.valuedouble = voltage;
-        handle_cause(cause);
+        handle_cause_event(cause, NULL);
       }
     break;
 
     case SENSE_ID_CHARGER_IS_CONNECTED:
       {
         cause->dyn.sense_value.value.valuebool = charger_connected();
-        handle_cause(cause);
+        handle_cause_event(cause, NULL);
       }
     break;
     }

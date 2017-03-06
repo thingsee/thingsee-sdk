@@ -93,6 +93,7 @@ enum conman_event_type_e
   CONMAN_EVENT_CALL_INCOMING,
   CONMAN_EVENT_CALL_ACTIVE,
   CONMAN_EVENT_CALL_DISCONNECTED,
+  CONMAN_EVENT_PLAY_AUDIO_RESOURCE,
   /* u-blox modem specific events: */
   CONMAN_EVENT_CELLLOCATE,
   CONMAN_EVENT_FTP_DOWNLOAD_STATUS,
@@ -139,6 +140,41 @@ struct conman_event_call_incoming_info
   char number[20];
   uint8_t numbertype;
 } packed_struct;
+
+enum conman_event_audio_resource_type
+{
+  CONMAN_AUDIO_RESOURCE_TYPE_STOP = 0,
+  CONMAN_AUDIO_RESOURCE_TYPE_TONE_ID,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_0,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_1,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_2,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_3,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_4,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_5,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_6,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_7,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_8,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_9,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_HASH,
+  CONMAN_AUDIO_RESOURCE_TYPE_DTMF_ASTERISK,
+};
+
+struct conman_event_play_audio_resource
+{
+  enum conman_event_audio_resource_type type;
+  union
+  {
+    struct
+    {
+      uint8_t nrepetitions;
+    } dtmf;
+    struct
+    {
+      uint8_t tone_id;
+      uint8_t nrepetitions;
+    } tone_id;
+  };
+};
 
 struct conman_event_celllocate_info
 {
@@ -524,6 +560,25 @@ int conman_client_call_hangup(struct conman_client_s *client);
 
 int conman_client_call_audio_control(struct conman_client_s *client,
                                      bool audio_out_on);
+
+/****************************************************************************
+ * Name: conman_client_play_audio_resource
+ *
+ * Description:
+ *   Play modem audio resource.
+ *
+ * Input Parameters:
+ *   client    : client handle
+ *   resource  : audio resource selection and configuration
+ *
+ * Returned Value:
+ *   OK    : no errors
+ *   ERROR : failure
+ *
+ ****************************************************************************/
+
+int conman_client_play_audio_resource(struct conman_client_s *client,
+        struct conman_event_play_audio_resource *resource);
 
 /****************************************************************************
  * Name: conman_client_start_celllocate

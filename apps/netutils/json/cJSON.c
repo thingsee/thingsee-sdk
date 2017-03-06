@@ -270,7 +270,7 @@ static cJSON *cJSON_ChangeName(cJSON *item, const char *new_name)
       newitem = cJSON_realloc(item, newsize);
       if (!newitem)
         {
-          free(item);
+          cJSON_Delete(item);
           return NULL;
         }
 
@@ -1309,7 +1309,7 @@ cJSON *cJSON_DetachItemFromArray(cJSON *array, int which)
 
               /* First and last item. Free memory. */
 
-              cJSON_Delete(c);
+              cJSON_free(c);
               cJSON_ArrayField(array)->child = NULL;
             }
         }

@@ -138,7 +138,7 @@ static struct fusb301_dev_s *fusb301_data;
  ****************************************************************************/
 static int fusb301_getreg(FAR struct fusb301_dev_s *priv, uint8_t reg)
 {
-  int ret;
+  int ret = -EIO;
   int retries;
   uint8_t regval;
   struct i2c_msg_s msg[2];
@@ -169,6 +169,9 @@ static int fusb301_getreg(FAR struct fusb301_dev_s *priv, uint8_t reg)
         {
           /* Some error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == FUSB301_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(priv->i2c);
           if (ret < 0)
             {
@@ -176,7 +179,6 @@ static int fusb301_getreg(FAR struct fusb301_dev_s *priv, uint8_t reg)
               return ret;
             }
 #endif
-          continue;
         }
     }
 
@@ -201,7 +203,7 @@ static int fusb301_getreg(FAR struct fusb301_dev_s *priv, uint8_t reg)
 static int fusb301_putreg(FAR struct fusb301_dev_s *priv, uint8_t regaddr,
                           uint8_t regval)
 {
-  int ret;
+  int ret = -EIO;
   int retries;
   struct i2c_msg_s msg;
   uint8_t txbuffer[2];
@@ -234,6 +236,9 @@ static int fusb301_putreg(FAR struct fusb301_dev_s *priv, uint8_t regaddr,
         {
           /* Some error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == FUSB301_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(priv->i2c);
           if (ret < 0)
             {
@@ -241,7 +246,6 @@ static int fusb301_putreg(FAR struct fusb301_dev_s *priv, uint8_t regaddr,
               return ret;
             }
 #endif
-          continue;
         }
     }
 

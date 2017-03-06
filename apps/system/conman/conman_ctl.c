@@ -660,6 +660,21 @@ void __conman_ctl_handle_pollin(struct conman_s *conman, struct pollfd *pfd)
       }
       break;
 
+    case CONMAN_MSG_PLAY_AUDIO_RESOURCE:
+      {
+        struct conman_msg_play_audio_resource_s *ctl = (void *)data;
+
+        DEBUGASSERT(hdr.len >= sizeof(*ctl));
+
+        ret = __conman_ubmodem_play_audio_resource(conman, ctl);
+        if (ret < 0)
+          {
+            conman_dbg("__conman_ubmodem_play_audio_resource failed\n");
+            resp = CONMAN_RESP_ERROR;
+          }
+      }
+      break;
+
     case CONMAN_MSG_START_CELLLOCATE:
       {
         struct conman_msg_start_celllocate_s *ctl = (void *)data;

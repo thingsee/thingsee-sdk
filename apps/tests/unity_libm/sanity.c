@@ -39,7 +39,7 @@
  ****************************************************************************/
 #include "mtest.h"
 
-#include <nuttx/testing/unity_fixture.h>
+#include <apps/testing/unity_fixture.h>
 #include <stdint.h>
 #include <stdio.h>
 

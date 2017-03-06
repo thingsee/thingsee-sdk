@@ -1,7 +1,7 @@
 /************************************************************************************
  * drivers/dev_random.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
  *   Authors: Juha Niskanen <juha.niskanen@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -549,7 +549,7 @@ void up_rngaddentropy(const uint32_t *buf, size_t n)
 }
 
 /****************************************************************************
- * Function: speckrandom_buf
+ * Function: getrandom
  *
  * Description:
  *   Fill a buffer of arbitrary length with randomness. This is the
@@ -568,7 +568,7 @@ void up_rngaddentropy(const uint32_t *buf, size_t n)
  *
  ****************************************************************************/
 
-void speckrandom_buf(void *bytes, size_t nbytes)
+void getrandom(void *bytes, size_t nbytes)
 {
   while (sem_wait(&g_rngdev.rd_devsem) != 0)
     {

@@ -330,7 +330,7 @@ sense_lsm9ds1_acceleration (struct ts_cause *cause)
       break;
     }
 
-  return handle_cause_event (cause);
+  return handle_cause_event (cause, NULL);
 }
 
 int
@@ -368,7 +368,7 @@ sense_lsm9ds1_magnetic_field (struct ts_cause *cause)
       break;
     }
 
-  return handle_cause_event (cause);
+  return handle_cause_event (cause, NULL);
 }
 
 int
@@ -406,7 +406,7 @@ sense_lsm9ds1_angle_speed (struct ts_cause *cause)
       break;
     }
 
-  return handle_cause_event (cause);
+  return handle_cause_event (cause, NULL);
 }
 
 int
@@ -456,5 +456,5 @@ sense_orientation (struct ts_cause *cause)
       break;
     }
 
-  return handle_cause_event (cause);
+  return handle_cause_event (cause, NULL);
 }

@@ -110,9 +110,32 @@ void mbedtls_sha1_starts( mbedtls_sha1_context *ctx )
 }
 
 #if !defined(MBEDTLS_SHA1_PROCESS_ALT)
+
+#define S(x,n) ((x << n) | ((x & 0xFFFFFFFF) >> (32 - n)))
+#define __R(t)                                          \
+(                                                       \
+    temp = W[( t -  3 ) & 0x0F] ^ W[( t - 8 ) & 0x0F] ^ \
+           W[( t - 14 ) & 0x0F] ^ W[  t       & 0x0F],  \
+    ( W[t & 0x0F] = S(temp,1) )                         \
+)
+
+#if defined(MBEDTLS_SHA1_SMALLER)
+static uint32_t _R(unsigned int t, uint32_t W[16])
+{
+    uint32_t temp;
+    return __R(t);
+}
+#define R(t) _R(t, W)
+#else
+#define R(t) __R(t)
+#endif
+
 void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[64] )
 {
     uint32_t temp, W[16], A, B, C, D, E;
+#if defined(MBEDTLS_SHA1_SMALLER)
+    unsigned int i;
+#endif
 
     GET_UINT32_BE( W[ 0], data,  0 );
     GET_UINT32_BE( W[ 1], data,  4 );
@@ -131,15 +154,6 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
     GET_UINT32_BE( W[14], data, 56 );
     GET_UINT32_BE( W[15], data, 60 );
 
-#define S(x,n) ((x << n) | ((x & 0xFFFFFFFF) >> (32 - n)))
-
-#define R(t)                                            \
-(                                                       \
-    temp = W[( t -  3 ) & 0x0F] ^ W[( t - 8 ) & 0x0F] ^ \
-           W[( t - 14 ) & 0x0F] ^ W[  t       & 0x0F],  \
-    ( W[t & 0x0F] = S(temp,1) )                         \
-)
-
 #define P(a,b,c,d,e,x)                                  \
 {                                                       \
     e += S(a,5) + F(b,c,d) + K + x; b = S(b,30);        \
@@ -154,6 +168,13 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
 #define F(x,y,z) (z ^ (x & (y ^ z)))
 #define K 0x5A827999
 
+#if defined(MBEDTLS_SHA1_SMALLER)
+    for (i = 0; i < 20; i++)
+    {
+        P( A, B, C, D, E, ((i < 16) ? W[i] : R(i)) );
+        temp = E; E = D; D = C; C = B; B = A; A = temp;
+    }
+#else
     P( A, B, C, D, E, W[0]  );
     P( E, A, B, C, D, W[1]  );
     P( D, E, A, B, C, W[2]  );
@@ -174,6 +195,7 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
     P( D, E, A, B, C, R(17) );
     P( C, D, E, A, B, R(18) );
     P( B, C, D, E, A, R(19) );
+#endif
 
 #undef K
 #undef F
@@ -181,6 +203,13 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
 #define F(x,y,z) (x ^ y ^ z)
 #define K 0x6ED9EBA1
 
+#if defined(MBEDTLS_SHA1_SMALLER)
+    for (; i < 40; i++)
+    {
+        P( A, B, C, D, E, R(i) );
+        temp = E; E = D; D = C; C = B; B = A; A = temp;
+    }
+#else
     P( A, B, C, D, E, R(20) );
     P( E, A, B, C, D, R(21) );
     P( D, E, A, B, C, R(22) );
@@ -201,6 +230,7 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
     P( D, E, A, B, C, R(37) );
     P( C, D, E, A, B, R(38) );
     P( B, C, D, E, A, R(39) );
+#endif
 
 #undef K
 #undef F
@@ -208,6 +238,13 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
 #define F(x,y,z) ((x & y) | (z & (x | y)))
 #define K 0x8F1BBCDC
 
+#if defined(MBEDTLS_SHA1_SMALLER)
+    for (; i < 60; i++)
+    {
+        P( A, B, C, D, E, R(i) );
+        temp = E; E = D; D = C; C = B; B = A; A = temp;
+    }
+#else
     P( A, B, C, D, E, R(40) );
     P( E, A, B, C, D, R(41) );
     P( D, E, A, B, C, R(42) );
@@ -228,6 +265,7 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
     P( D, E, A, B, C, R(57) );
     P( C, D, E, A, B, R(58) );
     P( B, C, D, E, A, R(59) );
+#endif
 
 #undef K
 #undef F
@@ -235,6 +273,13 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
 #define F(x,y,z) (x ^ y ^ z)
 #define K 0xCA62C1D6
 
+#if defined(MBEDTLS_SHA1_SMALLER)
+    for (; i < 80; i++)
+    {
+        P( A, B, C, D, E, R(i) );
+        temp = E; E = D; D = C; C = B; B = A; A = temp;
+    }
+#else
     P( A, B, C, D, E, R(60) );
     P( E, A, B, C, D, R(61) );
     P( D, E, A, B, C, R(62) );
@@ -255,6 +300,7 @@ void mbedtls_sha1_process( mbedtls_sha1_context *ctx, const unsigned char data[6
     P( D, E, A, B, C, R(77) );
     P( C, D, E, A, B, R(78) );
     P( B, C, D, E, A, R(79) );
+#endif
 
 #undef K
 #undef F

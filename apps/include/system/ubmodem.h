@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/include/system/ubmodem.h
  *
- *   Copyright (C) 2014-2016 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2014-2017 Haltian Ltd. All rights reserved.
  *   Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *   Author: Sila Kayo <sila.kayo@haltian.com>
  *
@@ -810,17 +810,34 @@ void ubmodem_voice_hangup(struct ubmodem_s *modem);
 void ubmodem_audio_setup(struct ubmodem_s *modem, bool out_on, bool in_on);
 
 /****************************************************************************
- * Name: __ubmodem_audio_cleanup
+ * Name: ubmodem_play_audio_resource
  *
  * Description:
- *  Audio setup cleanup
+ *   Play audio resource (see documentation for AT+UPAR)
  *
  * Input Parameters:
  *   modem    : Modem data
  *
  ****************************************************************************/
 
-void ubmodem_audio_cleanup(struct ubmodem_s *modem);
+int ubmodem_play_audio_resource(struct ubmodem_s *modem,
+                                unsigned int audio_resource,
+                                unsigned int tone_id,
+                                unsigned int nof_repeats);
+
+/****************************************************************************
+ * Name: ubmodem_stop_audio_resource
+ *
+ * Description:
+ *   Stop audio resource (see documentation for AT+USAR)
+ *
+ * Input Parameters:
+ *   modem    : Modem data
+ *
+ ****************************************************************************/
+
+int ubmodem_stop_audio_resource(struct ubmodem_s *modem,
+                                unsigned int audio_resource);
 
 #endif /* CONFIG_UBMODEM_VOICE */
 

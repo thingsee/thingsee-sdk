@@ -41,6 +41,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <arch/board/board-reset.h>
+#include <arch/board/board-gps.h>
 
 #include "ubgps_events.h"
 #include "ubx.h"
@@ -48,6 +49,10 @@
 /****************************************************************************
  * Public Defines
  ****************************************************************************/
+
+/* Default Dynamic model */
+
+#define NAV5_DYNAMIC_MODEL            NAV5_MODEL_AUTOMOTIVE
 
 /* Default navigation rate [ms] */
 
@@ -59,9 +64,13 @@
 #define HINT_LOCATION_ACCURACY_DEGRADE_SPEED_MPS \
   (HINT_LOCATION_ACCURACY_DEGRADE_SPEED_KPH * (1000) / (60 * 60)) /* m/s */
 
+/* Maximum accuracy where location information is still supplied to GPS chip. */
+
+#define HINT_LOCATION_MAX_ACCURACY              (100*1000)        /* meters */
+
 /* Minimum accuracy required for location hint. */
 
-#define HINT_LOCATION_MINIMUM_NEW_ACCURACY      1500              /* meters */
+#define HINT_LOCATION_MINIMUM_NEW_ACCURACY      INT_MAX           /* meters */
 
 /****************************************************************************
  * Public Types
@@ -81,15 +90,56 @@ struct gps_module_state_s
 {
   /* GPS powered */
 
-  bool powered;
+  bool powered:1;
 
   /* NMEA protocol enabled */
 
-  bool nmea_protocol_enabled;
+  bool nmea_protocol_enabled:1;
+
+  /* Currently changing state */
+
+  bool in_state_change:1;
+
+  /* Initialization retry flag */
+
+  bool init_retry_done:1;
+
+  /* Reinitialization active */
+
+  bool is_reinit:1;
+
+  /* Reinitialization uses cold boot */
+
+  bool reinit_cold:1;
+
+  /* Reentry depth for ubgps_sm_process */
+
+  unsigned int in_sm_process:8;
+
+  /* In deferred state change processing. */
+
+  bool in_queue_process:1;
+
+  /* Current power mode selected for chip */
+
+  unsigned int power_mode:4;
+
+  /* AssistNow Offline ALPSRV enabled */
+
+  bool alpsrv_enabled:1;
 
   /* Navigation rate [ms] for GPS */
 
   uint32_t navigation_rate;
+
+  /* PSM update period [ms] for chip. If zero, navigation_rate is used for
+   * update_period. */
+
+  uint32_t update_period;
+
+  /* PSM search period [ms] for chip */
+
+  uint32_t search_period;
 
   /* Current GPS state */
 
@@ -119,10 +169,6 @@ struct gps_module_state_s
 
   int aid_timer_id;
 
-  /* Power save mode timer ID */
-
-  int psm_timer_id;
-
   /* Location filter timer id */
 
   int location_timer_id;
@@ -135,11 +181,14 @@ struct gps_module_state_s
 
   int init_count;
 
+  /* Currently used file id for AssistNow Offline ALP file */
+
+  unsigned int current_alp_file_id;
+
   /* UBX receiver */
 
   struct ubx_receiver_s ubx_receiver;
 };
-
 
 /* NMEA line storage for logging */
 
@@ -255,6 +304,10 @@ struct ubgps_s {
   struct gps_assistance_s * assist;
   struct gps_assist_hint_s * hint;
 
+  /* Deferred state changes */
+
+  sq_queue_t event_target_state_queue;
+
   /* Override state-machine */
 
   const struct ubgps_sm_s *override_sm;
@@ -281,7 +334,6 @@ struct gps_callback_entry_s
   void * priv;
 };
 
-
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
@@ -302,6 +354,35 @@ struct gps_callback_entry_s
  ****************************************************************************/
 int ubgps_sm_process(struct ubgps_s * const gps,
                      struct sm_event_s const * const event);
+
+/****************************************************************************
+ * Name: ubgps_process_state_change_queue
+ *
+ * Description:
+ *   Process deferred state changes.
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *
+ ****************************************************************************/
+void ubgps_process_state_change_queue(struct ubgps_s * const gps);
+
+/****************************************************************************
+ * Name: ubgps_queue_state_change
+ *
+ * Description:
+ *   Queue state change deferred processing
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *   event       - Pointer to processed event
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+int ubgps_queue_state_change(struct ubgps_s * const gps,
+                             struct sm_event_target_state_s *event);
 
 /****************************************************************************
  * Name: ubx_callback
@@ -511,12 +592,13 @@ int ubgps_send_cfg_rate(struct ubgps_s * const gps, uint16_t rate_ms);
  *
  * Input Parameters:
  *   gps         - GPS object
+ *   cold        - true for cold reset, otherwise hot
  *
  * Returned Values:
  *   Status
  *
  ****************************************************************************/
-int ubgps_send_cfg_rst(struct ubgps_s * const gps);
+int ubgps_send_cfg_rst(struct ubgps_s * const gps, bool cold);
 
 /****************************************************************************
  * Name: ubgps_send_cfg_pm2
@@ -550,6 +632,29 @@ int ubgps_send_cfg_pm2(struct ubgps_s * const gps, uint32_t flags,
 int ubgps_send_cfg_sbas(struct ubgps_s * const gps, bool enable);
 
 /****************************************************************************
+ * Name: ubgps_send_cfg_nav5
+ *
+ * Description:
+ *   Send UBX CFG-NAV5 message (Navigation engine settings)
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *   mask        - parameters to be applied
+ *   dyn_model   - Dynamic platform model
+ *   fix_mode    - Fix mode
+ *   hold_thr    - static hold velocity threshold
+ *   hold_dist   - static hold distance threshold (to quit static hold)
+ *   pos_acc     - position accuracy mask
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+int ubgps_send_cfg_nav5(struct ubgps_s * const gps, uint16_t mask,
+    uint8_t dyn_model, uint8_t fix_mode, uint8_t hold_thr, uint16_t hold_dist,
+    uint16_t pos_acc);
+
+/****************************************************************************
  * Name: ubgps_send_cfg_rxm
  *
  * Description:
@@ -563,6 +668,23 @@ int ubgps_send_cfg_sbas(struct ubgps_s * const gps, bool enable);
  *
  ****************************************************************************/
 int ubgps_send_cfg_rxm(struct ubgps_s * const gps, uint8_t mode);
+
+/****************************************************************************
+ * Name: ubgps_send_cfg_cfg
+ *
+ * Description:
+ *   Send UBX CFG-CFG message (clear, save and load configurations)
+ *
+ * Input Parameters:
+ *   gps         - GPS object
+ *   action      - clear, save, load
+ *   mask        - configuration sub-sections
+ *
+ * Returned Values:
+ *   Status
+ *
+ ****************************************************************************/
+int ubgps_send_cfg_cfg(struct ubgps_s * const gps, uint8_t action, uint32_t mask);
 
 /****************************************************************************
  * Name: ubgps_send_aid_ini
@@ -626,7 +748,7 @@ int ubgps_handle_aid_alp(struct ubgps_s * const gps,
  *
  ****************************************************************************/
 int ubgps_parse_nav_pvt(struct ubgps_s * const gps,
-                        struct ubx_msg_s const * const msg);
+                        struct ubx_msg_s const * const msg, uint8_t *nav_flags);
 
 /****************************************************************************
  * Name: ubgps_handle_nav_pvt
@@ -755,20 +877,5 @@ int ubgps_aid_updater_stop(struct gps_assistance_s * const assist);
 const char *ubgps_aid_get_alp_filename(void);
 
 #endif
-
-/****************************************************************************
- * Name: ubgps_psm_timer_cb
- *
- * Description:
- *   handler for PSM timeout callback
- *
- * Input Parameters:
- *
- * Returned Values:
- *   Status
- *
- ****************************************************************************/
-int ubgps_psm_timer_cb(const int timer_id, const struct timespec *date,
-                       void * const priv);
 
 #endif /* __THINGSEE_GPS_INTERNAL_H */

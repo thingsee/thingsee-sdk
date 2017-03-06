@@ -333,6 +333,9 @@ static int mbr3108_i2c_read(FAR struct mbr3108_dev_s *dev, uint8_t reg,
         {
           /* Some other error. Try to reset I2C bus and keep trying. */
 #ifdef CONFIG_I2C_RESET
+          if (retries == MBR3108_I2C_RETRIES - 1)
+            break;
+
           ret = up_i2creset(dev->i2c);
           if (ret < 0)
             {
@@ -340,7 +343,6 @@ static int mbr3108_i2c_read(FAR struct mbr3108_dev_s *dev, uint8_t reg,
               return ret;
             }
 #endif
-          continue;
         }
     }
 

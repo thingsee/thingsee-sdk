@@ -162,6 +162,10 @@ cJSON *cJSON_Parse_Stream(char (*getc_fn)(void *priv), void *priv);
  * finished.
  */
 
+/* Parse an object from file-descriptor - create a new root, and populate. */
+
+cJSON *cJSON_Parse_fd(int fd, ssize_t max_readlen, size_t *nread);
+
 char *cJSON_Print(cJSON *item);
 
 /* Render a cJSON entity to text for transfer/storage without any

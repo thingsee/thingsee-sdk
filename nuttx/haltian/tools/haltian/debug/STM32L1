@@ -1,0 +1,72 @@
+#
+# Assorted STM32L1 macros
+#
+
+echo Loading STM32L1 GDB macros.  Use 'help stm32l1' for more information.\n
+
+define stm32l1
+	echo Use 'help stm32l1' for more information.\n
+end
+
+document stm32l1
+. Various macros for working with the STM32L1 family of processors.
+.
+.    debugregs
+.        Print information about the core debugging registers.
+.
+.    memdump
+.        Dump device memory to /tmp/dump/sram
+.
+. Use 'help <macro>' for more specific help.
+end
+
+define debugregs
+	set $dbg_cr = *(volatile unsigned int *)0xe0042004
+	set $dbg_apb1_fz = *(volatile unsigned int *)0xe0042008
+	set $dbg_apb2_fz = *(volatile unsigned int *)0xe004200c
+
+	printf "STM32_DBGMCU_CR: 0x%x\n", $dbg_cr
+	if $dbg_cr != 0
+		printf "Low-power debugging support for:\n"
+		if $dbg_cr & (1<<0)
+			printf " sleep mode\n"
+		end
+		if $dbg_cr & (1<<1)
+			printf " stop mode\n"
+		end
+		if $dbg_cr & (1<<2)
+			printf " standby mode\n"
+		end
+	end
+	printf "STM32_DBGMCU_APB1_FZ: 0x%x\n", $dbg_apb1_fz
+	if $dbg_apb1_fz != 0
+		printf "APB1 freeze bits:\n"
+		if $dbg_apb1_fz & (1<<12)
+			printf " Independent watchdog stopped when core is halted\n"
+		end
+		if $dbg_apb1_fz & (1<<11)
+			printf " Window watchdog stopped when core is halted\n"
+		end
+		if $dbg_apb1_fz & (1<<10)
+			printf " RTC stopped when core is halted\n"
+		end
+	end
+	printf "STM32_DBGMCU_APB2_FZ: 0x%x\n", $dbg_apb2_fz
+end
+
+document debugregs
+.    debugregs
+.        Print information about the core debug registers.
+end
+
+define memdump
+	shell mkdir -p /tmp/dump
+	printf "Dumping SRAM to /tmp/dump/sram\n"
+	dump memory /tmp/dump/sram 0x20000000 0x20014000
+end
+
+document memdump
+.    memdump
+.        Dumps the STM32L1 memory to files in /tmp/dump.
+end
+

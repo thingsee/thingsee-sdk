@@ -783,6 +783,7 @@ static int cause_timer_callback_date(const int timer_id,
   struct ts_cause *cause = (struct ts_cause *) priv;
 
   DEBUGASSERT(timer_id == cause->dyn.timer_id);
+  cause->dyn.timer_id = -1; /* one-shot! */
 
   start_cause_timer(cause);
 

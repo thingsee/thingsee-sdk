@@ -95,18 +95,18 @@ all: .built
 .PHONY: clean depend distclean
 
 $(RUNNERSRC) : $(TESTSRCS)
-	$(Q) CPP="$(CPP)" $(TOPDIR)/tools/unity/build_fixture_runner.pl $^ >$@
+	$(Q) CPP="$(CPP)" $(APPDIR)/tools/testing/unity/build_fixture_runner.pl $^ >$@
 
 $(AOBJS): %$(OBJEXT): %.S
 	$(call ASSEMBLE, $<, $@)
 
 $(RUNNEROBJ): $(RUNNERSRC)
 	$(call COMPILE, $<, $@)
-	$(Q) OBJCOPY=$(OBJCOPY) $(TOPDIR)/tools/unity/rename_symbols $(APPNAME) $@
+	$(Q) OBJCOPY=$(OBJCOPY) $(APPDIR)/tools/testing/unity/rename_symbols $(APPNAME) $@
 
 $(COBJS) $(MAINOBJ): %$(OBJEXT): %.c
 	$(call COMPILE, $<, $@)
-	$(Q) OBJCOPY=$(OBJCOPY) $(TOPDIR)/tools/unity/rename_symbols $(APPNAME) $@
+	$(Q) OBJCOPY=$(OBJCOPY) $(APPDIR)/tools/testing/unity/rename_symbols $(APPNAME) $@
 
 .built: $(OBJS)
 	$(call ARCHIVE, $(BIN), $(OBJS))

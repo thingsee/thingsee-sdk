@@ -162,7 +162,8 @@ static const char g_no_sense_str[] = "- No sense data -";
  * Public Functions
  ****************************************************************************/
 
-void start_thingsee_UI(void (*system_do_shutdown_fn)(const char *reset_type), void *app)
+void start_thingsee_UI(void (*system_do_shutdown_fn)(const char *reset_type),
+                       bool force_power_on, void *app)
 {
   int timeout = 0, i;
   bool button;
@@ -190,7 +191,7 @@ void start_thingsee_UI(void (*system_do_shutdown_fn)(const char *reset_type), vo
   /* If device was put to sleep purposefully, only allow wakeup by power key */
 
   g_reset_reason = board_reset_get_reason(true);
-  if (g_reset_reason & BOARD_RESET_REASON_STANDBY_WAKEUP)
+  if (!force_power_on && (g_reset_reason & BOARD_RESET_REASON_STANDBY_WAKEUP))
     {
       while (++timeout <= STARTUP_TIMEOUT)
         {

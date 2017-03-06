@@ -524,6 +524,36 @@ static void append_log(struct send_log *send_log, enum logtypes type)
     }
 }
 
+bool __ts_engine_log_have_logs(void)
+{
+  struct stat stats;
+  int ret;
+  int i;
+
+  for (i = 0; i < NUMBER_OF_LOGS; i++)
+    {
+      if (g_send_log.fds[i] >= 0)
+        {
+          /* Log open => so something have been written to it. */
+
+          eng_dbg("log file: %s, open\n", g_filenames_str[i]);
+
+          return true;
+        }
+
+      ret = stat(g_filenames_str[i], &stats);
+      if (ret >= 0 && stats.st_size > 0)
+        {
+          eng_dbg("log file: %s, size: %ld\n", g_filenames_str[i],
+                  (long)stats.st_size);
+
+          return true;
+        }
+    }
+
+  return false;
+}
+
 int __ts_engine_log_start(struct send_log **handle, bool multisend,
                           struct url * const url)
 {

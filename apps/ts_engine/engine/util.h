@@ -45,10 +45,11 @@
 
 #define SDCARD_CLOUD_PROPERTY_FILENAME          TS_EMMC_MOUNT_PATH "/cloud.jsn"
 #define SDCARD_DEVICE_PROPERTY_FILENAME         TS_EMMC_MOUNT_PATH "/device.jsn"
+#define SDCARD_SYSTEM_CONFIG_FILENAME           TS_EMMC_MOUNT_PATH "/system.jsn"
 
 bool __ts_engine_sdcard_inserted(void);
 
-const char *__ts_engine_sdcard_read(const char * const filename);
+cJSON *__ts_engine_sdcard_read_json(const char * const filename);
 
 const char *__ts_engine_sdcard_read(const char * const filename);
 

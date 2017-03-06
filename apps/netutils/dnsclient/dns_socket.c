@@ -278,7 +278,7 @@ static uint16_t transform_16bit(uint16_t ctr)
 
   if (!g.init)
     {
-      speckrandom_buf(&g.rand, sizeof(g.rand));
+      getrandom(&g.rand, sizeof(g.rand));
       g.init = true;
     }
 

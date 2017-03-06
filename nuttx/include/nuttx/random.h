@@ -1,8 +1,9 @@
 /************************************************************************************
  * include/nuttx/random.h
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
  *   Authors: Juha Niskanen <juha.niskanen@haltian.com>
+ *            Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -77,7 +78,7 @@ enum rnd_source_t {
 #ifdef CONFIG_DEV_RANDOM
 
 /****************************************************************************
- * Function: speckrandom_buf
+ * Function: getrandom
  *
  * Description:
  *   Fill a buffer of arbitrary length with randomness. This is the
@@ -96,7 +97,7 @@ enum rnd_source_t {
  *
  ****************************************************************************/
 
-void speckrandom_buf(void *bytes, size_t nbytes);
+void getrandom(void *bytes, size_t nbytes);
 
 /****************************************************************************
  * Function: up_rngaddint
