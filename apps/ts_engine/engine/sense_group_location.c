@@ -314,33 +314,87 @@ static int32_t get_secs_to_next_expected(const struct timespec *curr_ts)
     {
       struct ts_cause *cause = client->cause;
       int32_t interval = cause->conf.measurement.interval;
-      struct timespec next_update;
+      int64_t next_update_sec;
+      long next_update_nsec;
 
       if (interval <= 0)
         interval = 10000;
 
-      next_update = client->last_update;
-      next_update.tv_sec += interval / 1000;
-      next_update.tv_nsec += (interval % 1000) * (1000 * 1000);
+      next_update_sec = client->last_update.tv_sec; /* uint => int */
+      next_update_nsec = client->last_update.tv_nsec;
 
-      next_update.tv_sec -= curr_ts->tv_sec;
-      next_update.tv_nsec -= curr_ts->tv_nsec;
-      if (next_update.tv_nsec >= 1000 * 1000 * 1000)
+      next_update_sec += interval / 1000;
+      next_update_nsec += (interval % 1000) * (1000 * 1000);
+
+      next_update_sec -= curr_ts->tv_sec;
+      next_update_nsec -= curr_ts->tv_nsec;
+      if (next_update_nsec >= 1000 * 1000 * 1000)
         {
-          next_update.tv_nsec -= 1000 * 1000 * 1000;
-          next_update.tv_sec++;
+          next_update_nsec -= 1000 * 1000 * 1000;
+          next_update_sec++;
         }
-      else if (next_update.tv_nsec < 0)
+      else if (next_update_nsec < 0)
         {
-          next_update.tv_nsec += 1000 * 1000 * 1000;
-          next_update.tv_sec--;
+          next_update_nsec += 1000 * 1000 * 1000;
+          next_update_sec--;
         }
 
-      if (next_update.tv_sec < smallest)
-        smallest = next_update.tv_sec;
+      if (next_update_sec < INT_MIN)
+        next_update_sec = INT_MIN;
+
+      if (next_update_sec < smallest)
+        smallest = next_update_sec;
     }
 
   return smallest;
+}
+
+static void synchonize_clients(void)
+{
+  struct client_s *curr_int_client;
+  struct client_s *next_int_client;
+
+  next_int_client = (struct client_s *) sq_peek(&g_gps.clients);
+
+  while (next_int_client)
+    {
+      struct ts_cause *cause;
+      int32_t curr_interval;
+      struct client_s *client;
+
+      curr_int_client = next_int_client;
+      next_int_client = NULL;
+
+      cause = curr_int_client->cause;
+      curr_interval = cause->conf.measurement.interval;
+
+      if (curr_interval <= 0)
+        curr_interval = 10000;
+
+      for (client = (struct client_s *) sq_next(&curr_int_client->entry);
+           client;
+           client = (struct client_s *) sq_next(&client->entry))
+        {
+          int32_t interval = client->cause->conf.measurement.interval;
+
+          if (interval <= 0)
+            interval = 10000;
+
+          if (curr_interval == interval)
+            {
+              /* Synchronize last update time. */
+
+              client->last_update = curr_int_client->last_update;
+            }
+          else if (!next_int_client)
+            {
+              /* Different interval, use as starting point for next
+               * synchronization. */
+
+              next_int_client = client;
+            }
+        }
+    }
 }
 
 static void
@@ -427,7 +481,6 @@ gps_cb (void const * const e, void * const priv)
         clock_gettime(CLOCK_MONOTONIC, &curr_ts);
         curr_msec = timespec_to_msec(&curr_ts);
 
-
         /* Update location from event */
 
         g_gps.location.current.time = time (0);
@@ -481,7 +534,7 @@ gps_cb (void const * const e, void * const priv)
                     last_msec, curr_msec, -(curr_msec - last_msec));*/
 
             client->last_update.tv_sec = last_msec / 1000;
-            client->last_update.tv_nsec = (last_msec % 1000) / (1000 * 1000);
+            client->last_update.tv_nsec = (last_msec % 1000) * (1000 * 1000);
 
             switch (cause->dyn.sense_value.sId)
               {
@@ -727,6 +780,10 @@ sense_location_init (struct ts_cause *cause)
 
   sq_addlast (&client->entry, &g_gps.clients);
   clock_gettime(CLOCK_MONOTONIC, &client->last_update);
+
+  /* Synchronize clients with same interval */
+
+  synchonize_clients();
 
   return OK;
 
