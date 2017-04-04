@@ -107,9 +107,9 @@ int usrsocktest_daemon_get_num_waiting_connect_sockets(void);
 
 int usrsocktest_daemon_get_num_recv_empty_sockets(void);
 
-int usrsocktest_daemon_get_send_bytes(void);
+ssize_t usrsocktest_daemon_get_send_bytes(void);
 
-int usrsocktest_daemon_get_recv_bytes(void);
+ssize_t usrsocktest_daemon_get_recv_bytes(void);
 
 int usrsocktest_daemon_get_num_unreachable_sockets(void);
 

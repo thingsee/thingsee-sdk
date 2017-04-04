@@ -180,6 +180,27 @@ void __ubmodem_close_socket(struct modem_socket_s *sock)
   struct ubmodem_s *modem = sock->modem;
   int err;
 
+  /* Check if socket is already closed (by network disconnection / +UUSOCL). */
+
+  if (sock->is_closed || sock->modem_sd < 0)
+    {
+      /* Socket is closed now. */
+
+      /* Report that connection was closed. */
+
+      sock->is_closed = true;
+      sock->modem_sd = -1;
+
+      (void)__ubmodem_usrsock_send_response(modem, &sock->req, false, 0);
+
+      /* Mark socket for removal. */
+
+      sock->is_freeing_pending = true;
+      __ubsocket_work_done(sock);
+
+      return;
+    }
+
   /* Attempt to close socket. */
 
   err = __ubmodem_send_cmd(modem, &cmd_ATpUSOCL, close_socket_handler, sock,

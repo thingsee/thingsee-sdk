@@ -1487,12 +1487,10 @@ void up_set_suspend(struct uart_dev_s *dev, bool suspend)
       /* Perform initial Rx DMA buffer fetch to wake-up serial device
        * activity. */
 
-#ifdef CONFIG_USART1_RXDMA
       if (priv->rxdma != NULL)
         {
           up_dma_rxcallback(priv->rxdma, 0, priv);
         }
-#endif
 
       irqrestore(flags);
     }

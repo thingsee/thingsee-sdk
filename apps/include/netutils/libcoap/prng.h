@@ -36,11 +36,11 @@ coap_prng_impl(unsigned char *buf, size_t len) {
   return 1;
 }
 #elif defined(WITH_NUTTX)
-#include <nuttx/random.h>
+#include <sys/random.h>
 
 /* Use platform CPRNG for prng(). */
 #define prng(Buf,Length) getrandom((Buf), (Length))
-#define prng_init(Value) add_sw_randomness((Value))
+#define prng_init(Value) ((void)((Value)))
 #else /* WITH_CONTIKI */
 #include <string.h>
 

@@ -6,8 +6,6 @@
 menuconfig EXAMPLES_UBMODEM
 	bool "u-blox Cellular modem library example"
 	default n
-	depends on NET
-	depends on NET_USRSOCK
 	depends on SYSTEM_UBMODEM
 	---help---
 		Enable the u-blox Cellular modem library example
@@ -55,5 +53,18 @@ config EXAMPLES_UBMODEM_APN_IPADDR
 	default "0.0.0.0"
 	---help---
 		IP address for APN connection. Default: 0.0.0.0 (get dynamic IP)
+
+config EXAMPLES_UBMODEM_DEBUG
+	bool "ubmodemd daemon debugging"
+	default n
+	---help---
+		Enable debugging output for ubmodemd
+
+config EXAMPLES_UBMODEM_VERBOSE
+	bool "ubmodemd daemon verbose debugging"
+	default n
+	depends on EXAMPLES_UBMODEM_DEBUG
+	---help---
+		Enable verbose debugging output for ubmodemd
 
 endif

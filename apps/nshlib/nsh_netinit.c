@@ -108,6 +108,8 @@
 #  ifndef CONFIG_NSH_NOMAC
 #    error "CONFIG_NSH_NOMAC must be defined for SLIP"
 #  endif
+#elif defined(CONFIG_NET_LOOPBACK)
+#  define NET_DEVNAME "lo"
 #elif defined(CONFIG_NET_USRSOCK)
 #  undef HAVE_NETDEV
 #elif !defined(CONFIG_NET_LOCAL)
@@ -258,7 +260,7 @@ static void nsh_netinit_configure(void)
   netlib_set_ipv4netmask(NET_DEVNAME, &addr);
 #endif
 
-#ifdef CONFIG_NET_IPv6
+#if defined(HAVE_NETDEV) && defined(CONFIG_NET_IPv6)
 #ifdef CONFIG_NET_ICMPv6_AUTOCONF
   /* Perform ICMPv6 auto-configuration */
 

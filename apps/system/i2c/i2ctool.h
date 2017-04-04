@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/i2c/i2ctool.h
  *
- *   Copyright (C) 2011, 2014 Gregory Nutt. All rights reserved.
+ *   Copyright (C) 2011, 2014, 2016 Gregory Nutt. All rights reserved.
  *   Author: Gregory Nutt <gnutt@nuttx.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,10 +49,10 @@
 #include <stdbool.h>
 #include <errno.h>
 
-#include <nuttx/i2c.h>
+#include <nuttx/i2c/i2c_master.h>
 
 /****************************************************************************
- * Definitions
+ * Pre-processor Definitions
  ****************************************************************************/
 /* Configuration ************************************************************/
 /* CONFIG_NSH_BUILTIN_APPS - Build the tools as an NSH built-in command
@@ -63,10 +63,6 @@
  * CONFIG_I2CTOOL_MAXREGADDR - Largest register address (default: 0xff)
  * CONFIG_I2CTOOL_DEFFREQ - Default frequency (default: 4000000)
  */
-
-#ifndef CONFIG_I2C_TRANSFER
-#  error "CONFIG_I2C_TRANSFER is required in the configuration"
-#endif
 
 #ifndef CONFIG_I2CTOOL_MINBUS
 #  define CONFIG_I2CTOOL_MINBUS 0
@@ -196,10 +192,10 @@ int i2ccmd_verf(FAR struct i2ctool_s *i2ctool, int argc, FAR char **argv);
 
 /* I2C access functions */
 
-int i2ctool_get(FAR struct i2ctool_s *i2ctool, FAR struct i2c_dev_s *dev,
-                uint8_t addr, uint16_t *result);
-int i2ctool_set(FAR struct i2ctool_s *i2ctool, FAR struct i2c_dev_s *dev,
-                uint8_t regaddr, uint16_t value);
+int i2ctool_get(FAR struct i2ctool_s *i2ctool, int fd, uint8_t addr,
+                FAR uint16_t *result);
+int i2ctool_set(FAR struct i2ctool_s *i2ctool, int fd, uint8_t regaddr,
+                uint16_t value);
 
 /* Common logic */
 
@@ -207,5 +203,12 @@ int common_args(FAR struct i2ctool_s *i2ctool, FAR char **arg);
 int arg_string(FAR char **arg, FAR char **value);
 int arg_decimal(FAR char **arg, FAR long *value);
 int arg_hex(FAR char **arg, FAR long *value);
+
+/* Driver access utilities */
+
+FAR char *i2cdev_path(int bus);
+bool i2cdev_exists(int bus);
+int i2cdev_open(int bus);
+int i2cdev_transfer(int fd, FAR struct i2c_msg_s *msgv, int msgc);
 
 #endif /* __APPS_SYSTEM_I2C_I2CTOOLS_H */

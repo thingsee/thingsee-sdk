@@ -38,8 +38,8 @@
 #include <nuttx/config.h>
 #include <nuttx/arch.h>
 #include <nuttx/version.h>
-#include <nuttx/random.h>
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stddef.h>
 #include <sys/types.h>
@@ -192,6 +192,21 @@ int ts_engine_continue(const struct ts_engine_app *app)
   eng_dbg("engine continued\n");
 
   return OK;
+}
+
+static void seed_urandom(const void *buf, size_t buflen)
+{
+  int fd;
+
+  fd = open("/dev/urandom", O_WRONLY);
+  if (fd < 0)
+    fd = open("/dev/random", O_WRONLY);
+
+  if (fd >= 0)
+    {
+      (void)write(fd, buf, buflen);
+      close(fd);
+    }
 }
 
 static int
@@ -664,7 +679,7 @@ static int generate_device_property(void)
 
   /* Add it to entropy pool. */
 
-  up_rngaddentropy((uint32_t *)device_property, strlen(device_property) / sizeof(uint32_t));
+  seed_urandom(device_property, strlen(device_property));
 
   compare = __ts_engine_sdcard_read(SDCARD_DEVICE_PROPERTY_FILENAME);
   if (compare)
@@ -803,8 +818,7 @@ init_system(struct ts_engine_app *app)
 
   /* Add something SW version dependent to entropy pool. */
 
-  up_rngaddentropy((uint32_t *)CONFIG_VERSION_BUILD,
-                   sizeof(CONFIG_VERSION_BUILD) / sizeof(uint32_t));
+  seed_urandom(CONFIG_VERSION_BUILD, sizeof(CONFIG_VERSION_BUILD));
 
   /* Print crash log. */
 

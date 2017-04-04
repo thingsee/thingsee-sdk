@@ -49,7 +49,6 @@
 #include <poll.h>
 #include <errno.h>
 #include <stdlib.h>
-#include <nuttx/random.h>
 
 #include <apps/system/ubmodem.h>
 
@@ -200,9 +199,7 @@ static int modem_poll_event(struct ubmodem_s *modem, struct pollfd *pfd,
 
       /* Add nanoseconds to entropy pool. */
 
-#ifdef CONFIG_DEV_RANDOM
-      add_time_randomness(curr_ts.tv_nsec);
-#endif
+      __ubmodem_seed_urandom(&curr_ts.tv_nsec, sizeof(curr_ts.tv_nsec));
     }
   while (timer)
     {

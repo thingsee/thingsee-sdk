@@ -1,7 +1,7 @@
 /****************************************************************************
  * examples/ubmodem/ubmodem_main.c
  *
- *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
+ *   Copyright (C) 2015,2017 Haltian Ltd. All rights reserved.
  *    Author: Jussi Kivilinna <jussi.kivilinna@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -59,8 +59,6 @@
 /****************************************************************************
  * Definitions
  ****************************************************************************/
-
-#define UBMODEM_EXAMPLE_DEBUG 1
 
 #ifndef CONFIG_EXAMPLES_UBMODEM_DAEMONPRIO
 #  define CONFIG_EXAMPLES_UBMODEM_DAEMONPRIO SCHED_PRIORITY_DEFAULT
@@ -184,7 +182,9 @@ static void event_ip_address(struct ubmodem_s *modem,
          (dns2 >> 8) & 0xff,
          (dns2 >> 0) & 0xff);
 
+#ifdef CONFIG_NETUTILS_DNSCLIENT
   dns_setserver(&ipcfg->dns1);
+#endif
 }
 
 static void event_target_level(struct ubmodem_s *modem,
@@ -304,7 +304,7 @@ static void event_cell_environment(struct ubmodem_s *modem,
     }
 }
 
-#ifdef UBMODEM_EXAMPLE_DEBUG
+#ifdef CONFIG_EXAMPLES_UBMODEM_DEBUG
 static void event_new_level(struct ubmodem_s *modem,
                             enum ubmodem_event_flags_e event,
                             const void *event_data, size_t datalen,
@@ -328,6 +328,7 @@ static void event_state_change(struct ubmodem_s *modem,
       ((const int *)event_data)[0]);
 }
 
+#ifdef CONFIG_EXAMPLES_UBMODEM_VERBOSE
 static void event_data_to_modem(struct ubmodem_s *modem,
                                 enum ubmodem_event_flags_e event,
                                 const void *event_data, size_t datalen,
@@ -371,6 +372,7 @@ static void event_data_from_modem(struct ubmodem_s *modem,
 
   printf("]\n");
 }
+#endif
 #endif
 
 static bool get_modem_config(struct ubmodem_s *modem,
@@ -418,6 +420,7 @@ static int ubmodemd_daemon(int argc, char *argv[])
   int nfds;
   int ret;
   int time_cell_info_prev = 0;
+  int errcode;
 
   g_ubmodemd.in_poweroff = false;
   g_ubmodemd.stop_daemon = false;
@@ -455,19 +458,21 @@ static int ubmodemd_daemon(int argc, char *argv[])
   ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_CELL_ENVIRONMENT,
                                   event_cell_environment,
                                   NULL);
-#ifdef UBMODEM_EXAMPLE_DEBUG
+#ifdef CONFIG_EXAMPLES_UBMODEM_DEBUG
   ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_NEW_LEVEL,
                                   event_new_level,
                                   NULL);
   ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_TRACE_STATE_CHANGE,
                                   event_state_change,
                                   NULL);
+#ifdef CONFIG_EXAMPLES_UBMODEM_VERBOSE
   ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_TRACE_DATA_TO_MODEM,
                                   event_data_to_modem,
                                   NULL);
   ubmodem_register_event_listener(modem, UBMODEM_EVENT_FLAG_TRACE_DATA_FROM_MODEM,
                                   event_data_from_modem,
                                   NULL);
+#endif
 #endif
 
   printf("ubmodemd_daemon: Try GPRS connection.\n");
@@ -516,9 +521,24 @@ static int ubmodemd_daemon(int argc, char *argv[])
       /* Wait for poll event or timeout. */
 
       ret = poll(pfds, nfds, timeout < 5000 ? timeout : 5000);
+      errcode = errno;
       if (ret < 0)
         {
-          printf("ubmodemd_daemon: poll failed, %d\n", ret);
+          if (errcode == EINTR)
+            continue;
+
+          if (errcode == EAGAIN)
+            {
+              /* Poll returns EAGAIN if timeout too short. Sleep to
+               * avoid busy looping. */
+
+              usleep(1000);
+
+              continue;
+            }
+
+          printf("ubmodemd_daemon: poll failed, %d (%d:%s)\n", ret, errcode,
+                 strerror(errcode));
           continue;
         }
 

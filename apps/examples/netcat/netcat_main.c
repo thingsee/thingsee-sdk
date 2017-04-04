@@ -38,7 +38,7 @@
  */
 
 #include <nuttx/config.h>
-#include <nuttx/random.h>
+#include <sys/random.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -190,12 +190,15 @@ static long long strtonum(const char *num, long long min, long long max,
   return val;
 }
 
+#ifndef SHUT_WR
 #define SHUT_WR 0
 #define SHUT_RD 1
-static void shutdown(int fd, int how)
+static int shutdown(int fd, int how)
 {
   /* do nothing */
+  return 0;
 }
+#endif
 
 static size_t strlcpy(char *dst, const char *src, size_t siz)
 {

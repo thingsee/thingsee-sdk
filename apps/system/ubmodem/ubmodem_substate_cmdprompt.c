@@ -57,6 +57,8 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+#define INITIAL_ATE0_RETRIES 30
+
 #ifndef CONFIG_UBMODEM_POWERSAVE_GUARD_PERIOD
 #  define CONFIG_UBMODEM_POWERSAVE_GUARD_PERIOD 0
 #endif
@@ -277,6 +279,9 @@ static void ATI0_handler(struct ubmodem_s *modem,
 
           switch (sara_u_number)
             {
+              case 201:
+                modem->model = UBMODEM_MODEL_SARA_U201;
+                break;
               case 260:
                 modem->model = UBMODEM_MODEL_SARA_U260;
                 break;
@@ -736,7 +741,7 @@ static void initial_handler(struct ubmodem_s *modem,
   MODEM_DEBUGASSERT(modem, cmd == &cmd_initial);
 
   if ((info->status == RESP_STATUS_TIMEOUT ||
-       info->status == RESP_STATUS_ERROR) && ++sub->try_count < 10)
+       info->status == RESP_STATUS_ERROR) && ++sub->try_count < INITIAL_ATE0_RETRIES)
     {
       /* As this is first command, retry few times to wake-up modem. */
 

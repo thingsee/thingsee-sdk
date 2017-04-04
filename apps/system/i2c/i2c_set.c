@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/system/i2c/i2c_set.c
  *
- *   Copyright (C) 2011 Gregory Nutt. All rights reserved.
+ *   Copyright (C) 2011, 2016 Gregory Nutt. All rights reserved.
  *   Author: Gregory Nutt <gnutt@nuttx.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,33 +41,9 @@
 
 #include <stdlib.h>
 
-#include <nuttx/i2c.h>
+#include <nuttx/i2c/i2c_master.h>
 
 #include "i2ctool.h"
-
-/****************************************************************************
- * Definitions
- ****************************************************************************/
-
-/****************************************************************************
- * Private Types
- ****************************************************************************/
-
-/****************************************************************************
- * Private Function Prototypes
- ****************************************************************************/
-
-/****************************************************************************
- * Private Data
- ****************************************************************************/
-
-/****************************************************************************
- * Public Data
- ****************************************************************************/
-
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
 
 /****************************************************************************
  * Public Functions
@@ -79,7 +55,6 @@
 
 int i2ccmd_set(FAR struct i2ctool_s *i2ctool, int argc, FAR char **argv)
 {
-  FAR struct i2c_dev_s *dev;
   FAR char *ptr;
   uint8_t regaddr;
   long value;
@@ -87,6 +62,7 @@ int i2ccmd_set(FAR struct i2ctool_s *i2ctool, int argc, FAR char **argv)
   int nargs;
   int argndx;
   int ret;
+  int fd;
   int i;
 
   /* Parse any command line arguments */
@@ -165,17 +141,12 @@ int i2ccmd_set(FAR struct i2ctool_s *i2ctool, int argc, FAR char **argv)
 
   /* Get a handle to the I2C bus */
 
-  dev = up_i2cinitialize(i2ctool->bus);
-  if (!dev)
+  fd = i2cdev_open(i2ctool->bus);
+  if (fd < 0)
     {
        i2ctool_printf(i2ctool, "Failed to get bus %d\n", i2ctool->bus);
        return ERROR;
     }
-
-  /* Set the frequency and the address (NOTE:  Only 7-bit address supported now) */
-
-  I2C_SETFREQUENCY(dev, i2ctool->freq);
-  I2C_SETADDRESS(dev, i2ctool->addr, 7);
 
   /* Loop for the requested number of repititions */
 
@@ -186,7 +157,7 @@ int i2ccmd_set(FAR struct i2ctool_s *i2ctool, int argc, FAR char **argv)
     {
       /* Write to the I2C bus */
 
-      ret = i2ctool_set(i2ctool, dev, regaddr, (uint16_t)value);
+      ret = i2ctool_set(i2ctool, fd, regaddr, (uint16_t)value);
 
       /* Display the result */
 
@@ -217,7 +188,7 @@ int i2ccmd_set(FAR struct i2ctool_s *i2ctool, int argc, FAR char **argv)
         }
     }
 
-  (void)up_i2cuninitialize(dev);
+  (void)close(fd);
   return ret;
 }
 
@@ -225,8 +196,8 @@ int i2ccmd_set(FAR struct i2ctool_s *i2ctool, int argc, FAR char **argv)
  * Name: i2ctool_set
  ****************************************************************************/
 
-int i2ctool_set(FAR struct i2ctool_s *i2ctool, FAR struct i2c_dev_s *dev,
-                uint8_t regaddr, uint16_t value)
+int i2ctool_set(FAR struct i2ctool_s *i2ctool, int fd, uint8_t regaddr,
+                uint16_t value)
 {
   struct i2c_msg_s msg[2];
   union
@@ -238,13 +209,15 @@ int i2ctool_set(FAR struct i2ctool_s *i2ctool, FAR struct i2c_dev_s *dev,
 
   /* Set up data structures */
 
-  msg[0].addr   = i2ctool->addr;
-  msg[0].flags  = 0;
-  msg[0].buffer = &regaddr;
-  msg[0].length = 1;
+  msg[0].frequency = i2ctool->freq;
+  msg[0].addr      = i2ctool->addr;
+  msg[0].flags     = 0;
+  msg[0].buffer    = &regaddr;
+  msg[0].length    = 1;
 
-  msg[1].addr   = i2ctool->addr;
-  msg[1].flags  = 0;
+  msg[1].frequency = i2ctool->freq;
+  msg[1].addr      = i2ctool->addr;
+  msg[1].flags     = 0;
   if (i2ctool->width == 8)
     {
       u.data8       = (uint8_t)value;
@@ -260,15 +233,15 @@ int i2ctool_set(FAR struct i2ctool_s *i2ctool, FAR struct i2c_dev_s *dev,
 
   if (i2ctool->start)
     {
-      ret = I2C_TRANSFER(dev, &msg[0], 1);
+      ret = i2cdev_transfer(fd, &msg[0], 1);
       if (ret == OK)
         {
-          ret = I2C_TRANSFER(dev, &msg[1], 1);
+          ret = i2cdev_transfer(fd, &msg[1], 1);
         }
     }
   else
     {
-      ret = I2C_TRANSFER(dev, msg, 2);
+      ret = i2cdev_transfer(fd, msg, 2);
     }
 
   return ret;

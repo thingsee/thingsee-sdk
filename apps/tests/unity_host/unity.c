@@ -14,6 +14,9 @@
 #define UNITY_PRINT_EOL       { UNITY_OUTPUT_CHAR('\n'); }
 
 #define UNITY_MSEC_IN_USEC 1000
+#define UNITY_MIN_TIMEOUT_MSEC 200
+
+#define SIG_UNITYSTOP 15
 
 struct _Unity Unity;
 
@@ -74,6 +77,7 @@ struct UnityTimeoutAction
 {
     _U_UINT timeout_msec;
     pthread_t thread;
+    bool cancel_protected;
 };
 
 void UnityPrintFail(void);
@@ -1211,8 +1215,13 @@ int UnityEnd(void)
 static void* UnityTimeoutThread(pthread_addr_t value)
 {
     struct UnityTimeoutAction *timeout = (struct UnityTimeoutAction *)value;
+
     usleep(timeout->timeout_msec * UNITY_MSEC_IN_USEC);
-    (void)pthread_cancel(timeout->thread);
+
+    if (!timeout->cancel_protected)
+      return NULL;
+
+    (void)pthread_kill(timeout->thread, SIG_UNITYSTOP);
     Unity.CurrentTestTimeout = 1;
     return NULL;
 }
@@ -1227,8 +1236,14 @@ static void* UnityProtectedThread(pthread_addr_t value)
 int UnityProtect(UnityTestFunction function, _U_UINT timeout_msec)
 {
     struct UnityTimeoutAction action;
-    action.timeout_msec = timeout_msec;
     pthread_t thread, timeout_thread;
+
+    if (timeout_msec < UNITY_MIN_TIMEOUT_MSEC)
+      timeout_msec = UNITY_MIN_TIMEOUT_MSEC;
+
+    action.timeout_msec = timeout_msec;
+    action.cancel_protected = true;
+
     int result = pthread_create(&thread, NULL, UnityProtectedThread, (pthread_addr_t)function);
     if (result == OK)
     {
@@ -1238,10 +1253,9 @@ int UnityProtect(UnityTestFunction function, _U_UINT timeout_msec)
         {
             pthread_addr_t value;
             result = pthread_join(thread, &value);
-            if (pthread_cancel(timeout_thread) == OK)
-            {
-                (void)pthread_join(timeout_thread, &value);
-            }
+            action.cancel_protected = false;
+            (void)pthread_kill(timeout_thread, SIG_UNITYSTOP);
+            (void)pthread_join(timeout_thread, &value);
             if (result == 0)
             {
                 result = Unity.CurrentTestFailed || Unity.CurrentTestTimeout ? 1 : 0;

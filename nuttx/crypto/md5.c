@@ -1,5 +1,5 @@
 /****************************************************************************
- * libc/misc/lib_md5.c
+ * crypto/md5.c
  *
  * This file is part of the NuttX RTOS:
  *
@@ -65,7 +65,7 @@
 #include <string.h>
 #include <stdint.h>
 
-#include <md5.h>
+#include <nuttx/crypto/md5.h>
 
 /****************************************************************************
  * Pre-processor Definitions

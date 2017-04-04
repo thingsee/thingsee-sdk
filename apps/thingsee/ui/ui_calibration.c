@@ -95,6 +95,10 @@ int ui_calib_lsm9ds1_calibrate(int sens_id)
   lsm9ds1_who_am_i_t who_am_i;
   lsm9ds1_sensor_bias_t b, ref_bias;
   char buf[TS_DEVICE_PROD_DATA_LSM9DS1_REF_SIZE];
+  int gyro_bias[3];
+  int xl_bias[3];
+  int mag_bias[3];
+  int i;
 
   file = open(ST_SENS_PATH, O_RDWR);
   if (file < 0)
@@ -139,10 +143,16 @@ int ui_calib_lsm9ds1_calibrate(int sens_id)
 
   /* Split prod data as reference */
 
-  ret = sscanf(buf, "[%hd,%hd,%hd,%hd,%hd,%hd,%hd,%hd,%hd]",
-               &ref_bias.gyro_bias[0], &ref_bias.gyro_bias[1], &ref_bias.gyro_bias[2],
-               &ref_bias.xl_bias[0], &ref_bias.xl_bias[1], &ref_bias.xl_bias[2],
-               &ref_bias.mag_bias[0], &ref_bias.mag_bias[1], &ref_bias.mag_bias[2]);
+  ret = sscanf(buf, "[%d,%d,%d,%d,%d,%d,%d,%d,%d]",
+               &gyro_bias[0], &gyro_bias[1], &gyro_bias[2],
+               &xl_bias[0], &xl_bias[1], &xl_bias[2],
+               &mag_bias[0], &mag_bias[1], &mag_bias[2]);
+  for (i = 0; i < 3; i++)
+    {
+      ref_bias.gyro_bias[i] = gyro_bias[i];
+      ref_bias.xl_bias[i] = xl_bias[i];
+      ref_bias.mag_bias[i] = mag_bias[i];
+    }
 
   /* If not enough entries, clear them all */
 

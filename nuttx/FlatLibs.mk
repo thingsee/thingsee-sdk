@@ -1,6 +1,7 @@
 NUTTXLIBS :=
 USERLIBS :=
 CONFIG_NUTTX_WORKAREA_BUILD := y
+CONFIG_CRYPTO := y
 ############################################################################
 # FlatLibs.mk
 #

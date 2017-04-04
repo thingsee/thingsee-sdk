@@ -116,6 +116,15 @@
 #  define ubdbg(...) do;while(0)
 #endif
 
+/* Modem/network error testing/simulation */
+
+//#define CONFIG_UBMODEM_TEST_GPRS_DISCONNECT_SECS 60
+
+//#define CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_SECS 60
+#ifdef CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_SECS
+#  define CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_NO_RECONNECT 3
+#endif
+
 /****************************************************************************
  * Type Declarations
  ****************************************************************************/
@@ -163,6 +172,7 @@ enum ubmodem_model_e
   UBMODEM_MODEL_SARA_G340,
   UBMODEM_MODEL_SARA_G350,
   UBMODEM_MODEL_SARA_U_UNKNOWN,
+  UBMODEM_MODEL_SARA_U201,
   UBMODEM_MODEL_SARA_U260,
   UBMODEM_MODEL_SARA_U270,
   UBMODEM_MODEL_SARA_U280,
@@ -268,9 +278,13 @@ struct ubmodem_s {
 
   int creg_timer_id;
 
-  /* CellLocate timeout timer */
+  /* GPRS reattempt timer */
+
+  int gprs_reattempt_timer_id;
 
 #ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
+  /* CellLocate timeout timer */
+
   int cell_locate_timer_id;
 #endif
 
@@ -416,6 +430,12 @@ struct ubmodem_s {
   /* Parser data */
 
   struct at_parser_s parser;
+
+  /* Testing data */
+
+#ifdef CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_NO_RECONNECT
+  int testing_block_network_reconnect;
+#endif
 };
 
 /****************************************************************************
@@ -1065,6 +1085,12 @@ int __ubmodem_reinitialize_gprs(struct ubmodem_s *modem);
 int __ubmodem_check_cmee_status(struct ubmodem_s *modem,
                                 modem_check_cmee_func_t callback_fn,
                                 void *callback_priv);
+
+/****************************************************************************
+ * Name: __ubmodem_seed_urandom
+ ****************************************************************************/
+
+void __ubmodem_seed_urandom(void *buf, size_t buflen);
 
 /****************************************************************************
  * Public Inline Functions

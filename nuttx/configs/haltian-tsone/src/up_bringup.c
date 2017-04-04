@@ -55,6 +55,7 @@
 #include <nuttx/board.h>
 #include <nuttx/sdio.h>
 #include <nuttx/mmcsd.h>
+#include <nuttx/random.h>
 #ifdef CONFIG_SYSTEM_USBMSC
 #include <nuttx/usb/usbmsc.h>
 #endif
@@ -107,13 +108,19 @@ struct thread_params_s
  * Private Data
  ****************************************************************************/
 
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+#ifdef CONFIG_BOARD_ENTROPY_POOL
+struct entropy_pool_s board_entropy_pool __attribute__((section(".nuttx.randomdata")));
+#endif
+
 FAR struct spi_dev_s *spi_mmcsd;
 FAR struct spi_dev_s *spi_oled;
 
 #ifdef CONFIG_USBDEV_COMPOSITE
-
 struct composite_state_s g_composite;
-
 #endif
 
 /****************************************************************************

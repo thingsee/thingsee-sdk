@@ -121,7 +121,7 @@ static int publish_measurements(struct hts221 *hts221)
 
           if (handle_cause_event(cause, &timestamp))
             {
-              break; /* state changing. */
+              return OK; /* state changing, clients list released. */
             }
         }
 

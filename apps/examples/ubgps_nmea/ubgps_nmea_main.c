@@ -227,7 +227,10 @@ int gpsnmea_main(int argc, char *argv[])
       ret = poll(pfds, 1, timeout_ms);
       if (ret < 0)
         {
-          fprintf(stderr, "gpsnmea: poll failed, %d\n", ret);
+          if (errno == EAGAIN)
+            usleep(1000);
+          else
+            fprintf(stderr, "gpsnmea: poll failed, %d\n", ret);
           continue;
         }
 

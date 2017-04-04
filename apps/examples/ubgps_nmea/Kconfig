@@ -6,6 +6,5 @@
 config EXAMPLES_UBGPS_NMEA
 	bool "u-blox GPS NMEA console output util"
 	default n
-	depends on NET
 	---help---
 		Enable ubgps NMEA to console util

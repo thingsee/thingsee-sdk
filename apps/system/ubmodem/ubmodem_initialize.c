@@ -159,6 +159,7 @@ struct ubmodem_s *ubmodem_initialize(const struct ubmodem_hw_ops_s *hw_ops,
 
   modem->creg_timer_id = -1;
   modem->poweroff_timer = -1;
+  modem->gprs_reattempt_timer_id = -1;
 #ifndef CONFIG_UBMODEM_DISABLE_CELLLOCATE
   modem->cell_locate_timer_id = -1;
 #endif

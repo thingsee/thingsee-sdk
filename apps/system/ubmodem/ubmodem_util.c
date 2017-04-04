@@ -340,3 +340,22 @@ int __ubmodem_check_cmee_status(struct ubmodem_s *modem,
 
   return OK;
 }
+
+/****************************************************************************
+ * Name: __ubmodem_seed_urandom
+ ****************************************************************************/
+
+void __ubmodem_seed_urandom(void *buf, size_t buflen)
+{
+  int fd;
+
+  fd = open("/dev/urandom", O_WRONLY);
+  if (fd < 0)
+    fd = open("/dev/random", O_WRONLY);
+
+  if (fd >= 0)
+    {
+      (void)write(fd, buf, buflen);
+      close(fd);
+    }
+}

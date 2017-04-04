@@ -75,7 +75,7 @@ typedef struct
   char *device_auth_token;
   char *accept_version;
   bool use_human_readable_senseid:1;
-  bool merge_gps_lan_lot:1;
+  bool merge_gps_lat_lon:1;
   bool is_bucket_created:1;
 }inst_cloud_params_s;
 
@@ -238,7 +238,7 @@ static int inst_parse_cloud_params(const char * const connectors)
   uint32_t connid = 1;
   int ret = ERROR;
   bool use_human_sid = true;
-  bool merge_gps_lan_lot = false;
+  bool merge_gps_lat_lon = false;
 
   DEBUGASSERT(connectors);
 
@@ -295,8 +295,8 @@ static int inst_parse_cloud_params(const char * const connectors)
   /* Optional settings */
   (void)conn_init_boolean_from_json(&service, "useHumanSenseID", &use_human_sid);
   ts_context.cloud_params.use_human_readable_senseid = use_human_sid;
-  (void)conn_init_boolean_from_json(&service, "mergeLatLon", &merge_gps_lan_lot);
-  ts_context.cloud_params.merge_gps_lan_lot = merge_gps_lan_lot;
+  (void)conn_init_boolean_from_json(&service, "mergeLatLon", &merge_gps_lat_lon);
+  ts_context.cloud_params.merge_gps_lat_lon = merge_gps_lat_lon;
 
   ts_context.con.port = DEFAULT_PORT;
   port = cJSON_GetObjectItem(arrayitem, "port");
@@ -565,7 +565,7 @@ inst_create_workflow_context(struct ts_payload **payloads,
           cJSON_AddNumberToObject(varvals, EPOCH, ts_dsec * 1e-1);
         }
 
-      if (ts_context.cloud_params.merge_gps_lan_lot &&
+      if (ts_context.cloud_params.merge_gps_lat_lon &&
           (sense->sId == SENSE_ID_LATITUDE ||
            sense->sId == SENSE_ID_LONGITUDE))
         {
@@ -573,7 +573,10 @@ inst_create_workflow_context(struct ts_payload **payloads,
             {
               if (latitude_varvals)
                 {
-                  cJSON_AddItemToArray(root, latitude_varvals);
+                  /* Remove previous lone latitude. We do not want these in
+                   * merge lat/lon mode. */
+
+                  cJSON_Delete(latitude_varvals);
                   latitude_varvals = NULL;
                 }
 
@@ -587,7 +590,10 @@ inst_create_workflow_context(struct ts_payload **payloads,
             {
               if (longitude_varvals)
                 {
-                  cJSON_AddItemToArray(root, longitude_varvals);
+                  /* Remove previous lone longitude. We do not want these in
+                   * merge lat/lon mode. */
+
+                  cJSON_Delete(longitude_varvals);
                   longitude_varvals = NULL;
                 }
 
@@ -605,9 +611,12 @@ inst_create_workflow_context(struct ts_payload **payloads,
 
               if (memcmp(&lon_ts, &lat_ts, sizeof(lat_ts)) != 0)
                 {
-                  cJSON_AddItemToArray(root, longitude_varvals);
+                  /* Remove mismatching longitude&latitude. We do not want
+                   * these in merge lat/lon mode. */
+
+                  cJSON_Delete(longitude_varvals);
                   longitude_varvals = NULL;
-                  cJSON_AddItemToArray(root, latitude_varvals);
+                  cJSON_Delete(latitude_varvals);
                   latitude_varvals = NULL;
                 }
               else
@@ -656,12 +665,18 @@ inst_create_workflow_context(struct ts_payload **payloads,
 
   if (longitude_varvals)
     {
-      cJSON_AddItemToArray(root, longitude_varvals);
+      /* Remove left-over lone longitude. We do not want these in
+       * merge lat/lon mode. */
+
+      cJSON_Delete(longitude_varvals);
       longitude_varvals = NULL;
     }
   if (latitude_varvals)
     {
-      cJSON_AddItemToArray(root, latitude_varvals);
+      /* Remove left-over lone latitude. We do not want these in
+       * merge lat/lon mode. */
+
+      cJSON_Delete(latitude_varvals);
       latitude_varvals = NULL;
     }
 

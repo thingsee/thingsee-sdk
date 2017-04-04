@@ -1,4 +1,4 @@
-/************************************************************************************
+/****************************************************************************
  * include/nuttx/random.h
  *
  *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
@@ -32,7 +32,7 @@
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- ************************************************************************************/
+ ****************************************************************************/
 
 #ifndef __INCLUDE_NUTTX_RANDOM_H
 #define __INCLUDE_NUTTX_RANDOM_H
@@ -44,19 +44,19 @@
 #include <nuttx/config.h>
 #include <stddef.h>
 
+#include <sys/random.h> /* getrandom() */
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Randomness sources */
+/* TODO: Make this Kconfig CONFIG_CRYPTO_RANDOM_POOL */
 
-enum rnd_source_t {
-  RND_SRC_TIME,
-  RND_SRC_SENSOR,
-  RND_SRC_HW,      /* unique per HW UID or coming from factory line. */
-  RND_SRC_SW,      /* unique per SW version. */
-  RND_SRC_UI       /* buttons etc. user-visible interface elements. */
-};
+#define CONFIG_CRYPTO_RANDOM_POOL 1
+
+/* in 32-bit integers, must be power of two */
+
+#define ENTROPY_POOL_SIZE        128
 
 #define add_sensor_randomness(x) up_rngaddint(RND_SRC_SENSOR, (x))
 #define add_time_randomness(x)   up_rngaddint(RND_SRC_TIME, (x))
@@ -66,16 +66,50 @@ enum rnd_source_t {
 
 /* Allow above macros to always exist in source without ifdefs */
 
-#ifndef CONFIG_DEV_RANDOM
-#  define up_rngaddint(k, x)
-#  define up_rngaddentropy(buf, n)
+#ifndef CONFIG_CRYPTO_RANDOM_POOL
+#  define up_rngaddint(k, x)            ((void)(k),(void)(x))
+#  define up_rngaddentropy(buf, n)      ((void)(buf),(void)(x))
+#endif
+
+/****************************************************************************
+ * Public Type Definitions
+ ****************************************************************************/
+
+/* Entropy pool structure */
+
+struct entropy_pool_s
+{
+  uint32_t pool[ENTROPY_POOL_SIZE];
+};
+
+/* Randomness sources */
+
+enum rnd_source_t
+{
+  RND_SRC_TIME,
+  RND_SRC_SENSOR,
+  RND_SRC_HW,      /* unique per HW UID or coming from factory line. */
+  RND_SRC_SW,      /* unique per SW version. */
+  RND_SRC_UI       /* buttons etc. user-visible interface elements. */
+};
+
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+#ifdef CONFIG_BOARD_ENTROPY_POOL
+/* Entropy pool structure can be provided by board source. Use for this is,
+ * for example, allocate entropy pool from special area of RAM which content
+ * is kept over system reset. */
+
+extern struct entropy_pool_s board_entropy_pool;
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#ifdef CONFIG_DEV_RANDOM
+#ifdef CONFIG_CRYPTO_RANDOM_POOL
 
 /****************************************************************************
  * Function: getrandom
@@ -97,7 +131,7 @@ enum rnd_source_t {
  *
  ****************************************************************************/
 
-void getrandom(void *bytes, size_t nbytes);
+void getrandom(FAR void *bytes, size_t nbytes);
 
 /****************************************************************************
  * Function: up_rngaddint
@@ -132,15 +166,29 @@ void up_rngaddint(enum rnd_source_t kindof, int val);
  *
  ****************************************************************************/
 
-void up_rngaddentropy(const uint32_t *buf, size_t n);
+void up_rngaddentropy(FAR const uint32_t *buf, size_t n);
 
 /****************************************************************************
- * Function: up_rnginitialize
+ * Function: up_rngreseed
+ *
+ * Description:
+ *   Force reseeding random number generator from entropy pool
+ *
  ****************************************************************************/
 
-void up_rnginitialize(void);
+void up_rngreseed(void);
 
-#endif /* CONFIG_DEV_RANDOM */
+/****************************************************************************
+ * Function: up_randompool_initialize
+ *
+ * Description:
+ *   Initialize entropy pool and random number generator
+ *
+ ****************************************************************************/
+
+void up_randompool_initialize(void);
+
+#endif /* CONFIG_CRYPTO_RANDOM_POOL */
 
 #endif /* __INCLUDE_NUTTX_RANDOM_H */
 

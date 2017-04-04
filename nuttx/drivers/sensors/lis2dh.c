@@ -399,9 +399,9 @@ static ssize_t lis2dh_read(FAR struct file *filep, FAR char *buffer, size_t bufl
 
           fifo_num_samples = (buf & ST_LIS2DH_FIFOSR_NUM_SAMP_MASK) + 1;
 
-          if (fifo_num_samples > readcount)
+          if (fifo_num_samples > (readcount - ptr->header.meas_count))
             {
-              fifo_num_samples = readcount;
+              fifo_num_samples = (readcount - ptr->header.meas_count);
             }
 
           ptr->header.meas_count +=
@@ -511,12 +511,16 @@ static ssize_t lis2dh_write(FAR struct file *filep, FAR const char *buffer,
 
 static int lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 {
-  FAR struct inode          *inode = filep->f_inode;
-  FAR struct lis2dh_dev_s   *priv  = inode->i_private;
+  FAR struct inode *inode;
+  FAR struct lis2dh_dev_s *priv;
   int ret;
   uint8_t buf;
 
   DEBUGASSERT(filep != NULL);
+  inode = filep->f_inode;
+
+  DEBUGASSERT(inode && inode->i_private);
+  priv = (FAR struct lis2dh_dev_s *)inode->i_private;
 
   ret = sem_wait(&priv->devsem);
   if (ret < 0)
@@ -550,7 +554,7 @@ static int lis2dh_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
           ret = -EIO;
         }
 
-      lis2dh_clear_interrupts(priv, LIS2DH_INT2);
+      lis2dh_clear_interrupts(priv, LIS2DH_INT1);
     }
     break;
 

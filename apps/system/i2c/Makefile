@@ -40,8 +40,15 @@ include $(APPDIR)/Make.defs
 # I2C tool
 
 ASRCS =
-CSRCS = i2c_bus.c i2c_common.c i2c_dev.c i2c_get.c i2c_set.c i2c_verf.c
-MAINSRC = i2c_main.c
+ifeq ($(CONFIG_NUTTX_SDK_THINGSEE_ONE),y)
+  CSRCS = oldapi/i2c_bus.c oldapi/i2c_common.c oldapi/i2c_dev.c
+  CSRCS += oldapi/i2c_get.c oldapi/i2c_set.c oldapi/i2c_verf.c
+  MAINSRC = oldapi/i2c_main.c
+else
+  CSRCS   = i2c_bus.c i2c_common.c i2c_dev.c i2c_get.c i2c_set.c
+  CSRCS  += i2c_devif.c i2c_verf.c
+  MAINSRC = i2c_main.c
+endif
 
 AOBJS = $(ASRCS:.S=$(OBJEXT))
 COBJS = $(CSRCS:.c=$(OBJEXT))

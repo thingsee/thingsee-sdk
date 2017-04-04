@@ -64,7 +64,11 @@
 #include <apps/netutils/dnsclient.h>
 #include <apps/netutils/netlib.h>
 
-#include <nuttx/random.h>
+#include <sys/random.h>
+
+#ifdef CONFIG_NETDB_DNSCLIENT
+#include <nuttx/net/dns.h>
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -1074,6 +1078,14 @@ int dns_setservers(FAR const struct in_addr *dnsserver1,
       g_dns.servers[i].sin_addr.s_addr = servers[i]->s_addr;
 #endif
     }
+
+#ifdef CONFIG_NETDB_DNSCLIENT
+  if (nservers)
+    {
+      dns_add_nameserver((const struct sockaddr *)&g_dns.servers[0],
+                         sizeof(g_dns.servers[0]));
+    }
+#endif
 
   dns_unlock();
 

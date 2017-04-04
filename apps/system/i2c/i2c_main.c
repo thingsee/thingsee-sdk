@@ -53,14 +53,6 @@
 #include "i2ctool.h"
 
 /****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-/****************************************************************************
- * Private Types
- ****************************************************************************/
-
-/****************************************************************************
  * Private Function Prototypes
  ****************************************************************************/
 
@@ -290,6 +282,7 @@ int i2c_parse(FAR struct i2ctool_s *i2ctool, int argc, char *argv[])
           break;
         }
     }
+
   newargs[nargs] = NULL;
 
   /* Then execute the command */
@@ -359,12 +352,14 @@ int i2c_main(int argc, char *argv[])
 {
   /* Verify settings */
 
-  if (g_i2ctool.bus < CONFIG_I2CTOOL_MINBUS || g_i2ctool.bus > CONFIG_I2CTOOL_MAXBUS)
+  if (g_i2ctool.bus < CONFIG_I2CTOOL_MINBUS ||
+      g_i2ctool.bus > CONFIG_I2CTOOL_MAXBUS)
     {
       g_i2ctool.bus = CONFIG_I2CTOOL_MINBUS;
     }
 
-  if (g_i2ctool.addr < CONFIG_I2CTOOL_MINADDR || g_i2ctool.addr > CONFIG_I2CTOOL_MAXADDR)
+  if (g_i2ctool.addr < CONFIG_I2CTOOL_MINADDR ||
+      g_i2ctool.addr > CONFIG_I2CTOOL_MAXADDR)
     {
       g_i2ctool.addr = CONFIG_I2CTOOL_MINADDR;
     }
@@ -384,7 +379,7 @@ int i2c_main(int argc, char *argv[])
       g_i2ctool.freq = CONFIG_I2CTOOL_DEFFREQ;
     }
 
-  /* Parse process the command line */
+  /* Parse and process the command line */
 
   i2c_setup(&g_i2ctool);
   (void)i2c_parse(&g_i2ctool, argc, argv);
@@ -431,8 +426,9 @@ ssize_t i2ctool_write(FAR struct i2ctool_s *i2ctool, FAR const void *buffer, siz
   ret = fwrite(buffer, 1, nbytes, OUTSTREAM(i2ctool));
   if (ret < 0)
     {
-      dbg("[%d] Failed to send buffer: %d\n", OUTFD(i2ctool), errno);
+      _err("ERROR: [%d] Failed to send buffer: %d\n", OUTFD(i2ctool), errno);
     }
+
   return ret;
 }
 

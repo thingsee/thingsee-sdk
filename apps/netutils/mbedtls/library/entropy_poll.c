@@ -72,7 +72,7 @@ int mbedtls_platform_entropy_poll( void *data, unsigned char *output, size_t len
 /* _WIN32 && !EFIX64 && !EFI32 */
 #elif defined(MBEDTLS_TARGET_NUTTX)
 
-#include <nuttx/random.h>
+#include <sys/random.h>
 
 int mbedtls_platform_entropy_poll( void *data,
                            unsigned char *output, size_t len, size_t *olen )

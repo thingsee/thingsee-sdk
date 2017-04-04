@@ -33,7 +33,11 @@ GDB_LOGFILE="$LOGDIR/log.gdb.txt"
 OPENOCD="openocd"
 
 # Configuration for OpenOCD / target CPU & JTAG interface selection
-openocd_cfg="-f board/stm32f7discovery.cfg"
+if [ "x$OPENOCD_CFG" = "x" ]; then
+  openocd_cfg="-f board/stm32f7discovery.cfg"
+else
+  openocd_cfg="$OPENOCD_CFG"
+fi
 
 # OpenOCD logfile
 OPENOCD_LOGFILE="$LOGDIR/log.openocd.txt"

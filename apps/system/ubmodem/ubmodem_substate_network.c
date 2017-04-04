@@ -80,6 +80,20 @@ static const struct at_cmd_def_s cmd_ATpCOPS =
   .timeout_dsec = MODEM_CMD_NETWORK_TIMEOUT,
 };
 
+static const struct at_cmd_def_s cmd_ATpCOPS_low_pm_activity =
+{
+  .name         = "+COPS",
+  .resp_format  =
+    (const uint8_t[]){
+      RESP_FMT_INT8,
+      RESP_FMT_INT8,
+      RESP_FMT_QUOTED_STRING,
+    },
+  .resp_num     = 3,
+  .timeout_dsec = MODEM_CMD_NETWORK_TIMEOUT,
+  .flag_pm_low_activity = true,
+};
+
 static const struct at_cmd_def_s cmd_ATpCFUN =
 {
   .name         = "+CFUN",
@@ -157,7 +171,7 @@ static int network_reregister_timer_handler(struct ubmodem_s *modem,
 
       modem->creg_timer_id = -1;
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
     }
 
   /* Issue new task. We cannot issue new state machine work from
@@ -236,7 +250,7 @@ static void monitor_urc_pCREG_handler(struct ubmodem_s *modem,
 
       modem->creg_timer_id = -1;
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
     }
 
   switch (val)
@@ -256,7 +270,7 @@ static void monitor_urc_pCREG_handler(struct ubmodem_s *modem,
 
         modem->creg_timer_id = ret;
 
-        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
 
         return;
 #else
@@ -271,9 +285,12 @@ static void monitor_urc_pCREG_handler(struct ubmodem_s *modem,
 
         /* Unregister +CREG URC */
 
-        __ubparser_unregister_response_handler(&modem->parser,
-                                               urc_ATpCREG.name);
-        modem->creg_urc_registered = false;
+        if (modem->creg_urc_registered)
+          {
+            __ubparser_unregister_response_handler(&modem->parser,
+                                                   urc_ATpCREG.name);
+            modem->creg_urc_registered = false;
+          }
 
         /* Issue new task. We cannot issue new state machine work from
          * URC 'context' as other work might be active in main state
@@ -281,6 +298,11 @@ static void monitor_urc_pCREG_handler(struct ubmodem_s *modem,
          * state. */
 
         __ubmodem_add_task(modem, retry_network_through_sim, NULL);
+
+#ifdef CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_NO_RECONNECT
+        modem->testing_block_network_reconnect =
+            CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_NO_RECONNECT;
+#endif
 
         return;
     }
@@ -331,7 +353,7 @@ static int network_register_timeout_handler(struct ubmodem_s *modem,
 
       modem->creg_timer_id = -1;
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
     }
 
   (void)clock_gettime(CLOCK_MONOTONIC, &curr_ts);
@@ -347,7 +369,7 @@ static int network_register_timeout_handler(struct ubmodem_s *modem,
 
       modem->creg_timer_id = ret;
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
 
       return OK;
     }
@@ -402,7 +424,7 @@ static void retry_ATpCOPS_handler(struct ubmodem_s *modem,
    * Response handler for retried AT+COPS=0
    */
 
-  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpCOPS);
+  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpCOPS_low_pm_activity);
 
   if (status == RESP_STATUS_CME_ERROR)
     {
@@ -436,7 +458,7 @@ static void retry_ATpCOPS_handler(struct ubmodem_s *modem,
 
   modem->creg_timer_id = ret;
 
-  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
 }
 
 static int network_retry_registration_timer_handler(struct ubmodem_s *modem,
@@ -454,7 +476,7 @@ static int network_retry_registration_timer_handler(struct ubmodem_s *modem,
 
       modem->creg_timer_id = -1;
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
     }
 
   DEBUGASSERT(
@@ -468,7 +490,7 @@ static int network_retry_registration_timer_handler(struct ubmodem_s *modem,
     }
   else
     {
-      err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS,
+      err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS_low_pm_activity,
                                retry_ATpCOPS_handler, sub, "%s", "=0");
       MODEM_DEBUGASSERT(modem, err == OK);
     }
@@ -569,7 +591,7 @@ static void registration_urc_pCREG_handler(struct ubmodem_s *modem,
 
               modem->creg_timer_id = -1;
 
-              ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+              ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
             }
 
           /* Keep retrying automatic network registration until timeout. */
@@ -584,7 +606,7 @@ static void registration_urc_pCREG_handler(struct ubmodem_s *modem,
 
           modem->creg_timer_id = ret;
 
-          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
         }
 
       return;
@@ -667,7 +689,7 @@ static int network_start_register_handler(struct ubmodem_s *modem,
 
       modem->creg_timer_id = -1;
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
     }
 
   /* Keep retrying automatic network registration until timeout. */
@@ -675,7 +697,7 @@ static int network_start_register_handler(struct ubmodem_s *modem,
   sub->network_state = NETWORK_SETUP_RETRYING_NETWORK_REGISTRATION;
   sub->received_creg_while_retrying = -1;
 
-  err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS,
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS_low_pm_activity,
                            retry_ATpCOPS_handler, sub, "%s", "=0");
   MODEM_DEBUGASSERT(modem, err == OK);
   return OK;
@@ -726,7 +748,7 @@ static void disable_ATpCOPS_handler(struct ubmodem_s *modem,
 
   modem->creg_timer_id = ret;
 
-  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
 }
 
 static void ATpCFUN_handler(struct ubmodem_s *modem,
@@ -823,7 +845,7 @@ static void setup_network_cleanup(struct ubmodem_s *modem)
 
       modem->creg_timer_id = -1;
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
     }
 
   if (modem->creg_urc_registered && !sub->keep_creg_urc)
@@ -965,6 +987,19 @@ void __ubmodem_substate_start_setup_network(struct ubmodem_s *modem)
   memset(sub, 0, sizeof(*sub));
   sub->network_state = NETWORK_SETUP_ENABLING_CREG;
 
+#ifdef CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_NO_RECONNECT
+  /* For testing purposes, block network reconnections. */
+
+  if (modem->testing_block_network_reconnect > 0)
+    {
+      modem->testing_block_network_reconnect--;
+
+      __ubmodem_level_transition_failed(modem,
+          "Testing: blocked network reconnection");
+      return;
+    }
+#endif
+
   /* Setup sub-state clean-up function. */
 
   modem->substate_cleanup_fn = setup_network_cleanup;
@@ -1006,7 +1041,7 @@ void __ubmodem_network_cleanup(struct ubmodem_s *modem)
 
           modem->creg_timer_id = -1;
 
-          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+          ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
         }
 
       if (modem->creg_urc_registered)

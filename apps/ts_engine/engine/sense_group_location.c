@@ -113,8 +113,8 @@ struct gps_s
 
   struct
   {
-    bool gps_started :1;
-    bool initialized :1;
+    bool gps_started:1;
+    bool initialized:1;
   };
 
   struct
@@ -288,6 +288,13 @@ static void poweroff_and_start_wake_timer(gps_state_t current_state,
     {
       ts_core_timer_stop(g_gps.wakeup_timer);
       g_gps.wakeup_timer = -1;
+    }
+
+  if (wake_in_secs == INT32_MAX)
+    {
+      /* Infinity, no wake. */
+
+      return;
     }
 
   /* Start wake timer */
@@ -609,29 +616,35 @@ gps_cb (void const * const e, void * const priv)
 
             if (handle_cause_event (cause, &curr_real_ts))
               {
-                break;
+                eng_dbg("state change: clients released, "
+                        "gps callback unregister -> exit fast.\n");
+                return;
               }
           }
 
-        /* Software power-save:
-         *  - Check all senses and how long time till next location
-         *    is expected (depending on 'last_update' and interval).
-         *  - If next location is expected over 1 minute from now,
-         *    turn off GPS and launch idle-timer with expiry in
-         *    'expected_time - 20' seconds.
-         */
-
-        next_secs = get_secs_to_next_expected(&curr_ts);
-        eng_dbg("Expecting next GPS location in %d seconds.\n", next_secs);
-
-        if (next_secs >= GPS_ONOFF_POWERSAVE_MIN_INTERVAL_SECS)
+        if (sq_peek(&g_gps.clients) != NULL)
           {
-            next_secs -= GPS_ONOFF_POWERSAVE_WAKE_ADVANCE_SECS;
+            /* Software power-save:
+             *  - Check all senses and how long time till next location
+             *    is expected (depending on 'last_update' and interval).
+             *  - If next location is expected over 1 minute from now,
+             *    turn off GPS and launch idle-timer with expiry in
+             *    'expected_time - 20' seconds.
+             */
 
-            eng_dbg ("GPS Software power-save, power-off GPS and "
-                     "wake-up in %d seconds.\n", (int)next_secs);
+            next_secs = get_secs_to_next_expected(&curr_ts);
+            eng_dbg("Expecting next GPS location in %d seconds.\n", next_secs);
 
-            poweroff_and_start_wake_timer(ts_gps_get_state(), next_secs);
+            if (next_secs >= GPS_ONOFF_POWERSAVE_MIN_INTERVAL_SECS &&
+                next_secs != INT32_MAX)
+              {
+                next_secs -= GPS_ONOFF_POWERSAVE_WAKE_ADVANCE_SECS;
+
+                eng_dbg ("GPS Software power-save, power-off GPS and "
+                         "wake-up in %d seconds.\n", (int)next_secs);
+
+                poweroff_and_start_wake_timer(ts_gps_get_state(), next_secs);
+              }
           }
 
         break;

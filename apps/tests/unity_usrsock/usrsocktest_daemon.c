@@ -61,6 +61,10 @@
  * Definitions
  ****************************************************************************/
 
+#ifndef dbg
+  #define dbg _warn
+#endif
+
 #define TEST_SOCKET_SOCKID_BASE 10000U
 #define TEST_SOCKET_COUNT 8
 
@@ -655,7 +659,7 @@ static int sendto_request(int fd, FAR struct daemon_priv_s *priv,
 
           /* Debug print */
 
-          dbg("got %d bytes of data: '%*s'\n", sendbuflen, sendbuflen, sendbuf);
+          dbg("got %d bytes of data: '%.*s'\n", sendbuflen, sendbuflen, sendbuf);
         }
     }
   else

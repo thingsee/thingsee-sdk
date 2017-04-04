@@ -6,8 +6,12 @@
 if ARCH_BOARD_HALTIAN_TSONE_B15
 
 config BOARD_CRASHDUMP
-        bool "Enable Board level logging of crash dumps"
-        default y
+	bool "Enable Board level logging of crash dumps"
+	default y
+
+config BOARD_ENTROPY_POOL
+	bool "Enable Board level entropy pool storage"
+	default y
 
 config BOARD_HSE_XTAL_FREQUENCY
 	int "HSE crystal frequency in Mhz"

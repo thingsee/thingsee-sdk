@@ -172,3 +172,9 @@ int avsprintf(FAR char **ptr, const char *fmt, va_list ap)
   *ptr = buf;
   return nbytes;
 }
+
+/* correct name for avsprintf is vasprintf, fixed in nuttx-2017. */
+int vasprintf(FAR char **ptr, const char *fmt, va_list ap)
+{
+  return avsprintf(ptr, fmt, ap);
+}

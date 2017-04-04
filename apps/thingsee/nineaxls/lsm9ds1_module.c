@@ -1,5 +1,5 @@
 /****************************************************************************
- * apps/thingsee/nineaxls/lsm9ds1_module.c 
+ * apps/thingsee/nineaxls/lsm9ds1_module.c
  *
  *   Copyright (C) 2015 Haltian Ltd. All rights reserved.
  *   Author: Juha Niskanen <juha.niskanen@haltian.com>
@@ -659,6 +659,8 @@ int nineax_lsm9ds1_load_bias_from_eeprom(int16_t bias[static 9])
 {
   int ret;
   char buf[TS_DEVICE_PROD_DATA_LSM9DS1_REF_SIZE];
+  int tmp[9];
+  int i;
 
   ret = ts_device_prod_data_get_entry("lsm9ds1_ref_bias", buf, sizeof(buf));
   if (!ret)
@@ -667,13 +669,18 @@ int nineax_lsm9ds1_load_bias_from_eeprom(int16_t bias[static 9])
       return ERROR;
     }
 
-  ret = sscanf(buf, "[%hd,%hd,%hd,%hd,%hd,%hd,%hd,%hd,%hd,%hd]",
-               &bias[0], &bias[1], &bias[2], &bias[3], &bias[4], &bias[5],
-               &bias[6], &bias[7], &bias[8]);
+  ret = sscanf(buf, "[%d,%d,%d,%d,%d,%d,%d,%d,%d,%d]",
+               &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5],
+               &tmp[6], &tmp[7], &tmp[8]);
   if (ret != 9)
     {
       lldbg("Bad bias value in eeprom, ret = %d\n", ret);
       return ERROR;
+    }
+
+  for (i = 0; i < 9; i++)
+    {
+      bias[i] = tmp[i];
     }
 
   ret = nineax_lsm9ds1_write_bias(bias);

@@ -69,6 +69,8 @@
 #define UPSND_CHECK_RETRY_DELAY_SECS 10
 #define UPSND_CHECK_RETRIES 6
 
+#define GPRS_REATTEMPT_DELAY_SECS 5
+
 /****************************************************************************
  * Type Declarations
  ****************************************************************************/
@@ -203,6 +205,92 @@ static int retry_upsnd_check(struct ubmodem_s *modem, const int timer_id,
  * Private Functions
  ****************************************************************************/
 
+#ifdef CONFIG_UBMODEM_TEST_GPRS_DISCONNECT_SECS
+
+static void
+unexpected_gprs_disconnection_ATpCGATT_handler(struct ubmodem_s *modem,
+    const struct at_cmd_def_s *cmd, const struct at_resp_info_s *info,
+    const uint8_t *resp_stream, size_t stream_len, void *priv)
+{
+  /*
+   * Response handler for 'AT+CGATT=0'
+   */
+
+  MODEM_DEBUGASSERT(modem, cmd == &cmd_ATpCGATT);
+
+  __ubmodem_change_state(modem, MODEM_STATE_WAITING);
+}
+
+static int unexpected_gprs_disconnection(struct ubmodem_s *modem, void *priv)
+{
+  int err;
+
+  if (modem->level < UBMODEM_LEVEL_GPRS)
+    return ERROR;
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCGATT,
+                           unexpected_gprs_disconnection_ATpCGATT_handler,
+                           NULL, "%s", "=0");
+  MODEM_DEBUGASSERT(modem, err == OK);
+  return OK;
+}
+
+static int modem_disconnect_gprs_timer_handler(struct ubmodem_s *modem,
+                                               const int timer_id,
+                                               void * const arg)
+{
+  /* Add task to disconnect GPRS. */
+
+  return __ubmodem_add_task(modem, unexpected_gprs_disconnection, NULL);
+}
+
+#endif /* CONFIG_UBMODEM_TEST_GPRS_DISCONNECT_SECS */
+
+#ifdef CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_SECS
+
+static void
+unexpected_network_disconnection_ATpCOPS_handler(struct ubmodem_s *modem,
+    const struct at_cmd_def_s *cmd, const struct at_resp_info_s *info,
+    const uint8_t *resp_stream, size_t stream_len, void *priv)
+{
+  /*
+   * Response handler for 'AT+COPS=2'
+   */
+
+  __ubmodem_change_state(modem, MODEM_STATE_WAITING);
+}
+
+static int unexpected_network_disconnection(struct ubmodem_s *modem, void *priv)
+{
+  static const struct at_cmd_def_s cmd_ATpCOPS =
+  {
+    .name         = "+COPS",
+    .resp_num     = 0,
+    .timeout_dsec = MODEM_CMD_NETWORK_TIMEOUT,
+  };
+  int err;
+
+  if (modem->level < UBMODEM_LEVEL_NETWORK)
+    return ERROR;
+
+  err = __ubmodem_send_cmd(modem, &cmd_ATpCOPS,
+                           unexpected_network_disconnection_ATpCOPS_handler,
+                           NULL, "%s", "=2");
+  MODEM_DEBUGASSERT(modem, err == OK);
+  return OK;
+}
+
+static int modem_disconnect_network_timer_handler(struct ubmodem_s *modem,
+                                                  const int timer_id,
+                                                  void * const arg)
+{
+  /* Add task to disconnect network. */
+
+  return __ubmodem_add_task(modem, unexpected_network_disconnection, NULL);
+}
+
+#endif /* CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_SECS */
+
 static void check_ipconfig_ATpUPSDA_handler(struct ubmodem_s *modem,
                                             const struct at_cmd_def_s *cmd,
                                             const struct at_resp_info_s *info,
@@ -332,6 +420,23 @@ static void check_ipconfig_ATpUPSDA_handler(struct ubmodem_s *modem,
                               &sub->ipconfig.ipcfg,
                               sizeof(sub->ipconfig.ipcfg));
 
+#ifdef CONFIG_UBMODEM_TEST_GPRS_DISCONNECT_SECS
+      /* Testing/simulation for unexpected GPRS disconnect. */
+
+      err = __ubmodem_set_timer(modem,
+              (CONFIG_UBMODEM_TEST_GPRS_DISCONNECT_SECS) * 1000,
+              &modem_disconnect_gprs_timer_handler, NULL);
+      MODEM_DEBUGASSERT(modem, err != ERROR);
+#endif
+#ifdef CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_SECS
+      /* Testing/simulation for unexpected network disconnect. */
+
+      err = __ubmodem_set_timer(modem,
+              (CONFIG_UBMODEM_TEST_NETWORK_DISCONNECT_SECS) * 1000,
+              &modem_disconnect_network_timer_handler, NULL);
+      MODEM_DEBUGASSERT(modem, err != ERROR);
+#endif
+
       return;
     }
 
@@ -347,6 +452,9 @@ static int reattempt_gprs_connection(struct ubmodem_s *modem, void *priv)
 {
   ubdbg("\n");
 
+  if (modem->level < UBMODEM_LEVEL_GPRS)
+    return ERROR;
+
   /* Go to network enabled level from current and then retry current. */
 
   __ubmodem_retry_current_level(modem, UBMODEM_LEVEL_NETWORK);
@@ -355,6 +463,24 @@ static int reattempt_gprs_connection(struct ubmodem_s *modem, void *priv)
    * state machine. */
 
   return ERROR;
+}
+
+static int reattempt_gprs_connection_timer_handler(struct ubmodem_s *modem,
+                                                   const int timer_id,
+                                                   void * const arg)
+{
+  if (modem->gprs_reattempt_timer_id >= 0)
+    {
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
+      modem->gprs_reattempt_timer_id = -1;
+    }
+
+  if (modem->level < UBMODEM_LEVEL_GPRS)
+    return OK;
+
+  /* Add task to start reconnection. */
+
+  return __ubmodem_add_task(modem, reattempt_gprs_connection, NULL);
 }
 
 static void urc_pUUPSDD_handler(struct ubmodem_s *modem,
@@ -393,15 +519,29 @@ static void urc_pUUPSDD_handler(struct ubmodem_s *modem,
    * PSD connection lost.
    */
 
-  /* Unregister +UUPSDD URC */
+  if (modem->uupsdd_urc_registered)
+    {
+      /* Unregister +UUPSDD URC */
 
-  __ubparser_unregister_response_handler(&modem->parser,
-                                         cmd_ATpUUPSDD_urc.name);
-  modem->uupsdd_urc_registered = false;
+      __ubparser_unregister_response_handler(&modem->parser,
+                                             cmd_ATpUUPSDD_urc.name);
+      modem->uupsdd_urc_registered = false;
+    }
 
-  /* Add task to start reconnection. */
+  /* Delay start of reconnection (might get more URCs right after this one,
+   * and they may take priority over this one). */
 
-  __ubmodem_add_task(modem, reattempt_gprs_connection, NULL);
+  if (modem->gprs_reattempt_timer_id >= 0)
+    {
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
+      __ubmodem_remove_timer(modem, modem->gprs_reattempt_timer_id);
+    }
+
+  ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
+  modem->gprs_reattempt_timer_id = __ubmodem_set_timer(modem,
+                            (GPRS_REATTEMPT_DELAY_SECS) * 1000,
+                            &reattempt_gprs_connection_timer_handler, NULL);
+  MODEM_DEBUGASSERT(modem, modem->gprs_reattempt_timer_id != ERROR);
 }
 
 static void activate_ATpUPSDA_handler(struct ubmodem_s *modem,
@@ -970,6 +1110,13 @@ void __ubmodem_gprs_cleanup(struct ubmodem_s *modem)
       __ubparser_unregister_response_handler(&modem->parser,
                                              cmd_ATpUUPSDD_urc.name);
       modem->uupsdd_urc_registered = false;
+    }
+
+  if (modem->gprs_reattempt_timer_id >= 0)
+    {
+      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
+      __ubmodem_remove_timer(modem, modem->gprs_reattempt_timer_id);
+      modem->gprs_reattempt_timer_id = -1;
     }
 
 #ifdef CONFIG_UBMODEM_USRSOCK

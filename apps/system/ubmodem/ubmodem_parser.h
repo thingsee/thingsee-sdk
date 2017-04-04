@@ -48,6 +48,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <strings.h>
 
 #include <apps/system/ubmodem.h>
 
@@ -131,6 +132,9 @@ struct at_cmd_def_s
   bool flag_errorcode:1;        /* Response is CME or CMS error */
   bool flag_plain:1;            /* Response is plain string line without
                                    response name. */
+  bool flag_pm_low_activity:1;  /* Command is marked with low PM activity
+                                   to allow deep-sleep while waiting for
+                                   result. */
 };
 
 /* AT response callback status codes */

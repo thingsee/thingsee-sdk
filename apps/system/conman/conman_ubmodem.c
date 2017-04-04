@@ -54,7 +54,7 @@
 #include <arch/board/board-device.h>
 #include <apps/system/ubmodem.h>
 #include <apps/netutils/dnsclient.h>
-#include <nuttx/random.h>
+#include <sys/random.h>
 
 #include "conman_dbg.h"
 #include "conman_internal.h"
@@ -95,6 +95,21 @@ static int process_sms_queue(struct conman_s *conman);
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+static void seed_urandom(void *buf, size_t buflen)
+{
+  int fd;
+
+  fd = open("/dev/urandom", O_WRONLY);
+  if (fd < 0)
+    fd = open("/dev/random", O_WRONLY);
+
+  if (fd >= 0)
+    {
+      (void)write(fd, buf, buflen);
+      close(fd);
+    }
+}
 
 #ifdef CONFIG_UBMODEM_SMS_ENABLED
 static void send_sms_cb(struct ubmodem_s *modem, bool sms_sent, void *priv)
@@ -293,8 +308,7 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
         snprintf(conman->ub.imei, sizeof(conman->ub.imei), "%s", data);
         conman_dbg("IMEI received: %s\n", conman->ub.imei);
 
-        up_rngaddentropy((const uint32_t *)conman->ub.imei,
-                         sizeof(conman->ub.imei) / sizeof(uint32_t));
+        seed_urandom(conman->ub.imei, sizeof(conman->ub.imei));
       }
     break;
   case UB_INFO_IMSI:
@@ -309,8 +323,7 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
         snprintf(conman->ub.imsi, sizeof(conman->ub.imsi), "%s", data);
         conman_dbg("IMSI received: %s\n", conman->ub.imsi);
 
-        up_rngaddentropy((const uint32_t *)conman->ub.imsi,
-                         sizeof(conman->ub.imsi) / sizeof(uint32_t));
+        seed_urandom(conman->ub.imsi, sizeof(conman->ub.imsi));
       }
     break;
   case UB_INFO_UDOPN:
@@ -325,8 +338,7 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
         snprintf(conman->ub.udopn, sizeof(conman->ub.udopn), "%s", data);
         conman_dbg("UDOPN received: %s\n", conman->ub.udopn);
 
-        up_rngaddentropy((const uint32_t *)conman->ub.udopn,
-                         sizeof(conman->ub.udopn) / sizeof(uint32_t));
+        seed_urandom(conman->ub.udopn, sizeof(conman->ub.udopn));
       }
     break;
   case UB_INFO_MCC_MNC:
@@ -341,8 +353,7 @@ static void ubmodem_info_callback(void *caller_data, const char *data, int datal
         snprintf(conman->ub.mcc_mnc, sizeof(conman->ub.mcc_mnc), "%s", data);
         conman_dbg("MCC_MNC received: %s\n", conman->ub.mcc_mnc);
 
-        up_rngaddentropy((const uint32_t *)conman->ub.mcc_mnc,
-                         sizeof(conman->ub.mcc_mnc) / sizeof(uint32_t));
+        seed_urandom(conman->ub.mcc_mnc, sizeof(conman->ub.mcc_mnc));
       }
     break;
   default:
@@ -1660,11 +1671,6 @@ int __conman_ubmodem_call_answer(struct conman_s *conman,
 
 int __conman_ubmodem_call_hangup(struct conman_s *conman)
 {
-  if (conman->ub.status != CONMAN_STATUS_ESTABLISHED)
-    {
-      return ERROR;
-    }
-
 #ifdef CONFIG_UBMODEM_VOICE
   ubmodem_voice_hangup(conman->ub.modem);
   return OK;
@@ -1691,11 +1697,6 @@ int __conman_ubmodem_call_hangup(struct conman_s *conman)
 int __conman_ubmodem_call_audioctl(struct conman_s *conman,
                                    const struct conman_msg_call_audioctl_s *ctl)
 {
-  if (conman->ub.status != CONMAN_STATUS_ESTABLISHED)
-    {
-      return ERROR;
-    }
-
 #ifdef CONFIG_UBMODEM_VOICE
   ubmodem_audio_setup(conman->ub.modem, ctl->audio_out_on, false);
   return OK;
@@ -1730,11 +1731,6 @@ int __conman_ubmodem_play_audio_resource(struct conman_s *conman,
     const struct conman_msg_play_audio_resource_s *ctl)
 {
   int ret = OK;
-
-  if (conman->ub.status != CONMAN_STATUS_ESTABLISHED)
-    {
-      return ERROR;
-    }
 
   switch (ctl->resource.type)
     {

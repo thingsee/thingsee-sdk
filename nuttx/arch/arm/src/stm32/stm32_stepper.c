@@ -2,7 +2,7 @@
  * arch/arm/src/stm32/stm32_stepper.c
  *
  *   Copyright (C) 2015-2017 Haltian Ltd. All rights reserved.
- *   Authors: Harri Luhtala <harri.luhtala@harri.luhtala@haltian.com>
+ *   Authors: Harri Luhtala <harri.luhtala@haltian.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -696,7 +696,8 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
 {
   uint16_t cr1;
   uint32_t frequency;
-  float    duration;
+  int32_t current_pos;
+  float duration;
 
   steppervdbg("->\n");
 
@@ -716,10 +717,11 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
   cr1 &= ~GTIM_CR1_CEN;
   stepper_putreg(priv, STM32_GTIM_CR1_OFFSET, cr1);
 
+  current_pos = (int32_t)getreg32(priv->position_bkreg);
+
   if (info->pos_type == POS_ABSOLUTE)
     {
-      duration = abs(info->position - getreg32(priv->position_bkreg)) /
-        (float)info->frequency;
+      duration = abs(info->position - current_pos) / (float)info->frequency;
       priv->target_pos = info->position;
     }
   else
@@ -730,8 +732,10 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
       priv->target_pos += info->position;
     }
 
-  priv->direction = priv->target_pos > getreg32(priv->position_bkreg)?
-    DIR_CW: DIR_CCW;
+  priv->direction = priv->target_pos > current_pos? DIR_CW: DIR_CCW;
+
+  steppervdbg("(%d->%d) dir: %u\n", current_pos, priv->target_pos,
+    priv->direction);
 
   if (duration > 0)
     {
@@ -739,8 +743,8 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
        * remaining steps.
        */
 
-      frequency = (uint32_t)(abs(priv->target_pos - getreg32(
-        priv->position_bkreg)) / duration);
+      frequency = (uint32_t)(abs(priv->target_pos - current_pos) /
+        duration);
 
       if (frequency < priv->min_freq)
         {
@@ -787,7 +791,9 @@ static int stepper_update(FAR struct stm32_stepper_s *priv,
 
 static int stepper_interrupt(struct stm32_stepper_s *priv)
 {
-  if (getreg32(priv->position_bkreg) != priv->target_pos)
+  int32_t current_pos = (int32_t)getreg32(priv->position_bkreg);
+
+  if (current_pos != priv->target_pos)
     {
       uint16_t cr1;
       uint32_t regval = stepper_getreg(priv, STM32_GTIM_SR_OFFSET);
@@ -800,12 +806,12 @@ static int stepper_interrupt(struct stm32_stepper_s *priv)
 
           if (priv->direction == DIR_CW)
             {
-              putreg32(getreg32(priv->position_bkreg) + 1, priv->position_bkreg);
+              putreg32(current_pos + 1, priv->position_bkreg);
               STEP_INDEX_CW;
             }
           else
             {
-              putreg32(getreg32(priv->position_bkreg) - 1, priv->position_bkreg);
+              putreg32(current_pos - 1, priv->position_bkreg);
               STEP_INDEX_CCW;
             }
 
@@ -1002,19 +1008,19 @@ static int stepper_shutdown(FAR struct stepper_lowerhalf_s *dev)
 {
   FAR struct stm32_stepper_s *priv = (FAR struct stm32_stepper_s *)dev;
   int32_t current_pos;
+  int32_t target_pos = priv->target_pos;
 
   steppervdbg("TIM%d\n", priv->timid);
-
-  current_pos = getreg32(priv->position_bkreg);
 
   /* Make sure that the output has been stopped */
 
   stepper_stop(dev);
 
-  if (current_pos != priv->target_pos)
+  current_pos = (int32_t)getreg32(priv->position_bkreg);
+
+  if (current_pos != target_pos)
     {
-      stepperdbg("shutdown while stepping %d->%d\n", current_pos,
-        priv->target_pos);
+      stepperdbg("shutdown while stepping %d->%d\n", current_pos, target_pos);
     }
 
   /* Disable APB1/2 clocking for timer. */
@@ -1055,10 +1061,11 @@ static int stepper_set_pos(FAR struct stepper_lowerhalf_s *dev,
       return -EINVAL;
     }
 
-  if (info->pos_type == POS_ABSOLUTE && (getreg32(priv->position_bkreg) ==
-      info->position))
+  if (((int32_t)getreg32(priv->position_bkreg) == info->position) &&
+    info->pos_type == POS_ABSOLUTE)
     {
-      stepperdbg("current position index already set to %d\n", info->position);
+      stepperdbg("current position index already set to %d\n",
+        info->position);
       return -EINVAL;
     }
 
@@ -1095,11 +1102,13 @@ static int stepper_set_pos(FAR struct stepper_lowerhalf_s *dev,
 
       if (info->pos_type == POS_ABSOLUTE)
         {
-          int32_t pos = getreg32(priv->position_bkreg);
-          stepperdbg("pos:%u\n", pos);
+          int32_t pos = (int32_t)getreg32(priv->position_bkreg);
           priv->target_pos = info->position;
           priv->direction = info->position > pos?
             DIR_CW: DIR_CCW;
+
+          steppervdbg("cur: %d, target: %d, dir: %u\n", pos, priv->target_pos,
+            priv->direction);
         }
       else
         {
@@ -1313,9 +1322,10 @@ static int stepper_stop(FAR struct stepper_lowerhalf_s *dev)
   putreg32(regval, regaddr);
   irqrestore(flags);
 
-  /* Disable output */
+  /* Disable output and set target position equal to current position */
 
   putreg32(priv->step_break, g_gpiobase[priv->gpio_port] + STM32_GPIO_BSRR_OFFSET);
+  priv->target_pos = (int32_t)getreg32(priv->position_bkreg);
 
   stepperllvdbg("regaddr: %08x resetbit: %08x\n", regaddr, resetbit);
 

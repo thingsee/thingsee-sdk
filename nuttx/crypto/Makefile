@@ -35,12 +35,18 @@
 
 -include $(TOPDIR)/Make.defs
 
+# Entropy pool and random number generator
+# TODO: Add Kconfig CONFIG_CRYPTO_RANDOM_POOL
+
+CRYPTO_ASRCS =
+CRYPTO_CSRCS = random_pool.c
+
 ifeq ($(CONFIG_CRYPTO),y)
 
 # Basic
 
-CRYPTO_ASRCS  =
-CRYPTO_CSRCS  = crypto.c testmngr.c
+CRYPTO_ASRCS +=
+CRYPTO_CSRCS += crypto.c testmngr.c
 
 # cryptodev support
 
@@ -49,6 +55,12 @@ CRYPTO_CSRCS += cryptodev.c
 endif
 
 endif # CONFIG_CRYPTO
+
+# Crypto algorithms
+
+CRYPTO_ASRCS +=
+CRYPTO_CSRCS += md5.c blake2s.c
+
 
 ASRCS		= $(CRYPTO_ASRCS)
 AOBJS		= $(ASRCS:.S=$(OBJEXT))

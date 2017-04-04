@@ -828,7 +828,11 @@ static int ts_core_deepsleep(struct ts_core_s * const ts_core)
 
       /* Check with poll if any file has work left. */
 
-      ret = poll(ts_core->pollfds, ts_core->nfiles, 0);
+      do
+        {
+          ret = poll(ts_core->pollfds, ts_core->nfiles, 0);
+        }
+      while (ret < 0 && (errno == EINTR || errno == EAGAIN));
 
       for (i = 0; ret > 0 && i < ts_core->nfiles; i++)
         {
@@ -945,6 +949,7 @@ static int ts_core_process(struct ts_core_s *const ts_core)
   int nrevents;
   int ret;
   int i;
+  int errcode;
 
   /* Deep-sleep handling */
 
@@ -975,15 +980,28 @@ static int ts_core_process(struct ts_core_s *const ts_core)
 
       /* Poll file descriptors with timeout */
 
-      ret = poll(ts_core->pollfds, ts_core->nfiles, timeout_ms);
+      do
+        {
+          ret = poll(ts_core->pollfds, ts_core->nfiles, timeout_ms);
+          errcode = errno;
+        }
+      while (ret < 0 && errcode == EINTR);
 
       perf_dbg_add_elapsed_ticks(ts_core, poll);
 
       if (ret < 0)
         {
-          dbg("poll returned errno %d\n", get_errno());
+          if (errcode == EAGAIN)
+            {
+              /* Poll returns EAGAIN if timeout is too short. Sleep to
+               * prevent busy-looping. */
 
-          return ret;
+              usleep(1000);
+            }
+          else
+            {
+              dbg("poll returned errno %d\n", errcode);
+            }
         }
 
       nrevents = ret;

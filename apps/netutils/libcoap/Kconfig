@@ -6,8 +6,7 @@
 menuconfig NETUTILS_LIBCOAP
 	bool "CoAP library (Constrained Application Protocol, RFC 7252)"
 	default n
-	depends on NET && NET_UDP
-	select DEV_RANDOM
+	depends on NET && NET_UDP && (DEV_RANDOM || DEV_URANDOM)
 	---help---
 		libcoap: C-Implementation of CoAP
 

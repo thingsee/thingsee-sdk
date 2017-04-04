@@ -76,7 +76,9 @@ static int wsa_init_done = 0;
 #ifdef MBEDTLS_TARGET_NUTTX
 #include <poll.h>
 # define __socklen_t_defined
-# define shutdown(fd,x) ((void)(fd),(void)(x))
+# ifndef SHUT_WR
+#  define shutdown(fd,x) ((void)(fd),(void)(x))
+# endif
 #endif
 
 /* Some MS functions want int and MSVC warns if we pass size_t,

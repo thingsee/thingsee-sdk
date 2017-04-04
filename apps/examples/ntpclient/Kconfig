@@ -1,0 +1,23 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config EXAMPLES_NTPCLIENT
+	bool "NTP client example"
+	default n
+	depends on NETUTILS_NTPCLIENT
+	---help---
+		Enable the NTP client example
+
+if EXAMPLES_NTPCLIENT
+
+config EXAMPLES_NTPCLIENT_PROGNAME
+	string "Program name"
+	default "ntpclient"
+	depends on BUILD_KERNEL
+	---help---
+		This is the name of the program that will be use when the NSH ELF
+		program is installed.
+
+endif

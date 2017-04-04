@@ -7,7 +7,7 @@ menu "Connection manager"
 config SYSTEM_CONMAN
 	bool "Connection manager"
 	default n
-	select DEV_RANDOM
+	depends on DEV_RANDOM || DEV_URANDOM
 	---help---
 		Enable the library for controlling device network connections
 

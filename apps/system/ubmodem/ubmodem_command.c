@@ -287,7 +287,7 @@ int __ubmodem_send_cmd(struct ubmodem_s *modem,
       modem->delayed_cmd.callback_priv = callback_priv;
 
       va_start(va_args, cmd_args_fmt);
-      err = avsprintf(&modem->delayed_cmd.cmd_buf, cmd_args_fmt, va_args);
+      err = vasprintf(&modem->delayed_cmd.cmd_buf, cmd_args_fmt, va_args);
       va_end(va_args);
       if (err >= 0)
         {

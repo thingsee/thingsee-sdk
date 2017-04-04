@@ -1515,7 +1515,10 @@ __ubparser_unregister_response_handler(struct at_parser_s *parser,
       /* Non-unsolicited response handler unregistered, library is completed
        * sending command and waiting result. */
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
+      if (handler->cmd->flag_pm_low_activity)
+        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, false);
+      else
+        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, false);
     }
 }
 
@@ -1597,7 +1600,10 @@ void __ubparser_register_response_handler(struct at_parser_s *parser,
       /* Non-unsolicited response handler registered, library is sending
        * command and expecting result soon. */
 
-      ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
+      if (cmd->flag_pm_low_activity)
+        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_LOW, true);
+      else
+        ubmodem_pm_set_activity(modem, UBMODEM_PM_ACTIVITY_HIGH, true);
     }
 }
 
@@ -2096,7 +2102,7 @@ static const struct parser_selftest_s parser_test_vectors[] = {
           },
         .resp_num = 2,
       },
-    .from_modem = CMD_LINE("+TEST4:2147483648,a")
+    .from_modem = CMD_LINE("+TEST4:-2147483648,a")
                   CMD_LINE("OK"),
     .expected_count = 1,
     .expected =

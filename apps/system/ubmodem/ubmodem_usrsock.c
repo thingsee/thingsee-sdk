@@ -54,7 +54,6 @@
 #include <apps/system/ubmodem.h>
 
 #include <nuttx/net/usrsock.h>
-#include <nuttx/random.h>
 
 #include "ubmodem_internal.h"
 #include "ubmodem_usrsock.h"
@@ -352,7 +351,7 @@ static void urc_socket_read_handler(struct ubmodem_s *modem,
       return;
     }
 
-  dbg("URC: %s, sockid: %d, available: %d bytes\n", cmd->name, sockid, datalen);
+  ubdbg("URC: %s, sockid: %d, available: %d bytes\n", cmd->name, sockid, datalen);
 
   /* Get sockets structure for this sockets. */
 
@@ -379,9 +378,7 @@ static void urc_socket_read_handler(struct ubmodem_s *modem,
       return;
     }
 
-#ifdef CONFIG_DEV_RANDOM
-  add_sw_randomness(datalen);
-#endif
+  __ubmodem_seed_urandom(&datalen, sizeof(datalen));
 
   /* Update sockets with new available data length. */
 
