@@ -238,7 +238,7 @@ static int inst_parse_cloud_params(const char * const connectors)
   uint32_t connid = 1;
   int ret = ERROR;
   bool use_human_sid = true;
-  bool merge_gps_lat_lon = false;
+  bool merge_gps_lat_lon = true;
 
   DEBUGASSERT(connectors);
 
