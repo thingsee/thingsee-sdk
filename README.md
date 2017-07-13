@@ -15,15 +15,17 @@ provide C standard libraries. To install in Ubuntu 14.04, see following steps:
 Add GCC ARM Embedded PPA as software source with command:
 
 ```
-sudo add-apt-repository ppa:terry.guo/gcc-arm-embedded
+sudo add-apt-repository ppa:team-gcc-arm-embedded/ppa
 ```
 
 2) Install the GCC ARM Embedded toolchain:
 
 ```
 sudo apt-get update
-sudo apt-get install gcc-arm-none-eabi
+sudo apt-get install gcc-arm-embedded
 ```
+
+Per instructions at: https://launchpad.net/~team-gcc-arm-embedded/+archive/ubuntu/ppa
 
 How to Build:
 
